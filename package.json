@@ -1,0 +1,34 @@
+{
+  "name": "blocknexus",
+  "version": "0.1.0",
+  "description": "Minecraft 服务器管理面板 — 本地面板 + 远程 Agent",
+  "license": "MIT",
+  "author": "BlockNexus Contributors",
+  "keywords": [
+    "minecraft",
+    "server-manager",
+    "web-panel",
+    "ssh",
+    "websocket"
+  ],
+  "private": true,
+  "main": "panel/server.js",
+  "scripts": {
+    "start": "node panel/server.js",
+    "build:web": "npm --prefix web run build",
+    "launch": "node scripts/blocknexus-launcher.js",
+    "stop": "node scripts/blocknexus-launcher.js --stop",
+    "exit-tray": "node scripts/blocknexus-launcher.js --exit-tray",
+    "build:exe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\build-exe.ps1",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\create-shortcut.ps1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "nodemailer": "^10.0.13",
+    "ssh2": "^1.16.0",
+    "ws": "^8.18.0"
+  }
+}

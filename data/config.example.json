@@ -1,0 +1,21 @@
+{
+  "panel": {
+    "port": 3080,
+    "username": "admin",
+    "passwordHash": null,
+    "authEnabled": false
+  },
+  "servers": [],
+  "settings": {
+    "domain": "",
+    "adminEmail": "",
+    "smtp": { "host": "", "port": 465, "secure": true, "user": "", "pass": "", "from": "" },
+    "notify": { "offline": true, "recovery": false },
+    "ai": {
+      "enabled": false,
+      "baseUrl": "",
+      "apiKey": "",
+      "model": ""
+    }
+  }
+}
