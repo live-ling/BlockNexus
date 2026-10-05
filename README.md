@@ -1,6 +1,6 @@
 # BlockNexus · Minecraft 服务器管理面板
 
-本地启动一个 Web 面板，通过 SSH 为远程服务器安装 Agent，面板与 Agent 之间建立 **token 加密通道**，在网页上创建和管理远程的 Minecraft 实例（创建/下载服务端/启动/停止/控制台/删除）。
+一站式 Minecraft 服务器管理平台：本地运行一个 Web 面板，通过 SSH 为远程服务器安装 Agent，在网页上创建和管理 Minecraft 实例（创建/服务端下载/启动/停止/控制台/文件/Mod/玩家/备份/自动重启），面板与 Agent 之间走 **token 双向认证的加密通道**。
 
 ```
 ┌────────────────────────────────┐                        ┌─────────────────────────────────┐
@@ -21,7 +21,9 @@
 
 ## 快速开始
 
-要求：本机 Node.js >= 18。
+**方式一：便携版（推荐，无需 Node.js）**——从 [Releases](https://github.com/live-ling/BlockNexus/releases) 下载 `BlockNexus-<版本>-portable.zip`，解压到任意目录双击 `BlockNexus.exe` 即用（内置 Node 运行时、依赖与前端；数据保存在解压目录的 `data/` 下，删除目录即完全卸载）。
+
+**方式二：从源码运行**——要求本机 Node.js >= 18。
 
 ```bash
 npm install
@@ -61,6 +63,16 @@ node panel/server.js --host 0.0.0.0   --tls-cert cert.pem --tls-key key.pem     
 
 如果服务器上没有 Java，详情页会出现「安装 Java」按钮（apt/dnf/yum/apk 自动选择 JDK 17/21）。
 
+### Agent 版本与自动更新
+
+Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收到都会与**随面板分发的 agent.js 版本**比对，不一致时自动更新：
+
+- **SSH 服务器**：上传新 `agent.js`（先落 `.new` 再原子改名）并 `systemctl restart blocknexus-agent`——token、TLS 证书、实例数据全部不动，通常几秒内以新版本回连；
+- **本机 Agent**：面板直接重启本机 Agent 进程；
+- **失败退避**：更新失败会提示原因，并在 10 分钟内不再自动重试；同一台连续失败 3 次后停止自动尝试，转为服务器设置页「系统信息」卡里的「立即更新」按钮手动触发（需要 SSH 凭据可用）。
+
+服务器设置页「系统信息」始终显示远端 Agent 版本；落后时出现琥珀色提示条与更新进度。因此**升级面板后不需要手动重装 Agent**，旧版 Agent 首次上线即自动对齐。
+
 ### 本机服务器（host 填 127.0.0.1 / localhost）
 
 面板发现某台服务器的 host 指向本机时，**不走 SSH、也不用 systemd**——面板直接在本机拉起/停止 `agent.js` 进程，服务器设置页会显示「本机 Agent」并给出进程 pid 与目录：
@@ -99,19 +111,21 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 
 ```
 web/           前端（Vite + React 19 + TypeScript + Tailwind 4）
-  src/pages/   登录 / 服务器列表 / 服务器详情
-  src/lib/     API 客户端、SSE 事件总线、toast 封装、安装日志 store
+  src/pages/   登录 / 服务器列表 / 服务器详情 / 实例详情 / 面板设置 / 关于
+  src/lib/     API 客户端、history 路由、SSE 事件总线、toast 封装、安装日志 store
   src/components/ui/        shadcn/ui 组件（CLI 生成）
-  src/components/motion/    beUI 动效组件（BottomSheet 控制台 / Toast / 徽章 / TiltCard / 主题切换）
+  src/components/motion/    beUI 动效组件（操作条 / BottomSheet / Toast / 徽章 / TiltCard / 主题切换）
   src/components/agents/    beUI agents 组件（AI 对话：PromptInput / MessageScroller / StreamingResponse 等）
+  src/components/          业务组件（文件管理器 / Mod 管理 / 封禁目录 / 备份 / 控制台等）
 panel/
-  server.js     面板入口（HTTP + 静态资源 + Agent WS 升级路由）
+  server.js     面板入口（HTTP + 静态资源 + SPA 回退 + Agent WS 升级路由）
   config.js     data/config.json 持久化（服务器/SSH/token/登录密码）
   crypto.js     HKDF / 握手证明 / AES-256-GCM 帧加解密
   agentlink.js  AgentHub：握手状态机、在线连接表、加密请求路由、事件转发
-  ssh.js        SSH 安装器（远程 Linux：Node 检测安装、SFTP 上传、systemd 注册）
+  ssh.js        SSH 安装器（远程 Linux：Node 检测安装、SFTP 上传、systemd 注册、Agent 热更新）
   localagent.js 本机 Agent 托管（面板直接 spawn/stop 进程 + 专用目录，免 SSH/systemd）
   api.js        REST API（登录、服务器 CRUD、安装、实例操作）+ SSE 实时推送
+  mail.js       邮件模板（HTML 卡片样式 + 纯文本兜底）
 agent/
   agent.js      零依赖单文件 Agent（自带 RFC6455 WebSocket 客户端 + 同套加密实现）
 data/           运行时数据（config.json、本地测试实例），已 gitignore
@@ -146,26 +160,58 @@ beUI 组件用法：`cd web && npx shadcn@latest add @beui/<name>`（已装：bo
 
 ## 页面结构
 
+前端为 **history 路由**（`/settings`、`/server/...` 等路径可直接访问与刷新；旧 `#/settings` 形式的链接进入时自动迁移）：
+
 ```
-#/                              服务器列表（卡片显示 Agent 状态、系统信息、内存/磁盘占用）
-#/settings                      面板设置（登录保护 / 公网域名 / SMTP / 通知 / 关于入口）
-#/about                         关于页（版本信息、引用服务、开源依赖、声明），设置页底部进入
-#/reset?token=…                 重置密码（邮件链接直达）
-#/server/<id>                   服务器详情：MC 实例列表（卡片：状态、备注、版本/内存、
+/                               服务器列表（卡片显示 Agent 状态、系统信息、内存/磁盘占用）
+/settings                       面板设置（登录保护 / 公网域名 / SMTP / 通知 / AI / 版本与更新 / 关于入口）
+/about                          关于页（版本信息、开源地址与许可证、引用服务、开源依赖、声明），设置页底部进入
+/reset?token=…                  重置密码（邮件链接直达）
+/server/<id>                    服务器详情：MC 实例列表（卡片：状态、备注、版本/内存、
                                 在线玩家 X/Y、运行时间、IP+连接地址，仅「启动/停止」按钮）
-#/server/<id>/instance/<名称>    实例详情（全屏，不显示顶部导航）：左侧实例信息 + 大号控件，
+/server/<id>/instance/<名称>     实例详情（全屏，不显示顶部导航）：左侧实例信息 + 大号控件，
                                 中间常驻终端（实时日志 + 指令输入，滚动条隐藏），
-                                右侧在线玩家名单（运行时）
-#/server/<id>/settings          服务器设置：安装/重装 Agent、手动安装、系统信息、
+                                右侧在线玩家名单（运行时，底部有「封禁目录」入口）
+/server/<id>/settings           服务器设置：安装/重装 Agent、手动安装、系统信息（含 Agent 版本）、
                                 编辑服务器、查看 Token、删除服务器
 ```
 
 实例列表卡片点击进入实例详情页；服务器级操作全部收在「服务器设置」页，不在列表页出现。
 
+## 实例管理能力
+
+实例详情页承载全部单实例操作，按钮区包括：
+
+- **启动 / 停止 / 重启**：状态徽章区分 运行中 / 启动中（等待 `Done (x.xxx)s!` 就绪信号，最长 300 秒兜底）/ 已停止 / 下载中 / 安装失败；
+- **终端**：实时日志（按级别着色：ERROR 红、WARN 黄、就绪行绿、DEBUG/TRACE 灰、异常堆栈淡红）+ 底部指令输入框（自增高、↑↓ 翻 200 条历史、Enter 发送、Shift+Enter 换行）；
+- **AI 分析**：与终端同区域切换，见下文「AI 日志分析」；
+- **文件**：完整文件管理器（见下文「文件管理」）；
+- **Mod 管理**：实例 `mods` 目录的列表（大小/时间/启用状态）、**启用与禁用**（原地改名加/去 `.disabled`，不删文件，重启生效）、删除（需确认）、上传（多选 `.jar`，带进度；目录不存在时上传自动创建）。非 Forge/Fabric 实例会提示未发现 mods 目录；
+- **备份**：tar.gz 完整快照，支持创建/列表/下载/恢复/删除；
+- **配置设置**：server.properties 可视化编辑（见下文）；
+- **自动重启**：崩溃重启 + 定时重启（见下文）；
+- **编辑**：备注、连接地址/域名、最大内存，以及 **server-icon 图标**（见下）；
+- **服务器图标（server-icon）**：在「编辑」里上传任意图片，内置**本地裁切**——图片完整显示，按住左键拖出正方形选区（选区内拖动=移动，滑杆调大小），确认后压缩为 **64×64 PNG** 写入实例目录；游戏内服务器列表重启后生效；
+- **面板代下**：网络受限服务器安装失败时由面板下载核心后推送（见「实例备份与核心来源」）。
+
+## 玩家管理
+
+- **在线玩家栏**（实例运行中显示）：实时名单（SLP + 控制台跟踪合并），每个玩家一个快捷菜单：
+  - **踢出** / **封禁** / **封禁其 IP**：统一弹确认框，可填**原因**（随指令下发给服务端）；
+  - **设为管理员** / **取消管理员**（op / deop）；
+- **封禁目录**（在线玩家栏底部按钮）：读取 `banned-players.json` / `banned-ips.json`，展示封禁玩家与封禁 IP 的名称、理由、来源、日期与期限（永久显示「永久」），每条可一键**解封**——实例运行中走控制台 `pardon` / `pardon-ip`（内存中的封禁表才是真相源），实例停止时直接修改 JSON 文件。
+
+## 域名连通检测
+
+设置了「连接地址/域名」的实例，信息卡里会显示连通状态（**仅实例运行中检测**；未启动时提示「实例未启动，暂不检测域名连通」，避免必然失败的探测）：
+
+- 解析顺序：`_minecraft._tcp.<域名>` **SRV 记录**（命中则用其目标与端口，结果显示 `· SRV`）→ A/AAAA 记录 → 实例端口；
+- 对解析出的 IP 做 3 秒超时的 TCP 探测，显示 `✓ IP:端口 · TCP 延迟`（绿色）或失败原因（红色，可换行完整显示）；
+- 域名可带端口（`play.example.com:25565`），协议头会被自动清理；右侧地球按钮可手动重新检测。
+
 ## 在线人数与玩家名单
 
 面板通过 Agent 用 **Minecraft 服务器列表协议（SLP，Server List Ping）** 直接查询实例端口（纯 Node 标准库实现，无第三方依赖），拿到实时 `在线人数 / 上限`（上限也可从 `server.properties` 的 `max-players` 兜底）：
-
 - 实例列表页与详情页每 20 秒刷新一次，运行中显示绿色 `玩家：3/20`；
 - 实例详情页右侧有**在线玩家名单**栏（仅实例运行时出现，避免压缩终端宽度），点开即可看到当前在线的玩家名；
 - 名单来源双保险：优先用 SLP 状态响应里的 `players.sample` 并与 **Agent 侧控制台跟踪**合并去重（原版 `sample` 上限 12 条、开启 `hide-online-players` 时为空）——跟踪从日志里的 `Steve joined the game` / `left the game` / `lost connection` 实时维护玩家集合，不向控制台注入任何命令；玩家在控制台执行 `list` 时也会同步校准名单；
@@ -261,7 +307,7 @@ node agent/e2e-reset-code.js
 - **流式输出**：结果按 token 实时渲染，可随时点停止；每条回答可一键复制，并标注本次依据的日志行数；
 - **模型侧不落盘**：日志只在内存中拼装后发给模型，分析完即丢弃。
 
-配置在 `#/settings` 的「AI 日志分析」卡片：填**接口地址**（OpenAI Chat Completions 兼容格式，如 DeepSeek `https://api.deepseek.com`、智谱 `https://open.bigmodel.cn/api/paas`）、**模型**（如 `cn:glm-5.3-flash`、`deepseek-flash`）与 **API 密钥**，打开开关保存即可。
+配置在 `/settings` 的「AI 日志分析」卡片：填**接口地址**（OpenAI Chat Completions 兼容格式，如 DeepSeek `https://api.deepseek.com`、智谱 `https://open.bigmodel.cn/api/paas`）、**模型**（如 `deepseek-flash`、`cn:glm-5.3-flash`）与 **API 密钥**，打开开关保存即可。
 
 模型不用手敲：填好地址与密钥后点「查询模型」即可从服务商拉取可选列表（自动过滤 embedding / tts 等非对话模型，聊天模型排前面）。**地址与密钥可以先填先验证再启用**——配置区不受启用开关限制，「查询模型」与「测试连接」在未启用时同样可用。密钥只保存在本机 `data/config.json`，页面回读时只显示「已保存」，不会回传明文；保存时留空表示不修改。
 
@@ -277,18 +323,26 @@ node agent/e2e-reset-code.js
 POST /api/login | /api/logout        GET /api/me
 POST /api/forgot-password            POST /api/verify-reset-code
 POST /api/reset-password             (以上三个匿名，找回密码)
+GET  /api/license                    (MIT 全文，匿名，关于页展示)
 GET|PUT /api/settings                POST /api/settings/smtp-test
 GET|POST /api/servers                GET|PUT|DELETE /api/servers/:id
 POST /api/servers/:id/install        POST /api/servers/:id/token/rotate
-GET  /api/servers/:id/instances      POST /api/servers/:id/instances
+POST /api/servers/:id/agent-update   (Agent 版本落后时的手动更新兜底)
+GET|POST /api/servers/:id/instances  DELETE /api/servers/:id/instances/:name
 POST /api/servers/:id/instances/:name/start|stop|restart|command
 GET  /api/servers/:id/instances/:name/console?tail=200
-DELETE /api/servers/:id/instances/:name
+GET  /api/servers/:id/instances/:name/domain-check
+GET  /api/servers/:id/instances/:name/banlist
+POST /api/servers/:id/instances/:name/banlist/unban
+GET|POST /api/servers/:id/instances/:name/icon   (server-icon 读取/上传)
+GET  /api/servers/:id/instances/:name/mods
+POST /api/servers/:id/instances/:name/mods/toggle|mods/delete
 GET  /api/servers/:id/mcversions     POST /api/servers/:id/java-install
 POST /api/servers/:id/instances/:name/retry-install|reinstall|panel-install
-POST /api/settings/ai-test          POST /api/settings/ai-models
+POST /api/settings/ai-test           POST /api/settings/ai-models
 POST /api/servers/:id/instances/:name/ai-analyze
-GET  /api/events                     (SSE: status / latency / stats / agent-event / install)
+GET  /api/version                    (当前版本 + GitHub 最新 Release 与更新日志)
+GET  /api/events                     (SSE: status / latency / stats / agent-event / install / agent-update)
 GET  /agent.js                       (Agent 单文件下载，匿名)
 ```
 
@@ -301,17 +355,15 @@ GET  /agent.js                       (Agent 单文件下载，匿名)
 
 ## 路线图
 
-- [ ] Agent 卸载 / 面板侧一键重置
 - [ ] 面板 HTTPS / 反向代理子路径支持
-- [ ] 实例定时备份、计划任务（定时重启等）
 - [ ] 多用户与细粒度权限
-- [ ] 文件管理器（server.properties / 存档上传下载）
+- [ ] 计划任务（定时备份等）
 
 ## Windows 一键启动
 
-桌面上的 **BlockNexus 图标**（即 `images/logo.png`）双击 **BlockNexus.exe** 即可：自动启动面板（已在运行则跳过）→ 顺带拉起 config.json 里**本机服务器**（host 为 127.0.0.1/localhost）对应的本地 Agent → 用 Edge/Chrome 的 **`--app` 应用模式打开独立窗口**（无地址栏/标签页、任务栏独立图标、独立会话目录，与日常浏览器互不干扰）。找不到 Edge/Chrome 时退回默认浏览器。
+双击 **BlockNexus.exe** 即可：自动启动面板（已在运行则跳过）→ 顺带拉起 config.json 里**本机服务器**（host 为 127.0.0.1/localhost）对应的本地 Agent → 打开**独立的桌面应用窗口**（WebView2 渲染，无地址栏/标签页，任务栏独立图标）。
 
-- 关闭窗口只是关掉界面，面板与 Agent 继续在后台运行；再次双击秒开（已有可见窗口时会把该窗口带到前台，不会重复开）；关窗后 Edge 的驻留进程组会一并退出（启动器已对该 profile 关闭 Edge「启动增强」，不会留下不可见、呼不出来的空白窗口）；
+- 关闭窗口只是关掉界面，面板与 Agent 继续在后台运行；再次双击秒开（已有可见窗口时会把该窗口带到前台，不会重复开）；**跨站链接**（如 GitHub）自动交给系统默认浏览器打开，窗口始终留在面板上；
 - **托盘图标**：面板在后台运行时，系统托盘常驻 BlockNexus 图标（就是 logo.png）——**左键单击**直接打开应用，**右键菜单只有两项**：
   - **打开应用** — 只开界面，面板与本地 Agent 继续运行；
   - **退出应用** — 完全关闭：关界面 + 停面板 + 停本地 Agent + 收掉托盘。
@@ -338,16 +390,17 @@ powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1 -Sign    # 编译
 
 exe 换了图标但资源管理器还显示旧图时，脚本已自动执行 `ie4uinit -ClearIconCache` 清缓存。
 
-## 面板设置（#/settings）
+## 面板设置（/settings）
 
-顶栏「设置」进入**独立设置页**（不再使用弹窗）：
+导航栏「设置」进入**独立设置页**：
 
 - **登录保护**：开关 + 用户名/密码（默认无密码；开启后所有接口需要会话）；
 - **公网访问**：绑定面板对外域名（如 `panel.example.com`）。**HTTPS 由 nginx 等反向代理负责，面板无需配置 SSL**；域名用于找回密码链接与通知邮件中的面板地址；
 - **SMTP 邮件**：服务器/端口/SSL 开关/用户名/授权码/发件人，可一键「保存并发送测试邮件」验证连通性（QQ/163 等邮箱使用授权码）；
 - **通知设置**：管理员邮箱 + 「服务器离线时邮件通知」（同一次离线只发一封，24 小时后补发提醒；Agent 抖动重连由 10 分钟最小间隔兜底，不刷屏）+ 「恢复上线时通知」（只在发过离线通知后生效）；
 - **AI 日志分析**：接口地址（OpenAI Chat Completions 兼容）/ 模型 / API 密钥 + 启用开关，可「测试连接」；密钥留空表示不修改，页面不回传明文。启用后实例详情页出现「AI 分析」页签（详见上文「AI 日志分析」）；
-- **关于**（页面底部入口）：进入 `#/about`，显示面板版本（取自 `package.json`）、端口与登录状态、架构说明、引用服务（MSL 开服器 / BMCLAPI / Mojang / Adoptium 及各核心官方 API）、开源依赖清单与免责声明。
+- **版本与更新**：显示当前版本与 GitHub 最新 Release 对比（有新版时提示并可跳转），内置**更新日志**（默认折叠，点击展开，读取自 Release 正文）；「检查更新」按钮可强制刷新（结果缓存 10 分钟）；下方为源码地址；
+- **关于**（页面底部入口）：进入 `/about`，显示项目版本、开源地址、**许可证全文**（内置展开，无需跳转）、引用服务（MSL 开服器 / BMCLAPI / Mojang / Adoptium 及各核心官方 API）、开源依赖清单与免责声明。
 
 ### 忘记密码（邮箱验证码，三段式）
 
@@ -362,7 +415,7 @@ exe 换了图标但资源管理器还显示旧图时，脚本已自动执行 `ie
 - 验证码**不能直接改密**，必须携带第 ② 步的票据（票据一次性、10 分钟过期、关闭登录保护时全部作废）；
 - **发码限流**：同一 IP **60 秒冷却** + **每小时 5 次**上限；邮箱不匹配/未配置 SMTP 的请求**同样计数**并返回成功（既避免探测管理员邮箱，也避免用不匹配邮箱无限轰炸）；
 - **校验限流**：同一 IP 连续错 5 次**锁定 15 分钟**（提示剩余次数）；单个验证码累计试错 20 次即整码作废，兜底多 IP 分布式爆破 6 位数字；
-- 邮件发出的重置链接（`#/reset?token=…`）**仍然可用**：后端兼容按摘要比对 token，打开后直接设置新密码，无需再输验证码。
+- 邮件发出的重置链接（`/reset?token=…`）**仍然可用**：后端兼容按摘要比对 token，打开后直接设置新密码，无需再输验证码（旧版 `#/reset?token=…` 形式的链接进入时会自动迁移）。
 
 验证码输入框用的是 beUI 的 [otp-input](https://beui.dev/components/blocks/otp-input)：支持粘贴整串、退格清空当前格、方向键/Home/End 移动光标、校验失败抖动、成功打勾，填满 6 位自动提交校验，复制邮件里的 6 位数字直接粘贴即可。
 
