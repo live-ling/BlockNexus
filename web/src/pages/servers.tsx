@@ -1,3 +1,4 @@
+import { navigate } from '@/lib/router';
 // 服务器列表页
 
 import { useState } from 'react';
@@ -43,7 +44,7 @@ export function ServersPage({
             <TiltCard key={s.id} max={10} className="rounded-xl">
               <Card
                 className="h-full cursor-pointer border border-border transition-colors hover:border-muted-foreground/40"
-                onClick={() => (location.hash = `#/server/${s.id}`)}
+                onClick={() => (navigate(`/server/${s.id}`))}
               >
                 <CardContent className="grid gap-3.5 p-5">
                   {/* 标题区：eyebrow + 图标 + 名称 + 徽章（beUI TiltCard demo 风格） */}
@@ -121,7 +122,7 @@ export function ServersPage({
         panelPort={me.port}
         onCreated={(s) => {
           onAdd(s);
-          location.hash = `#/server/${s.id}`;
+          navigate(`/server/${s.id}`);
         }}
       />
     </div>

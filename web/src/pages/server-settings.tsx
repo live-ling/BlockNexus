@@ -1,3 +1,4 @@
+import { navigate } from '@/lib/router';
 // 服务器设置页：连接信息 / Agent 管理 / 系统信息 / 危险操作
 // 路由 #/server/<serverId>/settings
 
@@ -83,7 +84,7 @@ export function ServerSettingsPage({
       .catch((e) => {
         // 卸载时勾选了「同时从面板移除该服务器」→ 记录已不存在，回首页
         if ((e as { status?: number }).status === 404) {
-          location.hash = '#/';
+          navigate('/');
           return;
         }
         error(errText(e));

@@ -1249,10 +1249,11 @@ function IconCropDialog({
     };
   }, [src]);
 
-  // 显示尺寸：cover 铺满预览框再乘缩放；拖动偏移限制在「图始终盖住框」的范围内
+  // 显示尺寸：contain 完整放入预览框（任意长宽比先见全图）再乘缩放；
+  // 未盖住预览框的区域裁切后保持透明（棋盘格所示）
   const dims = () => {
     const img = imgRef.current;
-    const s = Math.max(VIEW / (img?.width ?? 1), VIEW / (img?.height ?? 1)) * zoom;
+    const s = Math.min(VIEW / (img?.width ?? 1), VIEW / (img?.height ?? 1)) * zoom;
     return { w: (img?.width ?? 0) * s, h: (img?.height ?? 0) * s };
   };
   const { w, h } = dims();
@@ -1288,10 +1289,19 @@ function IconCropDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>裁切服务器图标</DialogTitle>
-          <DialogDescription>拖动选择区域，滚轮或滑杆缩放；输出为 64×64 PNG。</DialogDescription>
+          <DialogDescription>
+            任意长宽比的图都会先完整放入框内——拖动取景、滚轮或滑杆缩放，框内即最终 64×64 图标（未覆盖处保持透明）。
+          </DialogDescription>
         </DialogHeader>
         <div
-          className="relative mx-auto aspect-square w-[240px] cursor-move touch-none overflow-hidden rounded-lg border bg-muted/40"
+          className="relative mx-auto aspect-square w-[240px] cursor-move touch-none overflow-hidden rounded-lg border"
+          style={{
+            // 棋盘格：直观显示裁切结果中的透明区域
+            backgroundImage:
+              'linear-gradient(45deg,#e2e2e2 25%,transparent 25%),linear-gradient(-45deg,#e2e2e2 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e2e2e2 75%),linear-gradient(-45deg,transparent 75%,#e2e2e2 75%)',
+            backgroundSize: '16px 16px',
+            backgroundPosition: '0 0,0 8px,8px -8px,-8px 0',
+          }}
           onPointerDown={(e) => {
             (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
             drag.current = { px: e.clientX, py: e.clientY, ox: shown.x, oy: shown.y };

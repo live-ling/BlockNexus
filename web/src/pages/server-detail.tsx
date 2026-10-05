@@ -1,3 +1,4 @@
+import { navigate } from '@/lib/router';
 // 服务器详情页：实例列表（卡片简化为信息 + 启动/停止，点击进入实例详情）
 // 服务器级操作（安装/重装 Agent、编辑、Token、删除）已移至 #/server/<id>/settings
 
@@ -196,7 +197,7 @@ export function ServerDetailPage({
     <div className="mx-auto w-full max-w-[1400px] px-6 pb-24 pt-7">
       {/* 头部：只保留身份信息与设置入口 */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={() => (location.hash = '#/')}>
+        <Button variant="ghost" size="icon" aria-label="返回" onClick={() => (navigate('/'))}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <h2 className="text-xl font-semibold">{server.name}</h2>

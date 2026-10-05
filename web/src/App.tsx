@@ -16,46 +16,22 @@ import { ServersPage } from '@/pages/servers';
 import { api, type Me, type ServerSummary } from '@/lib/api';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
+import { navigate, routeFromLocation, type Route } from '@/lib/router';
 
-type Route =
-  | { name: 'servers' }
-  | { name: 'settings' }
-  | { name: 'about' }
-  | { name: 'reset'; token: string }
-  | { name: 'server'; serverId: string }
-  | { name: 'server-settings'; serverId: string }
-  | { name: 'instance'; serverId: string; instance: string };
-
-// 路由形态：
-//   #/                       服务器列表
-//   #/settings               面板设置
-//   #/about                  关于页（设置页底部进入）
-//   #/reset?token=…          重置密码（忘记密码邮件里的链接）
-//   #/server/<id>            服务器详情（实例列表）
-//   #/server/<id>/settings   服务器设置
-//   #/server/<id>/instance/<名称>  实例详情（终端 + 控件）
-function parseHash(): Route {
-  const [hashPath, queryString = ''] = location.hash.replace(/^#\/?/, '').split('?');
-  const query = new URLSearchParams(queryString);
-  const parts = hashPath.split('/').filter(Boolean);
-  if (parts[0] === 'settings') return { name: 'settings' };
-  if (parts[0] === 'about') return { name: 'about' };
-  if (parts[0] === 'reset') return { name: 'reset', token: query.get('token') || '' };
-  if (parts[0] === 'server' && parts[1]) {
-    if (parts[2] === 'settings') return { name: 'server-settings', serverId: parts[1] };
-    if (parts[2] === 'instance' && parts[3]) {
-      return { name: 'instance', serverId: parts[1], instance: decodeURIComponent(parts.slice(3).join('/')) };
-    }
-    return { name: 'server', serverId: parts[1] };
-  }
-  return { name: 'servers' };
-}
+// 路由形态（history 路由，旧 #/hash 链接仍兼容）：
+//   /                        服务器列表
+//   /settings                面板设置
+//   /about                   关于页（设置页底部进入）
+//   /reset?token=…           重置密码（忘记密码邮件里的链接）
+//   /server/<id>             服务器详情（实例列表）
+//   /server/<id>/settings    服务器设置
+//   /server/<id>/instance/<名称>  实例详情（终端 + 控件）
 
 export function App() {
   const { success: toastSuccess, error: toastError } = useToastHelpers();
   const [me, setMe] = useState<Me | null | undefined>(undefined); // undefined=启动中, null=未登录
   const [servers, setServers] = useState<ServerSummary[]>([]);
-  const [route, setRoute] = useState<Route>(parseHash);
+  const [route, setRoute] = useState<Route>(routeFromLocation);
 
   const boot = useCallback(async () => {
     try {
@@ -72,9 +48,13 @@ export function App() {
 
   useEffect(() => {
     boot();
-    const onHash = () => setRoute(parseHash());
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    const onRoute = () => setRoute(routeFromLocation());
+    window.addEventListener('popstate', onRoute);
+    window.addEventListener('routechange', onRoute);
+    return () => {
+      window.removeEventListener('popstate', onRoute);
+      window.removeEventListener('routechange', onRoute);
+    };
   }, [boot]);
 
   // 服务器状态变化 → 更新列表
@@ -154,7 +134,7 @@ export function App() {
 
   // 重置密码页独立于登录态（邮件链接直达；已登录时也能打开）
   if (route.name === 'reset') {
-    return <ResetPasswordPage token={route.token} onDone={() => (location.hash = '#/')} />;
+    return <ResetPasswordPage token={route.token} onDone={() => (navigate('/'))} />;
   }
 
   if (me === null) {
@@ -170,35 +150,35 @@ export function App() {
       <div className={showNav ? 'pl-0' : ''}>
         {route.name === 'settings' ? (
           <PanelSettingsPage
-            onBack={() => (location.hash = '#/')}
+            onBack={() => (navigate('/'))}
             onAuthChanged={(authEnabled) => setMe((cur) => (cur ? { ...cur, authEnabled } : cur))}
           />
         ) : route.name === 'about' ? (
-          <AboutPage onBack={() => (location.hash = '#/settings')} />
+          <AboutPage onBack={() => (navigate('/settings'))} />
         ) : route.name === 'instance' ? (
         <InstanceDetailPage
           key={`${route.serverId}/${route.instance}`}
           serverId={route.serverId}
           instanceName={route.instance}
-          onBack={() => (location.hash = `#/server/${route.serverId}`)}
+          onBack={() => (navigate(`/server/${route.serverId}`))}
         />
       ) : route.name === 'server-settings' ? (
         <ServerSettingsPage
           key={route.serverId}
           serverId={route.serverId}
           me={me}
-          onBack={() => (location.hash = `#/server/${route.serverId}`)}
+          onBack={() => (navigate(`/server/${route.serverId}`))}
           onDeleted={() => {
             setServers((cur) => cur.filter((s) => s.id !== route.serverId));
-            location.hash = '#/';
+            navigate('/');
           }}
         />
       ) : route.name === 'server' ? (
         <ServerDetailPage
           key={route.serverId}
           id={route.serverId}
-          onOpenInstance={(name) => (location.hash = `#/server/${route.serverId}/instance/${encodeURIComponent(name)}`)}
-          onOpenSettings={() => (location.hash = `#/server/${route.serverId}/settings`)}
+          onOpenInstance={(name) => (navigate(`/server/${route.serverId}/instance/${encodeURIComponent(name)}`))}
+          onOpenSettings={() => (navigate(`/server/${route.serverId}/settings`))}
         />
       ) : (
         <ServersPage
@@ -240,21 +220,21 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
         <img src="/logo.png" alt="BlockNexus" className="h-6 w-6 max-w-none rounded-full object-cover ring-1 ring-border" />
       ),
       active: isServersPage,
-      onClick: () => (location.hash = '#/'),
+      onClick: () => (navigate('/')),
     },
     {
       id: 'servers',
       label: '服务器',
       icon: <Server className="h-[18px] w-[18px]" />,
       active: isServerArea,
-      onClick: () => (location.hash = '#/'),
+      onClick: () => (navigate('/')),
     },
     {
       id: 'settings',
       label: '设置',
       icon: <Settings className="h-[18px] w-[18px]" />,
       active: isSettings,
-      onClick: () => (location.hash = '#/settings'),
+      onClick: () => (navigate('/settings')),
     },
   ];
   // 未启用密码保护时无需登录，也就没有可退出的会话

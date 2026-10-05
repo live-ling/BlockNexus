@@ -1,3 +1,4 @@
+import { navigate } from '@/lib/router';
 // 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
 import { useCallback, useEffect, useState } from 'react';
@@ -154,7 +155,7 @@ function AboutEntryCard({ accent, className = '' }: { accent: Accent; className?
     <Card className={`ring-1 ring-border ${className}`}>
       <button
         type="button"
-        onClick={() => (location.hash = '#/about')}
+        onClick={() => (navigate('/about'))}
         className="flex w-full items-center gap-3 rounded-xl px-5 py-4 text-left transition-colors hover:bg-muted/50"
       >
         <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border ${iconClass}`}>

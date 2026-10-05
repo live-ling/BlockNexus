@@ -58,6 +58,16 @@ app.use(express.static(path.join(__dirname, '..', 'web', 'dist'), {
 }));
 app.use('/api', createApi(config, hub, bus));
 
+// SPA history 路由回退：/settings、/server/... 等路径直达时返回 index.html。
+// API 与带扩展名的资源路径不回退（缺失照常 404）
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/agent.js') && !path.extname(req.path)) {
+    res.sendFile(path.join(__dirname, '..', 'web', 'dist', 'index.html'));
+    return;
+  }
+  next();
+});
+
 // 面板自身也可上 HTTPS（自签或正式证书）；放在反代后面时用不到
 let tlsOn = false;
 let server;
