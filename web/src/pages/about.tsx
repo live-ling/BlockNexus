@@ -120,8 +120,8 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                   </span>
                 </div>
                 <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                  Minecraft 服务器管理面板:本地 Web 面板通过 SSH 为远程服务器部署
-                  Agent,经 token 双向认证的加密通道管理 MC 实例——浏览器即开即用,面板无需公网地址。
+                  在网页上创建和管理 Minecraft 服务器:实时控制台、玩家管理、文件与配置编辑、
+                  备份恢复、定时重启与崩溃自动拉起,多台服务器集中在一个面板。
                 </p>
               </div>
             </div>
