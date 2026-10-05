@@ -1217,7 +1217,7 @@ export function EditInstanceDialog({
   );
 }
 
-/** server-icon 手动裁切：拖动定位 + 滚轮/滑杆缩放，确认输出 64×64 PNG base64 */
+/** server-icon 手动裁切：完整显示图片，按住左键拖出正方形选区（可移动/调大小），输出 64×64 PNG */
 function IconCropDialog({
   src,
   onConfirm,
@@ -1227,19 +1227,36 @@ function IconCropDialog({
   onConfirm: (b64: string) => void;
   onClose: () => void;
 }) {
-  const VIEW = 240; // 预览框边长（裁切结果 64×64 即该区域缩 1/3）
+  const VIEW_W = 336;
+  const VIEW_H = 336;
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [ready, setReady] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [off, setOff] = useState({ x: 0, y: 0 });
-  const drag = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+  // 图片显示区域（VIEW 内居中的 contain 矩形）
+  const [disp, setDisp] = useState({ x: 0, y: 0, w: 0, h: 0 });
+  // 正方形选区（VIEW 坐标）；加载完成后默认取图片内最大居中方块
+  const [sel, setSel] = useState({ x: 0, y: 0, size: 0 });
+  const drag = useRef<{
+    mode: 'draw' | 'move';
+    px: number;
+    py: number;
+    ax: number;
+    ay: number;
+    sx: number;
+    sy: number;
+    size: number;
+  } | null>(null);
 
   useEffect(() => {
     const img = new Image();
     img.onload = () => {
       imgRef.current = img;
-      setZoom(1);
-      setOff({ x: 0, y: 0 });
+      const scale = Math.min(VIEW_W / img.width, VIEW_H / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      const x = (VIEW_W - w) / 2;
+      const y = (VIEW_H - h) / 2;
+      setDisp({ x, y, w, h });
+      setSel({ x, y, size: Math.min(w, h) });
       setReady(true);
     };
     img.src = src;
@@ -1249,77 +1266,89 @@ function IconCropDialog({
     };
   }, [src]);
 
-  // 显示尺寸：contain 完整放入预览框（任意长宽比先见全图）再乘缩放；
-  // 未盖住预览框的区域裁切后保持透明（棋盘格所示）
-  const dims = () => {
-    const img = imgRef.current;
-    const s = Math.min(VIEW / (img?.width ?? 1), VIEW / (img?.height ?? 1)) * zoom;
-    return { w: (img?.width ?? 0) * s, h: (img?.height ?? 0) * s };
+  const clampSel = (x: number, y: number, size: number) => {
+    const size2 = Math.min(size, disp.w, disp.h);
+    return {
+      x: Math.max(disp.x, Math.min(x, disp.x + disp.w - size2)),
+      y: Math.max(disp.y, Math.min(y, disp.y + disp.h - size2)),
+      size: size2,
+    };
   };
-  const { w, h } = dims();
-  const clamp = (x: number, y: number) => {
-    const mx = Math.max(0, (w - VIEW) / 2);
-    const my = Math.max(0, (h - VIEW) / 2);
-    return { x: Math.max(-mx, Math.min(mx, x)), y: Math.max(-my, Math.min(my, y)) };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!ready) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const inside =
+      px >= sel.x && px <= sel.x + sel.size && py >= sel.y && py <= sel.y + sel.size;
+    if (inside) {
+      drag.current = { mode: 'move', px, py, ax: 0, ay: 0, sx: sel.x, sy: sel.y, size: sel.size };
+    } else {
+      const ax = Math.max(disp.x, Math.min(px, disp.x + disp.w));
+      const ay = Math.max(disp.y, Math.min(py, disp.y + disp.h));
+      drag.current = { mode: 'draw', px, py, ax, ay, sx: 0, sy: 0, size: 0 };
+      setSel(clampSel(ax, ay, 0));
+    }
   };
-  const shown = clamp(off.x, off.y);
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    if (d.mode === 'move') {
+      setSel(clampSel(d.sx + (px - d.px), d.sy + (py - d.py), d.size));
+      return;
+    }
+    // 画新选区：边长取两轴位移的较大者，方向跟随拖动，越界自动收
+    const dx = px - d.ax;
+    const dy = py - d.ay;
+    const size = Math.max(Math.abs(dx), Math.abs(dy));
+    const x = dx < 0 ? d.ax - size : d.ax;
+    const y = dy < 0 ? d.ay - size : d.ay;
+    setSel(clampSel(x, y, size));
+  };
+
+  const onPointerUp = () => {
+    drag.current = null;
+  };
 
   const confirm = () => {
     const img = imgRef.current;
-    if (!img) return;
-    const k = 64 / VIEW;
+    if (!img || !sel.size) return;
+    const scale = Math.min(VIEW_W / img.width, VIEW_H / img.height);
+    const sx = (sel.x - disp.x) / scale;
+    const sy = (sel.y - disp.y) / scale;
+    const ssize = sel.size / scale;
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(
-      img,
-      ((VIEW - w) / 2 + shown.x) * k,
-      ((VIEW - h) / 2 + shown.y) * k,
-      w * k,
-      h * k,
-    );
+    ctx.drawImage(img, sx, sy, ssize, ssize, 0, 0, 64, 64);
     const url = canvas.toDataURL('image/png');
     onConfirm(url.slice(url.indexOf(',') + 1));
   };
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
           <DialogTitle>裁切服务器图标</DialogTitle>
           <DialogDescription>
-            任意长宽比的图都会先完整放入框内——拖动取景、滚轮或滑杆缩放，框内即最终 64×64 图标（未覆盖处保持透明）。
+            在图上按住左键拖出正方形选区，拖动可移动位置，滑杆调大小；输出 64×64 PNG。
           </DialogDescription>
         </DialogHeader>
         <div
-          className="relative mx-auto aspect-square w-[240px] cursor-move touch-none overflow-hidden rounded-lg border"
-          style={{
-            // 棋盘格：直观显示裁切结果中的透明区域
-            backgroundImage:
-              'linear-gradient(45deg,#e2e2e2 25%,transparent 25%),linear-gradient(-45deg,#e2e2e2 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e2e2e2 75%),linear-gradient(-45deg,transparent 75%,#e2e2e2 75%)',
-            backgroundSize: '16px 16px',
-            backgroundPosition: '0 0,0 8px,8px -8px,-8px 0',
-          }}
-          onPointerDown={(e) => {
-            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            drag.current = { px: e.clientX, py: e.clientY, ox: shown.x, oy: shown.y };
-          }}
-          onPointerMove={(e) => {
-            if (!drag.current) return;
-            setOff(clamp(drag.current.ox + (e.clientX - drag.current.px), drag.current.oy + (e.clientY - drag.current.py)));
-          }}
-          onPointerUp={() => {
-            drag.current = null;
-          }}
-          onPointerCancel={() => {
-            drag.current = null;
-          }}
-          onWheel={(e) => {
-            e.preventDefault();
-            setZoom((z) => Math.min(6, Math.max(1, z * (e.deltaY < 0 ? 1.15 : 0.87))));
-          }}
+          className="relative mx-auto overflow-hidden rounded-lg border bg-muted/40"
+          style={{ width: VIEW_W, height: VIEW_H, cursor: 'crosshair', touchAction: 'none' }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
         >
           {ready && (
             <img
@@ -1327,30 +1356,41 @@ function IconCropDialog({
               alt=""
               draggable={false}
               className="pointer-events-none absolute select-none"
-              style={{
-                width: w,
-                height: h,
-                left: '50%',
-                top: '50%',
-                transform: `translate(calc(-50% + ${shown.x}px), calc(-50% + ${shown.y}px))`,
-              }}
+              style={{ left: disp.x, top: disp.y, width: disp.w, height: disp.h }}
             />
           )}
-          <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3">
-            {Array.from({ length: 9 }).map((_, i) => (
-              <span key={i} className="border border-white/30" />
-            ))}
-          </div>
+          {sel.size > 0 && (
+            <div
+              className="absolute cursor-move"
+              style={{
+                left: sel.x,
+                top: sel.y,
+                width: sel.size,
+                height: sel.size,
+                boxShadow: '0 0 0 1px #fff, 0 0 0 9999px rgba(0,0,0,0.45)',
+              }}
+            >
+              <div className="grid h-full w-full grid-cols-3 grid-rows-3">
+                {Array.from({ length: 9 }).map((_, i) => (
+                  <span key={i} className="border border-white/30" />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="shrink-0 text-xs text-muted-foreground">缩放</span>
+          <span className="shrink-0 text-xs text-muted-foreground">选区大小</span>
           <input
             type="range"
-            min={1}
-            max={6}
-            step={0.05}
-            value={zoom}
-            onChange={(e) => setZoom(Number(e.target.value))}
+            min={24}
+            max={Math.round(Math.min(disp.w, disp.h)) || 24}
+            value={Math.round(sel.size)}
+            onChange={(e) => {
+              const size = Number(e.target.value);
+              const cx = sel.x + sel.size / 2;
+              const cy = sel.y + sel.size / 2;
+              setSel(clampSel(cx - size / 2, cy - size / 2, size));
+            }}
             className="flex-1"
           />
         </div>
@@ -1358,7 +1398,7 @@ function IconCropDialog({
           <Button variant="outline" onClick={onClose}>
             取消
           </Button>
-          <Button disabled={!ready} onClick={confirm}>
+          <Button disabled={!ready || !sel.size} onClick={confirm}>
             确认并上传
           </Button>
         </DialogFooter>
