@@ -16,6 +16,28 @@ const MIN_ROWS = 1;
 const MAX_ROWS = 5;
 const LINE_HEIGHT = 20;
 
+/**
+ * 终端行按日志级别着色（返回空串时继承容器默认色）。
+ * 识别 Minecraft 常见格式：log4j `[线程/ERROR]:`、旧式 `SEVERE:`、
+ * 异常堆栈（`Exception` / `Caused by:` / `  at …`）与启动就绪 `Done (x.xxx)s!`。
+ */
+function consoleLineClass(text: string): string {
+  if (text.startsWith('[BlockNexus]')) return 'text-emerald-400/90';
+  const lvl =
+    text.match(/\/(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)\]:/)?.[1] ??
+    text.match(/^\s*(SEVERE|WARNING|WARN|ERROR|FATAL|DEBUG|TRACE)\s*[:：]/)?.[1] ??
+    '';
+  if (lvl === 'ERROR' || lvl === 'FATAL' || lvl === 'SEVERE') return 'text-red-400';
+  if (lvl === 'WARN' || lvl === 'WARNING') return 'text-amber-300';
+  if (lvl === 'DEBUG' || lvl === 'TRACE') return 'text-zinc-500';
+  // 堆栈与异常（部分服务端不带级别前缀直接打印）
+  if (/Exception|Caused by:/.test(text)) return 'text-red-400';
+  if (/^\s+at\s/.test(text) || /^\s*\.\.\. \d+ more/.test(text)) return 'text-red-400/70';
+  // 启动就绪（原版/Paper/Forge 通用的 Done (x.xxx)s!）
+  if (/Done \([\d.,]+s\)/.test(text)) return 'text-emerald-400';
+  return '';
+}
+
 interface Props {
   server: ServerSummary;
   instance: string;
@@ -210,7 +232,7 @@ export function ConsolePanel({
         className={`console-scroll no-scrollbar ${heightClass} overflow-y-auto p-3 font-mono text-xs leading-relaxed text-zinc-300`}
       >
         {lines.map((text, i) => (
-          <div key={i} className={text.startsWith('[BlockNexus]') ? 'text-emerald-400/90' : undefined}>
+          <div key={i} className={consoleLineClass(text)}>
             {text}
           </div>
         ))}

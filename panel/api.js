@@ -13,6 +13,60 @@ const mailTpl = require('./mail');
 const COOKIE = 'blocknexussid';
 const SESSION_TTL = 7 * 24 * 3600 * 1000;
 
+// 面板版本：读 package.json（/api/me、/api/version 共用）
+const APP_VERSION = (() => {
+  try { return require('../package.json').version || '0.0.0'; } catch { return '0.0.0'; }
+})();
+
+// 最新版本检查：GitHub Releases（缓存 10 分钟；?refresh=1 跳过缓存）
+const LATEST_RELEASE_API = 'https://api.github.com/repos/live-ling/BlockNexus/releases/latest';
+const VERSION_CACHE_MS = 10 * 60e3;
+let versionCache = { at: 0, data: null };
+
+/** 三段版本号比较：a 是否大于 b（忽略 v 前缀与后缀） */
+function semverGreater(a, b) {
+  const pa = String(a).replace(/^v/, '').split(/[.\-+]/);
+  const pb = String(b).replace(/^v/, '').split(/[.\-+]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = Number(pa[i]);
+    const nb = Number(pb[i]);
+    if (Number.isNaN(na) || Number.isNaN(nb)) {
+      const s = String(pa[i] ?? '').localeCompare(String(pb[i] ?? ''));
+      if (s) return s > 0;
+    } else if (na !== nb) return na > nb;
+  }
+  return false;
+}
+
+/** 检查更新；失败时保留旧缓存并在结果里带 error 字段 */
+async function checkLatestRelease(version) {
+  const fresh = Date.now() - versionCache.at < VERSION_CACHE_MS;
+  if (versionCache.data && fresh) return { ...versionCache.data, cached: true };
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(LATEST_RELEASE_API, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': `BlockNexus/${version}`, Accept: 'application/vnd.github+json' },
+    });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+    const j = await r.json();
+    const tag = String(j.tag_name || '').replace(/^v/, '');
+    const data = {
+      latest: tag || null,
+      hasUpdate: !!tag && semverGreater(tag, version),
+      releaseUrl: j.html_url || null,
+      checkedAt: Date.now(),
+    };
+    versionCache = { at: Date.now(), data };
+    return data;
+  } catch (e) {
+    if (versionCache.data) return { ...versionCache.data, cached: true, error: e.message || '检查失败' };
+    return { latest: null, hasUpdate: false, releaseUrl: null, checkedAt: Date.now(), error: e.message || '检查失败' };
+  }
+}
+
 function createApi(config, hub, bus, limiterOpts = {}) {
   const router = express.Router();
   const sessions = new Map(); // sid -> expires
@@ -236,12 +290,10 @@ function createApi(config, hub, bus, limiterOpts = {}) {
 
   router.get('/me', (req, res) => {
     // 公开接口：不返回用户名等敏感信息（用户名在登录后的 /api/settings 里才有）
-    let version = '0.1.0';
-    try { version = require('../package.json').version || version; } catch {}
     res.json({
       port: config.data.panel.port,
       authEnabled: !!config.data.panel.authEnabled,
-      version,
+      version: APP_VERSION,
     });
   });
 
@@ -424,6 +476,12 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     }
     if (sid) sessions.delete(sid);
     res.status(401).json({ error: '未登录' });
+  });
+
+  // ---------- 版本与更新检查（登录后） ----------
+  router.get('/version', async (req, res) => {
+    const data = await checkLatestRelease(APP_VERSION);
+    res.json({ version: APP_VERSION, ...data });
   });
 
   // ---------- 面板设置（登录后可读写） ----------

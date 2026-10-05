@@ -66,6 +66,10 @@ function RefRow({ name, url, desc }: { name: string; url: string; desc: string }
   );
 }
 
+/** 开源信息：仓库与许可证 */
+const REPO_URL = 'https://github.com/live-ling/BlockNexus';
+const LICENSE_URL = REPO_URL + '/blob/main/LICENSE';
+
 export function AboutPage({ onBack }: { onBack: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
   useEffect(() => {
@@ -100,25 +104,30 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                     v{me?.version ?? '…'}
                   </span>
                 </div>
-                <p className="mt-1 text-xs leading-snug text-muted-foreground">
-                  Minecraft 服务器管理面板 — 本地面板 + 远程 Agent（token 双向认证的加密通道）
-                </p>
               </div>
             </div>
             <div className="mt-4 grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">面板端口</span>
-                <span className="font-mono">{me?.port ?? '—'}</span>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">开源地址</span>
+                <a
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono underline underline-offset-2 hover:text-foreground"
+                >
+                  github.com/live-ling/BlockNexus
+                </a>
               </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">登录保护</span>
-                <span>{me?.authEnabled ? '已启用' : '未启用（本地服务）'}</span>
-              </div>
-              <div className="flex justify-between gap-3 sm:col-span-2">
-                <span className="shrink-0 text-muted-foreground">架构</span>
-                <span className="min-w-0 text-right leading-snug">
-                  Express 面板 ⇄ 加密通道（AES-256-GCM）⇄ 零依赖 Agent · systemd 托管 · 实例全生命周期管理
-                </span>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">许可证</span>
+                <a
+                  href={LICENSE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  MIT
+                </a>
               </div>
             </div>
           </CardContent>

@@ -279,6 +279,24 @@ export async function aiTest(body: { baseUrl?: string; model?: string; apiKey?: 
   return api<AiTestResult>('/settings/ai-test', { method: 'POST', body });
 }
 
+/** 版本与更新信息（设置页「版本」卡） */
+export interface AppVersion {
+  /** 当前面板版本（package.json） */
+  version: string;
+  /** GitHub 最新 Release 版本号；拉取失败为 null */
+  latest: string | null;
+  hasUpdate: boolean;
+  releaseUrl: string | null;
+  checkedAt: number;
+  /** 命中 10 分钟缓存 */
+  cached?: boolean;
+  error?: string;
+}
+
+export async function getVersion(refresh = false): Promise<AppVersion> {
+  return api<AppVersion>(`/version${refresh ? '?refresh=1' : ''}`);
+}
+
 /** AI 分析：POST + SSE 流（fetch + reader，因为 EventSource 不支持 POST） */
 export interface AiStreamHandlers {
   onMeta?: (meta: { lines: number; status: string; model: string; truncated?: boolean }) => void;

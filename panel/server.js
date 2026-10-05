@@ -66,10 +66,11 @@ server.on('upgrade', (req, socket, head) => hub.handleUpgrade(req, socket, head)
 server.keepAliveTimeout = 65000;
 
 server.listen(PORT, HOST, () => {
+  const ver = (() => { try { return require('../package.json').version || ''; } catch { return ''; } })();
   console.log('');
-  console.log('  ┌─────────────────────────────────────────────┐');
-  console.log('  │  BlockNexus · Minecraft 服务器管理面板  v0.1.0    │');
-  console.log('  └─────────────────────────────────────────────┘');
+  console.log('  ┌──────────────────────────────────────────────┐');
+  console.log(`  │  BlockNexus · Minecraft 服务器管理面板  v${ver}`.padEnd(50) + '│');
+  console.log('  └──────────────────────────────────────────────┘');
   console.log('');
   const scheme = tlsOn ? 'https' : 'http';
   console.log(`  面板地址:   ${scheme}://${HOST === '0.0.0.0' ? '127.0.0.1' : HOST}:${PORT}`);

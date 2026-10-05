@@ -1,16 +1,7 @@
 {
   "name": "blocknexus",
-  "version": "0.1.0",
-  "description": "Minecraft 服务器管理面板 — 本地面板 + 远程 Agent",
-  "license": "MIT",
-  "author": "BlockNexus Contributors",
-  "keywords": [
-    "minecraft",
-    "server-manager",
-    "web-panel",
-    "ssh",
-    "websocket"
-  ],
+  "version": "0.2.0",
+  "description": "Minecraft 服务器管理面板 — 本地面板 + 远程 Agent（参考 DeepSeek Harness 架构）",
   "private": true,
   "main": "panel/server.js",
   "scripts": {

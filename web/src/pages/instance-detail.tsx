@@ -2,7 +2,7 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useState } from 'react';
-import { Archive, ArrowLeft, CloudDownload, FolderOpen, Pencil, Play, RotateCw, Settings2, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, LogOut, MoreVertical, Pencil, Play, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
@@ -13,6 +13,13 @@ import { PropertiesDialog } from '@/components/properties-dialog';
 import { InstanceStatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   api,
@@ -51,6 +58,8 @@ export function InstanceDetailPage({
   const [reinstallOpen, setReinstallOpen] = useState(false);
   const [backupBeforeDelete, setBackupBeforeDelete] = useState(true);
   const [busy, setBusy] = useState(false);
+  // 玩家快捷管理：待确认的封禁（ip=true 表示 ban-ip）
+  const [banTarget, setBanTarget] = useState<{ name: string; ip: boolean } | null>(null);
   // 主区视图：终端 / AI 日志分析
   const [mainView, setMainView] = useState<'console' | 'ai'>('console');
   const [, forceTick] = useState(0);
@@ -121,6 +130,22 @@ export function InstanceDetailPage({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, instanceName]);
+
+  /** 玩家快捷管理：向实例控制台发送指令（kick / ban / op / deop 等） */
+  const sendPlayerCmd = useCallback(
+    async (cmd: string, okText: string) => {
+      try {
+        await api(`/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/command`, {
+          method: 'POST',
+          body: { cmd },
+        });
+        success(okText, `已执行：${cmd}`);
+      } catch (e) {
+        error('指令发送失败', errText(e));
+      }
+    },
+    [serverId, instanceName, success, error],
+  );
 
   /** 复制到剪贴板（域名等玩家要用的地址） */
   const handleCopy = async (text: string) => {
@@ -384,10 +409,41 @@ export function InstanceDetailPage({
                   {players.list.map((name) => (
                     <li
                       key={name}
-                      className="truncate rounded-md bg-muted/60 px-2 py-1.5 font-mono text-xs text-foreground"
+                      className="group flex min-w-0 items-center gap-1 rounded-md bg-muted/60 py-1 pl-2 pr-1 font-mono text-xs text-foreground"
                       title={name}
                     >
-                      {name}
+                      <span className="min-w-0 flex-1 truncate">{name}</span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                            aria-label={`管理玩家 ${name}`}
+                            title="玩家管理"
+                          >
+                            <MoreVertical className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40 font-sans">
+                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`kick ${name}`, `已踢出 ${name}`)}>
+                            <LogOut className="h-3.5 w-3.5" /> 踢出
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setBanTarget({ name, ip: false })}>
+                            <Ban className="h-3.5 w-3.5" /> 封禁
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setBanTarget({ name, ip: true })}>
+                            <Ban className="h-3.5 w-3.5" /> 封禁其 IP
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`op ${name}`, `${name} 已设为管理员`)}>
+                            <ShieldCheck className="h-3.5 w-3.5" /> 设为管理员
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`deop ${name}`, `已取消 ${name} 的管理员`)}>
+                            <ShieldOff className="h-3.5 w-3.5" /> 取消管理员
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </li>
                   ))}
                 </ul>
@@ -409,8 +465,7 @@ export function InstanceDetailPage({
 
       <FileManagerDialog
         server={server}
-        instance={instance.name}
-        open={filesOpen}
+        instance={instance.name}        open={filesOpen}
         onOpenChange={setFilesOpen}
       />
       <BackupDialog
@@ -480,6 +535,27 @@ export function InstanceDetailPage({
           });
           success(isFailed ? '已强制删除' : backupBeforeDelete ? '已删除（备份已保留）' : '已删除');
           onBack();
+        }}
+      />
+      <ConfirmDialog
+        open={!!banTarget}
+        onOpenChange={(v) => !v && setBanTarget(null)}
+        title={banTarget?.ip ? `封禁 ${banTarget.name} 的 IP？` : `封禁玩家 ${banTarget?.name ?? ''}？`}
+        description={
+          <div>
+            将向控制台发送指令{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              {banTarget ? (banTarget.ip ? `ban-ip ${banTarget.name}` : `ban ${banTarget.name}`) : ''}
+            </code>
+            ，执行后该玩家（或其 IP）将无法进入服务器；可在控制台用 pardon / pardon-ip 解除。
+          </div>
+        }
+        onConfirm={async () => {
+          if (!banTarget) return;
+          await sendPlayerCmd(
+            banTarget.ip ? `ban-ip ${banTarget.name}` : `ban ${banTarget.name}`,
+            banTarget.ip ? `已封禁 ${banTarget.name} 的 IP` : `已封禁 ${banTarget.name}`,
+          );
         }}
       />
     </div>

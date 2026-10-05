@@ -1,7 +1,7 @@
 // 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Bell, ChevronRight, Globe, Info, Lock, Mail, MailCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, Bell, ChevronRight, Globe, Info, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { aiListModels, aiTest, api, errText, type AiTestResult, type PanelSettings } from '@/lib/api';
+import { aiListModels, aiTest, api, errText, getVersion, type AiTestResult, type AppVersion, type PanelSettings } from '@/lib/api';
 import { useToastHelpers } from '@/lib/toast';
 
 // 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
@@ -19,6 +19,7 @@ const ACCENTS = {
   mail: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
   notify: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
   ai: 'border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  update: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
   info: 'border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-400',
 } as const;
 
@@ -96,7 +97,8 @@ export function PanelSettingsPage({
         <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
         <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
         <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
-        <AboutEntryCard accent="info" className="col-span-12" />
+        <VersionCard accent="update" className="col-span-12 md:col-span-6" />
+        <AboutEntryCard accent="info" className="col-span-12 md:col-span-6" />
       </div>
     </div>
   );
@@ -166,6 +168,83 @@ function AboutEntryCard({ accent, className = '' }: { accent: Accent; className?
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
       </button>
     </Card>
+  );
+}
+
+/** 版本与更新：当前版本 + GitHub 最新 Release 对比；进入页面自动检查一次（后端缓存 10 分钟） */
+function VersionCard({ accent, className = '' }: { accent: Accent; className?: string }) {
+  const { error: toastError } = useToastHelpers();
+  const [info, setInfo] = useState<AppVersion | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const check = useCallback(
+    (refresh: boolean) => {
+      setBusy(true);
+      getVersion(refresh)
+        .then(setInfo)
+        .catch((e) => toastError('检查更新失败', errText(e)))
+        .finally(() => setBusy(false));
+    },
+    [toastError],
+  );
+
+  useEffect(() => {
+    check(false);
+  }, [check]);
+
+  const hasUpdate = !!info?.hasUpdate;
+  return (
+    <SettingsCard
+      title="版本与更新"
+      description="当前版本与 GitHub 最新 Release 对比"
+      icon={<Rocket className="h-[18px] w-[18px]" />}
+      accent={accent}
+      className={className}
+      status={
+        info && !busy ? (
+          hasUpdate ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              有新版本
+            </span>
+          ) : (
+            <StateChip ok okText="已是最新" badText="" />
+          )
+        ) : undefined
+      }
+    >
+      <div className="grid gap-x-6 gap-y-1.5 text-xs">
+        <div className="flex justify-between gap-3">
+          <span className="text-muted-foreground">当前版本</span>
+          <span className="font-mono">v{info?.version ?? '…'}</span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span className="text-muted-foreground">最新版本</span>
+          <span className="font-mono">{info?.latest ? `v${info.latest}` : '—'}</span>
+        </div>
+        {info?.error && (
+          <p className="text-xs leading-snug text-muted-foreground">
+            检查失败：{info.error}（无网络或 GitHub 访问受限时不影响使用）
+          </p>
+        )}
+        {hasUpdate && info?.releaseUrl && (
+          <a
+            href={info.releaseUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-cyan-600 underline underline-offset-2 hover:text-cyan-500 dark:text-cyan-400"
+          >
+            前往 GitHub 查看新版本 →
+          </a>
+        )}
+      </div>
+      <div className="mt-auto flex items-center justify-end pt-1">
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => check(true)}>
+          <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+          {busy ? '检查中…' : '检查更新'}
+        </Button>
+      </div>
+    </SettingsCard>
   );
 }
 
@@ -867,7 +946,7 @@ function AiCard({
         <Field
           htmlFor="ps-ai-base"
           label="接口地址"
-          hint="例：https://api.deepseek.com"
+          hint="例：https://api.liveling.cn/v1"
           error={baseInvalid ? '需以 http:// 或 https:// 开头' : undefined}
         >
           <Input
@@ -875,7 +954,7 @@ function AiCard({
             className="sm:max-w-sm"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.deepseek.com"
+            placeholder="https://api.liveling.cn/v1"
           />
         </Field>
         <Field
