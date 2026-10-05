@@ -60,6 +60,12 @@ export interface ExpandableActionBarProps {
   expandOnHover?: boolean;
   expandOnFocus?: boolean;
   collapseDelay?: number;
+  /**
+   * Collapse when focus leaves the bar. Default true. Set false for a bar that
+   * must survive its own buttons blurring on click — a nav rail whose items
+   * switch pages and would otherwise fold away between two consecutive picks.
+   */
+  collapseOnBlur?: boolean;
   className?: string;
   classNames?: ExpandableActionBarClassNames;
   renderItem?: (item: ExpandableActionBarItem, state: { expanded: boolean; active: boolean }) => ReactNode;
@@ -129,6 +135,7 @@ export function ExpandableActionBar({
   expandOnHover = true,
   expandOnFocus = true,
   collapseDelay = 90,
+  collapseOnBlur = true,
   className,
   classNames,
   renderItem,
@@ -210,7 +217,11 @@ export function ExpandableActionBar({
   };
 
   const onRootBlur = (event: FocusEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node) && expandOnFocus) {
+    if (
+      !event.currentTarget.contains(event.relatedTarget as Node) &&
+      expandOnFocus &&
+      collapseOnBlur
+    ) {
       close();
     }
   };

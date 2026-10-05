@@ -253,7 +253,7 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
 
   return (
     <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
-      <ExpandableActionBar items={items} size="md" />
+      <ExpandableActionBar items={items} size="md" collapseOnBlur={false} />
     </div>
   );
 }
