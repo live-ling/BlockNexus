@@ -1,7 +1,7 @@
 // 关于页：面板信息、开源依赖、引用服务与声明
 // 路由 #/about —— 设置页底部进入
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ExternalLink, Info } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { api, type Me } from '@/lib/api';
@@ -66,15 +66,30 @@ function RefRow({ name, url, desc }: { name: string; url: string; desc: string }
   );
 }
 
-/** 开源信息：仓库与许可证 */
+/** 开源信息：仓库地址（许可证全文经 /api/license 直出展示） */
 const REPO_URL = 'https://github.com/live-ling/BlockNexus';
-const LICENSE_URL = REPO_URL + '/blob/main/LICENSE';
 
 export function AboutPage({ onBack }: { onBack: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
+  const [licOpen, setLicOpen] = useState(false);
+  const [licText, setLicText] = useState<string | null>(null);
+
   useEffect(() => {
     api<Me>('/me').then(setMe).catch(() => {});
   }, []);
+
+  /** 许可证全文懒加载：首次展开才拉取 */
+  const toggleLicense = () => {
+    setLicOpen((v) => {
+      const next = !v;
+      if (next && licText === null) {
+        api<{ text: string }>('/license')
+          .then((r) => setLicText(r.text))
+          .catch(() => setLicText('（LICENSE 读取失败——未随面板部署？）'));
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 pb-24 pt-7">
@@ -106,30 +121,36 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                 </div>
               </div>
             </div>
-            <div className="mt-4 grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">开源地址</span>
-                <a
-                  href={REPO_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-mono underline underline-offset-2 hover:text-foreground"
-                >
-                  github.com/live-ling/BlockNexus
-                </a>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">许可证</span>
-                <a
-                  href={LICENSE_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2 hover:text-foreground"
-                >
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3.5 py-2.5 transition-colors hover:border-foreground/20 hover:bg-muted/70"
+              >
+                <span className="shrink-0 text-xs text-muted-foreground">开源地址</span>
+                <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
+                  <span className="truncate">github.com/live-ling/BlockNexus</span>
+                  <ExternalLink className="h-3 w-3 shrink-0 opacity-50 transition-opacity group-hover:opacity-100" />
+                </span>
+              </a>
+              <button
+                type="button"
+                onClick={toggleLicense}
+                className="flex items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3.5 py-2.5 text-left transition-colors hover:border-foreground/20 hover:bg-muted/70"
+              >
+                <span className="text-xs text-muted-foreground">许可证</span>
+                <span className="flex items-center gap-1.5 text-xs">
                   MIT
-                </a>
-              </div>
+                  {licOpen ? <ChevronUp className="h-3.5 w-3.5 opacity-50" /> : <ChevronDown className="h-3.5 w-3.5 opacity-50" />}
+                </span>
+              </button>
             </div>
+            {licOpen && (
+              <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                {licText ?? '加载中…'}
+              </pre>
+            )}
           </CardContent>
         </Card>
 

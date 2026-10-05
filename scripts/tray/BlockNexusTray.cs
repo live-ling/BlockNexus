@@ -313,11 +313,27 @@ namespace BlockNexus
                 {
                     Web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
                     Web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                    // 面板里新开窗口的目标一律在主窗口内打开
+                    // 新开窗口分流：同面板主机的目标留在壳内；跨站目标（如 GitHub）
+                    // 交系统默认浏览器——外壳窗口被导航走后用户就"回不去"面板了
                     Web.CoreWebView2.NewWindowRequested += (s2, e2) =>
                     {
                         e2.Handled = true;
-                        try { Web.CoreWebView2.Navigate(e2.Uri); } catch { }
+                        Uri panel, target;
+                        bool same = Uri.TryCreate(_panelUrl, UriKind.Absolute, out panel)
+                            && Uri.TryCreate(e2.Uri, UriKind.Absolute, out target)
+                            && string.Equals(panel.Host, target.Host, StringComparison.OrdinalIgnoreCase);
+                        if (same)
+                        {
+                            try { Web.CoreWebView2.Navigate(e2.Uri); } catch { }
+                        }
+                        else
+                        {
+                            try
+                            {
+                                Process.Start(new ProcessStartInfo(e2.Uri) { UseShellExecute = true });
+                            }
+                            catch { }
+                        }
                     };
                 }
                 catch { }

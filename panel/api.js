@@ -4,6 +4,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const { installAgent, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
@@ -295,6 +296,15 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       authEnabled: !!config.data.panel.authEnabled,
       version: APP_VERSION,
     });
+  });
+
+  // ---------- LICENSE 全文（关于页展示；公开静态文本，无敏感信息） ----------
+  router.get('/license', (req, res) => {
+    try {
+      res.json({ text: fs.readFileSync(path.join(__dirname, '..', 'LICENSE'), 'utf8') });
+    } catch {
+      res.status(404).json({ error: 'LICENSE 未随面板部署' });
+    }
   });
 
   // ---------- 忘记密码 / 重置密码（公开接口，置于鉴权之前） ----------
