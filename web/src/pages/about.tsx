@@ -119,6 +119,10 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                     v{me?.version ?? '…'}
                   </span>
                 </div>
+                <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                  Minecraft 服务器管理面板:本地 Web 面板通过 SSH 为远程服务器部署
+                  Agent,经 token 双向认证的加密通道管理 MC 实例——浏览器即开即用,面板无需公网地址。
+                </p>
               </div>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
