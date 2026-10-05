@@ -946,7 +946,7 @@ function AiCard({
         <Field
           htmlFor="ps-ai-base"
           label="接口地址"
-          hint="例：https://api.liveling.cn/v1"
+          hint="例：https://api.deepseek.com"
           error={baseInvalid ? '需以 http:// 或 https:// 开头' : undefined}
         >
           <Input
@@ -954,7 +954,7 @@ function AiCard({
             className="sm:max-w-sm"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.liveling.cn/v1"
+            placeholder="https://api.deepseek.com"
           />
         </Field>
         <Field
@@ -982,7 +982,7 @@ function AiCard({
                 className="sm:max-w-sm"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="cn:glm-5.3-flash"
+                placeholder="deepseek-flash"
               />
             )}
             <Button

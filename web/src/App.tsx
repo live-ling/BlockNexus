@@ -221,7 +221,7 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
       id: 'logo',
       label: 'BlockNexus',
       icon: (
-        <img src="/logo.png" alt="BlockNexus" className="h-6 w-6 rounded-md object-cover ring-1 ring-border" />
+        <img src="/logo.png" alt="BlockNexus" className="h-6 w-6 rounded-full object-cover ring-1 ring-border" />
       ),
       active: isServersPage,
       onClick: () => (location.hash = '#/'),
