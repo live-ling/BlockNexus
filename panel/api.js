@@ -1660,6 +1660,17 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     }
   });
 
+  // 域名连通检测：Agent 侧解析（含 _minecraft._tcp SRV）+ TCP 探测实例端口
+  router.get('/servers/:id/instances/:name/domain-check', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'instance.domainCheck', { name: req.params.name }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.get('/servers/:id/instances/:name/console', async (req, res, next) => {
     const server = requireServer(req, res);
     if (!server) return;

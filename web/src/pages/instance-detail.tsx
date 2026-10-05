@@ -2,7 +2,7 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, LogOut, MoreVertical, Pencil, Play, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
@@ -12,7 +12,18 @@ import { AutoRestartDialog } from '@/components/auto-restart-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
 import { InstanceStatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,8 +69,12 @@ export function InstanceDetailPage({
   const [reinstallOpen, setReinstallOpen] = useState(false);
   const [backupBeforeDelete, setBackupBeforeDelete] = useState(true);
   const [busy, setBusy] = useState(false);
-  // 玩家快捷管理：待确认的封禁（ip=true 表示 ban-ip）
-  const [banTarget, setBanTarget] = useState<{ name: string; ip: boolean } | null>(null);
+  // 玩家快捷管理：待确认的操作（踢出/封禁/封禁 IP 统一走模态框，原因可选）
+  const [playerAction, setPlayerAction] = useState<{ name: string; kind: 'kick' | 'ban' | 'ban-ip' } | null>(null);
+  // 域名连通检测状态
+  const [domainCheck, setDomainCheck] = useState<
+    { state: 'checking' | 'done'; result?: DomainCheckResult } | null
+  >(null);
   // 主区视图：终端 / AI 日志分析
   const [mainView, setMainView] = useState<'console' | 'ai'>('console');
   const [, forceTick] = useState(0);
@@ -131,7 +146,7 @@ export function InstanceDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, instanceName]);
 
-  /** 玩家快捷管理：向实例控制台发送指令（kick / ban / op / deop 等） */
+  /** 玩家快捷管理：向实例控制台发送指令（kick / ban / op / deop 等），返回是否成功 */
   const sendPlayerCmd = useCallback(
     async (cmd: string, okText: string) => {
       try {
@@ -140,12 +155,32 @@ export function InstanceDetailPage({
           body: { cmd },
         });
         success(okText, `已执行：${cmd}`);
+        return true;
       } catch (e) {
         error('指令发送失败', errText(e));
+        return false;
       }
     },
     [serverId, instanceName, success, error],
   );
+
+  /** 域名连通检测（Agent 侧解析 + TCP 探测） */
+  const runDomainCheck = useCallback(() => {
+    setDomainCheck({ state: 'checking' });
+    api<DomainCheckResult>(
+      `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/domain-check`,
+    )
+      .then((r) => setDomainCheck({ state: 'done', result: r }))
+      .catch((e) =>
+        setDomainCheck({ state: 'done', result: { error: errText(e) } as DomainCheckResult }),
+      );
+  }, [serverId, instanceName]);
+
+  // 设置了域名就自动检测一次；域名改动（编辑后）重新检测
+  useEffect(() => {
+    if (instance?.address) runDomainCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance?.address]);
 
   /** 复制到剪贴板（域名等玩家要用的地址） */
   const handleCopy = async (text: string) => {
@@ -259,6 +294,37 @@ export function InstanceDetailPage({
               placeholder="未设置"
               onCopy={handleCopy}
             />
+            {instance.address ? (
+              <div className="flex items-center justify-between gap-2 px-1">
+                {domainCheck?.state === 'checking' ? (
+                  <span className="text-[11px] text-muted-foreground">域名连通检测中…</span>
+                ) : domainCheck?.result ? (
+                  domainCheck.result.error ? (
+                    <span className="min-w-0 truncate text-[11px] text-destructive" title={domainCheck.result.error}>
+                      ✗ {domainCheck.result.error}
+                    </span>
+                  ) : (
+                    <span className="min-w-0 truncate text-[11px] text-emerald-600 dark:text-emerald-400" title={`${domainCheck.result.ip}:${domainCheck.result.port}`}>
+                      ✓ {domainCheck.result.ip}:{domainCheck.result.port} · TCP {domainCheck.result.latencyMs}ms
+                      {domainCheck.result.srv ? ' · SRV' : ''}
+                    </span>
+                  )
+                ) : (
+                  <span className="text-[11px] text-muted-foreground">未检测</span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                  disabled={domainCheck?.state === 'checking'}
+                  onClick={runDomainCheck}
+                  aria-label="重新检测域名连通性"
+                  title="检测域名连通性"
+                >
+                  <Globe className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : null}
             <InfoRow label={fmtLabel('正版验证')} value={instance.onlineMode ? '开启' : '关闭（离线）'} />
             {active && (
               <InfoRow
@@ -426,13 +492,13 @@ export function InstanceDetailPage({
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40 font-sans">
-                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`kick ${name}`, `已踢出 ${name}`)}>
+                          <DropdownMenuItem onClick={() => setPlayerAction({ name, kind: 'kick' })}>
                             <LogOut className="h-3.5 w-3.5" /> 踢出
                           </DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setBanTarget({ name, ip: false })}>
+                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setPlayerAction({ name, kind: 'ban' })}>
                             <Ban className="h-3.5 w-3.5" /> 封禁
                           </DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setBanTarget({ name, ip: true })}>
+                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setPlayerAction({ name, kind: 'ban-ip' })}>
                             <Ban className="h-3.5 w-3.5" /> 封禁其 IP
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
@@ -537,27 +603,13 @@ export function InstanceDetailPage({
           onBack();
         }}
       />
-      <ConfirmDialog
-        open={!!banTarget}
-        onOpenChange={(v) => !v && setBanTarget(null)}
-        title={banTarget?.ip ? `封禁 ${banTarget.name} 的 IP？` : `封禁玩家 ${banTarget?.name ?? ''}？`}
-        description={
-          <div>
-            将向控制台发送指令{' '}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-              {banTarget ? (banTarget.ip ? `ban-ip ${banTarget.name}` : `ban ${banTarget.name}`) : ''}
-            </code>
-            ，执行后该玩家（或其 IP）将无法进入服务器；可在控制台用 pardon / pardon-ip 解除。
-          </div>
-        }
-        onConfirm={async () => {
-          if (!banTarget) return;
-          await sendPlayerCmd(
-            banTarget.ip ? `ban-ip ${banTarget.name}` : `ban ${banTarget.name}`,
-            banTarget.ip ? `已封禁 ${banTarget.name} 的 IP` : `已封禁 ${banTarget.name}`,
-          );
-        }}
-      />
+      {playerAction && (
+        <PlayerActionDialog
+          target={playerAction}
+          onClose={() => setPlayerAction(null)}
+          onConfirm={sendPlayerCmd}
+        />
+      )}
     </div>
   );
 }
@@ -665,5 +717,108 @@ function JavaInstallRow({ serverId, onDone }: { serverId: string; onDone: () => 
         {busy ? '安装中…' : '安装'}
       </Button>
     </div>
+  );
+}
+
+/** 域名连通检测结果（Agent 侧解析 + TCP 探测） */
+interface DomainCheckResult {
+  domain: string;
+  srv: { host: string; port: number } | null;
+  host: string;
+  ip: string | null;
+  port: number | null;
+  tcp: boolean;
+  latencyMs: number | null;
+  error: string | null;
+}
+
+/** 玩家操作确认框：踢出 / 封禁 / 封禁 IP 统一走这里，原因可选（随指令下发给服务端） */
+function PlayerActionDialog({
+  target,
+  onClose,
+  onConfirm,
+}: {
+  target: { name: string; kind: 'kick' | 'ban' | 'ban-ip' };
+  onClose: () => void;
+  /** 返回是否执行成功；成功后自动关闭 */
+  onConfirm: (cmd: string, okText: string) => Promise<boolean>;
+}) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const meta = {
+    kick: {
+      title: `踢出玩家 ${target.name}`,
+      cmd: `kick ${target.name}`,
+      hint: '玩家会立即断开连接，可随时重新加入。',
+    },
+    ban: {
+      title: `封禁玩家 ${target.name}`,
+      cmd: `ban ${target.name}`,
+      hint: '封禁后该玩家无法进入服务器；可在控制台用 pardon 解除。',
+    },
+    'ban-ip': {
+      title: `封禁 ${target.name} 的 IP`,
+      cmd: `ban-ip ${target.name}`,
+      hint: '同一 IP 的所有玩家都会被拦截；可在控制台用 pardon-ip 解除。',
+    },
+  }[target.kind];
+  const cmd = reason.trim() ? `${meta.cmd} ${reason.trim()}` : meta.cmd;
+  const okText =
+    target.kind === 'kick'
+      ? `已踢出 ${target.name}`
+      : target.kind === 'ban'
+        ? `已封禁 ${target.name}`
+        : `已封禁 ${target.name} 的 IP`;
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const ok = await onConfirm(cmd, okText);
+      if (ok) onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AlertDialog open onOpenChange={(v) => !v && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{meta.title}</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div>
+              将向控制台发送{' '}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{cmd}</code>
+              。{meta.hint}
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <Input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="原因（可选，将随指令下发给服务端）"
+          maxLength={100}
+          disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing && !busy) {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+        />
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={busy}
+            onClick={async (e) => {
+              e.preventDefault();
+              await submit();
+            }}
+          >
+            {busy ? '执行中…' : '确认'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

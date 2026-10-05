@@ -1253,6 +1253,65 @@ class InstanceManager {
     return out;
   }
 
+  // 域名连通检测：解析实例「域名」并 TCP 探测实例端口。
+  // 先查 Minecraft SRV 记录（_minecraft._tcp.<域名>，命中则用 SRV 的目标与端口），
+  // 无 SRV 回退 A 记录 + meta 端口；探测对象是解析出的 IP，玩家视角的连通性。
+  async domainCheck(name) {
+    const rec = this.get(name);
+    const raw = String(rec.meta.address || '').trim();
+    if (!raw) throw new Error('该实例未设置域名');
+    const dns = require('dns').promises;
+    const net = require('net');
+    // 地址允许手滑带协议头或端口，统一剥干净
+    let domain = raw.replace(/^[a-z]+:\/\//i, '').split('/')[0];
+    let explicitPort = null;
+    const pm = domain.match(/^(.+):(\d+)$/);
+    if (pm && !net.isIP(pm[1])) {
+      domain = pm[1];
+      explicitPort = Number(pm[2]);
+    }
+    const out = {
+      domain,
+      srv: null,
+      host: domain,
+      ip: null,
+      port: explicitPort ?? rec.runtimePort ?? rec.meta.port,
+      tcp: false,
+      latencyMs: null,
+      error: null,
+    };
+    try {
+      try {
+        const records = await dns.resolveSrv('_minecraft._tcp.' + domain);
+        if (records && records.length) {
+          records.sort((a, b) => a.priority - b.priority || b.weight - a.weight);
+          out.srv = { host: records[0].name, port: records[0].port };
+          out.host = records[0].name;
+          out.port = records[0].port;
+        }
+      } catch {} // 无 SRV 是常态，走 A 记录
+      const addrs = await dns.resolve4(out.host).catch(() => null);
+      out.ip = addrs ? addrs[0] : (await dns.lookup(out.host)).address;
+      const t0 = Date.now();
+      await new Promise((resolve, reject) => {
+        const sock = net.connect({ host: out.ip, port: out.port }, () => {
+          out.tcp = true;
+          out.latencyMs = Date.now() - t0;
+          sock.destroy();
+          resolve();
+        });
+        sock.setTimeout(3000, () => {
+          sock.destroy();
+          reject(new Error('TCP 连接超时（3 秒）'));
+        });
+        sock.on('error', (e) => reject(new Error('TCP 连接失败: ' + e.message)));
+      });
+    } catch (e) {
+      out.error = e.message || '检测失败';
+    }
+    return out;
+  }
+
   // 编辑实例元信息：备注（note）与连接地址（address，仅面板展示用）
   edit(name, patch = {}) {
     const rec = this.get(name);
@@ -3415,6 +3474,8 @@ class Agent {
         return m.delete(p.name, { backupFirst: !!p.backupFirst });
       case 'instance.edit':
         return m.edit(p.name, { note: p.note, address: p.address });
+      case 'instance.domainCheck':
+        return m.domainCheck(p.name);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.properties.get':
