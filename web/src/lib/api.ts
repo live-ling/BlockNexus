@@ -287,6 +287,10 @@ export interface AppVersion {
   latest: string | null;
   hasUpdate: boolean;
   releaseUrl: string | null;
+  /** 仓库源码地址 */
+  repoUrl: string;
+  /** 最新 Release 的更新日志（Markdown） */
+  changelog: string;
   checkedAt: number;
   /** 命中 10 分钟缓存 */
   cached?: boolean;

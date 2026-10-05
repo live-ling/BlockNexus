@@ -20,6 +20,7 @@ const APP_VERSION = (() => {
 })();
 
 // 最新版本检查：GitHub Releases（缓存 10 分钟；?refresh=1 跳过缓存）
+const REPO_URL = 'https://github.com/live-ling/BlockNexus';
 const LATEST_RELEASE_API = 'https://api.github.com/repos/live-ling/BlockNexus/releases/latest';
 const VERSION_CACHE_MS = 10 * 60e3;
 let versionCache = { at: 0, data: null };
@@ -58,13 +59,14 @@ async function checkLatestRelease(version) {
       latest: tag || null,
       hasUpdate: !!tag && semverGreater(tag, version),
       releaseUrl: j.html_url || null,
+      changelog: String(j.body || ''),
       checkedAt: Date.now(),
     };
     versionCache = { at: Date.now(), data };
     return data;
   } catch (e) {
     if (versionCache.data) return { ...versionCache.data, cached: true, error: e.message || '检查失败' };
-    return { latest: null, hasUpdate: false, releaseUrl: null, checkedAt: Date.now(), error: e.message || '检查失败' };
+    return { latest: null, hasUpdate: false, releaseUrl: null, changelog: '', checkedAt: Date.now(), error: e.message || '检查失败' };
   }
 }
 
@@ -491,7 +493,7 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   // ---------- 版本与更新检查（登录后） ----------
   router.get('/version', async (req, res) => {
     const data = await checkLatestRelease(APP_VERSION);
-    res.json({ version: APP_VERSION, ...data });
+    res.json({ version: APP_VERSION, repoUrl: REPO_URL, ...data });
   });
 
   // ---------- 面板设置（登录后可读写） ----------

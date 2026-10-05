@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Bell, ChevronRight, Globe, Info, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
+import { Markdown } from '@/components/markdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -97,8 +98,8 @@ export function PanelSettingsPage({
         <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
         <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
         <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
-        <VersionCard accent="update" className="col-span-12 md:col-span-6" />
-        <AboutEntryCard accent="info" className="col-span-12 md:col-span-6" />
+        <VersionCard accent="update" className="col-span-12" />
+        <AboutEntryCard accent="info" className="col-span-12" />
       </div>
     </div>
   );
@@ -222,6 +223,17 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
           <span className="text-muted-foreground">最新版本</span>
           <span className="font-mono">{info?.latest ? `v${info.latest}` : '—'}</span>
         </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="shrink-0 text-muted-foreground">源码地址</span>
+          <a
+            href={info?.repoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <span className="truncate">github.com/live-ling/BlockNexus</span>
+          </a>
+        </div>
         {info?.error && (
           <p className="text-xs leading-snug text-muted-foreground">
             检查失败：{info.error}（无网络或 GitHub 访问受限时不影响使用）
@@ -238,6 +250,15 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
           </a>
         )}
       </div>
+      {/* 更新日志：最新 Release 的正文（Markdown 渲染），无内容时不占位 */}
+      {info?.changelog ? (
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <p className="text-xs font-medium text-muted-foreground">更新日志（v{info.latest}）</p>
+          <div className="mt-1.5 max-h-64 overflow-y-auto text-xs">
+            <Markdown content={info.changelog} />
+          </div>
+        </div>
+      ) : null}
       <div className="mt-auto flex items-center justify-end pt-1">
         <Button variant="outline" size="sm" disabled={busy} onClick={() => check(true)}>
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />

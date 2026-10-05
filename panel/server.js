@@ -50,7 +50,12 @@ app.get('/agent.js', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'agent', 'agent.js'));
 });
 // 前端为 Vite + React (shadcn/ui + beUI) 构建产物：web/dist
-app.use(express.static(path.join(__dirname, '..', 'web', 'dist')));
+// index.html 禁缓存：新版本发布后外壳/浏览器立即拿到新入口（带 hash 的 assets 仍长缓存）
+app.use(express.static(path.join(__dirname, '..', 'web', 'dist'), {
+  setHeaders(res, filePath) {
+    if (String(filePath).endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+  },
+}));
 app.use('/api', createApi(config, hub, bus));
 
 // 面板自身也可上 HTTPS（自签或正式证书）；放在反代后面时用不到
