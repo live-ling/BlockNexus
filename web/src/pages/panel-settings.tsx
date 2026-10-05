@@ -1,7 +1,7 @@
 // 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Bell, ChevronRight, Globe, Info, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
+import { ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Globe, Info, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Markdown } from '@/components/markdown';
 import { Button } from '@/components/ui/button';
@@ -177,6 +177,8 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
   const { error: toastError } = useToastHelpers();
   const [info, setInfo] = useState<AppVersion | null>(null);
   const [busy, setBusy] = useState(false);
+  // 更新日志默认折叠，点标题行展开
+  const [logOpen, setLogOpen] = useState(false);
 
   const check = useCallback(
     (refresh: boolean) => {
@@ -250,13 +252,26 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
           </a>
         )}
       </div>
-      {/* 更新日志：最新 Release 的正文（Markdown 渲染），无内容时不占位 */}
+      {/* 更新日志：默认折叠；最新 Release 的正文（Markdown 渲染），无内容时不占位 */}
       {info?.changelog ? (
-        <div className="rounded-lg border bg-muted/30 p-3">
-          <p className="text-xs font-medium text-muted-foreground">更新日志（v{info.latest}）</p>
-          <div className="mt-1.5 max-h-64 overflow-y-auto text-xs">
-            <Markdown content={info.changelog} />
-          </div>
+        <div className="rounded-lg border bg-muted/30">
+          <button
+            type="button"
+            onClick={() => setLogOpen((v) => !v)}
+            className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+          >
+            <span className="text-xs font-medium text-muted-foreground">
+              更新日志（v{info.latest}）
+            </span>
+            <span className="ml-auto text-muted-foreground">
+              {logOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </span>
+          </button>
+          {logOpen && (
+            <div className="max-h-64 overflow-y-auto border-t px-3 py-2.5 text-xs">
+              <Markdown content={info.changelog} />
+            </div>
+          )}
         </div>
       ) : null}
       <div className="mt-auto flex items-center justify-end pt-1">
