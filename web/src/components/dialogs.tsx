@@ -1,7 +1,7 @@
 // 全部弹窗：添加/编辑服务器、Token、手动安装、新建实例、危险操作确认
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { RotateCw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ImagePlus, RotateCw } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { api, errText, fmtMB, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary, type SshCheckResult } from '@/lib/api';
+import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary, type SshCheckResult } from '@/lib/api';
 import { uploadFile, uploadFileViaSftp } from '@/lib/upload';
 import { UploadChannelSelect, type UploadChannel } from '@/components/upload-channel';
 import { useToastHelpers } from '@/lib/toast';
@@ -1019,6 +1019,27 @@ export function EditInstanceDialog({
   const [memory, setMemory] = useState('2048'); // 预设值（MB）或 'custom'
   const [customMem, setCustomMem] = useState('');
   const [busy, setBusy] = useState(false);
+  // server-icon：预览缓存戳 / 404 标记 / 上传中 / 裁切源图
+  const [iconV, setIconV] = useState(0);
+  const [iconMissing, setIconMissing] = useState(false);
+  const [iconBusy, setIconBusy] = useState(false);
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const iconFileRef = useRef<HTMLInputElement>(null);
+
+  const applyIcon = async (b64: string) => {
+    setIconBusy(true);
+    try {
+      await setInstanceIcon(server.id, instance?.name ?? '', b64);
+      setIconMissing(false);
+      setIconV(Date.now());
+      setCropSrc(null);
+      success('服务器图标已更新', '游戏内服务器列表重启后生效');
+    } catch (e) {
+      error('图标上传失败', errText(e));
+    } finally {
+      setIconBusy(false);
+    }
+  };
 
   // 按服务器物理内存推荐：取一半，向下取 512 的倍数，上限 8GB（为系统与 Agent 留余量）
   const memTotalMB = server.info?.memTotalMB ?? null;
@@ -1058,6 +1079,49 @@ export function EditInstanceDialog({
           <DialogDescription>备注与连接地址只影响面板展示，不改变服务端配置。</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
+          <div className="flex items-center gap-3">
+            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border bg-muted/40">
+              {!iconMissing ? (
+                <img
+                  src={instanceIconUrl(server.id, instance.name) + '?v=' + iconV}
+                  alt="server-icon"
+                  className="h-full w-full object-cover"
+                  onError={() => setIconMissing(true)}
+                />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-muted-foreground">
+                  <ImagePlus className="h-5 w-5" />
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium">服务器图标</p>
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                本地裁切并自动压缩到 64×64 PNG；游戏内服务器列表重启后生效。
+              </p>
+              <input
+                ref={iconFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setCropSrc(URL.createObjectURL(f));
+                  e.target.value = '';
+                }}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-1"
+                disabled={iconBusy}
+                onClick={() => iconFileRef.current?.click()}
+              >
+                <ImagePlus className="h-3.5 w-3.5" />
+                {iconBusy ? '上传中…' : '更换图标'}
+              </Button>
+            </div>
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="ei-note">备注</Label>
             <Textarea
@@ -1143,6 +1207,149 @@ export function EditInstanceDialog({
             }}
           >
             保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      {cropSrc && (
+        <IconCropDialog src={cropSrc} onConfirm={(b64) => void applyIcon(b64)} onClose={() => setCropSrc(null)} />
+      )}
+    </Dialog>
+  );
+}
+
+/** server-icon 手动裁切：拖动定位 + 滚轮/滑杆缩放，确认输出 64×64 PNG base64 */
+function IconCropDialog({
+  src,
+  onConfirm,
+  onClose,
+}: {
+  src: string;
+  onConfirm: (b64: string) => void;
+  onClose: () => void;
+}) {
+  const VIEW = 240; // 预览框边长（裁切结果 64×64 即该区域缩 1/3）
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [ready, setReady] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      imgRef.current = img;
+      setZoom(1);
+      setOff({ x: 0, y: 0 });
+      setReady(true);
+    };
+    img.src = src;
+    return () => {
+      imgRef.current = null;
+      setReady(false);
+    };
+  }, [src]);
+
+  // 显示尺寸：cover 铺满预览框再乘缩放；拖动偏移限制在「图始终盖住框」的范围内
+  const dims = () => {
+    const img = imgRef.current;
+    const s = Math.max(VIEW / (img?.width ?? 1), VIEW / (img?.height ?? 1)) * zoom;
+    return { w: (img?.width ?? 0) * s, h: (img?.height ?? 0) * s };
+  };
+  const { w, h } = dims();
+  const clamp = (x: number, y: number) => {
+    const mx = Math.max(0, (w - VIEW) / 2);
+    const my = Math.max(0, (h - VIEW) / 2);
+    return { x: Math.max(-mx, Math.min(mx, x)), y: Math.max(-my, Math.min(my, y)) };
+  };
+  const shown = clamp(off.x, off.y);
+
+  const confirm = () => {
+    const img = imgRef.current;
+    if (!img) return;
+    const k = 64 / VIEW;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(
+      img,
+      ((VIEW - w) / 2 + shown.x) * k,
+      ((VIEW - h) / 2 + shown.y) * k,
+      w * k,
+      h * k,
+    );
+    const url = canvas.toDataURL('image/png');
+    onConfirm(url.slice(url.indexOf(',') + 1));
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>裁切服务器图标</DialogTitle>
+          <DialogDescription>拖动选择区域，滚轮或滑杆缩放；输出为 64×64 PNG。</DialogDescription>
+        </DialogHeader>
+        <div
+          className="relative mx-auto aspect-square w-[240px] cursor-move touch-none overflow-hidden rounded-lg border bg-muted/40"
+          onPointerDown={(e) => {
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            drag.current = { px: e.clientX, py: e.clientY, ox: shown.x, oy: shown.y };
+          }}
+          onPointerMove={(e) => {
+            if (!drag.current) return;
+            setOff(clamp(drag.current.ox + (e.clientX - drag.current.px), drag.current.oy + (e.clientY - drag.current.py)));
+          }}
+          onPointerUp={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+          onWheel={(e) => {
+            e.preventDefault();
+            setZoom((z) => Math.min(6, Math.max(1, z * (e.deltaY < 0 ? 1.15 : 0.87))));
+          }}
+        >
+          {ready && (
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              className="pointer-events-none absolute select-none"
+              style={{
+                width: w,
+                height: h,
+                left: '50%',
+                top: '50%',
+                transform: `translate(calc(-50% + ${shown.x}px), calc(-50% + ${shown.y}px))`,
+              }}
+            />
+          )}
+          <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3">
+            {Array.from({ length: 9 }).map((_, i) => (
+              <span key={i} className="border border-white/30" />
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-xs text-muted-foreground">缩放</span>
+          <input
+            type="range"
+            min={1}
+            max={6}
+            step={0.05}
+            value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
+            className="flex-1"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            取消
+          </Button>
+          <Button disabled={!ready} onClick={confirm}>
+            确认并上传
           </Button>
         </DialogFooter>
       </DialogContent>

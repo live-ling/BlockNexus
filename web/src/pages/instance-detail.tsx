@@ -2,7 +2,7 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, ImagePlus, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
@@ -39,9 +39,7 @@ import {
   errText,
   fmtMB,
   fmtUptime,
-  instanceIconUrl,
   latencyTone,
-  setInstanceIcon,
   type Instance,
   type PlayersSnapshot,
   type ServerSummary,
@@ -81,11 +79,6 @@ export function InstanceDetailPage({
     { state: 'checking' | 'done'; result?: DomainCheckResult } | null
   >(null);
   const [bansOpen, setBansOpen] = useState(false);
-  // server-icon：上传（前端压缩 64x64）与缓存戳
-  const [iconV, setIconV] = useState(0);
-  const [iconMissing, setIconMissing] = useState(false);
-  const [iconBusy, setIconBusy] = useState(false);
-  const iconRef = useRef<HTMLInputElement>(null);
   // 主区视图：终端 / AI 日志分析
   const [mainView, setMainView] = useState<'console' | 'ai'>('console');
   const [, forceTick] = useState(0);
@@ -203,33 +196,6 @@ export function InstanceDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instance?.address, running]);
 
-  /** server-icon：居中裁剪压缩到 64x64 PNG，返回 base64 */
-  const onIconPick = async (files: FileList | null) => {
-    const f = files && files[0];
-    if (!f) return;
-    setIconBusy(true);
-    try {
-      const bitmap = await createImageBitmap(f);
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 64;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Canvas 不可用');
-      const side = Math.min(bitmap.width, bitmap.height);
-      ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 64, 64);
-      const url = canvas.toDataURL('image/png');
-      await setInstanceIcon(serverId, instanceName, url.slice(url.indexOf(',') + 1));
-      setIconMissing(false);
-      setIconV(Date.now());
-      success('服务器图标已更新', '游戏内服务器列表重启后生效');
-    } catch (e) {
-      error('图标上传失败', errText(e));
-    } finally {
-      setIconBusy(false);
-      if (iconRef.current) iconRef.current.value = '';
-    }
-  };
-
   /** 复制到剪贴板（域名等玩家要用的地址） */
   const handleCopy = async (text: string) => {
     const ok = await copyText(text);
@@ -325,52 +291,8 @@ export function InstanceDetailPage({
         }`}
       >
         <aside className="grid content-start gap-3 self-start">
-          {/* 实例信息：server-icon + 备注/连接地址可点开就地修改 */}
+          {/* 实例信息：备注/连接地址可点开就地修改（server-icon 在「编辑」里设置） */}
           <div className="grid content-start gap-2 rounded-xl border bg-card p-3.5">
-            <div className="mb-1 flex items-center gap-3">
-              <button
-                type="button"
-                className="group/icon relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border bg-muted/40"
-                onClick={() => iconRef.current?.click()}
-                disabled={iconBusy}
-                title="上传服务器图标（自动压缩到 64×64）"
-              >
-                {!iconMissing ? (
-                  <img
-                    src={instanceIconUrl(server.id, instance.name) + '?v=' + iconV}
-                    alt="server-icon"
-                    className="h-full w-full object-cover"
-                    onError={() => setIconMissing(true)}
-                  />
-                ) : (
-                  <span className="grid h-full w-full place-items-center text-muted-foreground">
-                    <ImagePlus className="h-5 w-5" />
-                  </span>
-                )}
-                {iconBusy && (
-                  <span className="absolute inset-0 grid place-items-center bg-background/70 text-[10px]">
-                    上传中…
-                  </span>
-                )}
-              </button>
-              <input
-                ref={iconRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  void onIconPick(e.target.files);
-                }}
-              />
-              <div className="min-w-0">
-                <p className="text-xs font-medium">服务器图标</p>
-                <p className="text-[11px] leading-snug text-muted-foreground">
-                  64×64 PNG，上传自动压缩
-                  <br />
-                  游戏内服务器列表重启后生效
-                </p>
-              </div>
-            </div>
             <InfoRow label={fmtLabel('备注')} value={instance.note || '未设置'} />
             <InfoRow label={fmtLabel('版本')} value={instance.version} />
             <InfoRow label={fmtLabel('内存')} value={fmtMB(instance.memoryMB)} />
@@ -387,34 +309,42 @@ export function InstanceDetailPage({
               onCopy={handleCopy}
             />
             {instance.address ? (
-              <div className="flex min-w-0 items-center justify-between gap-2 px-1">
-                {domainCheck?.state === 'checking' ? (
-                  <span className="text-[11px] text-muted-foreground">域名连通检测中…</span>
+              <div className="flex min-w-0 items-start justify-between gap-2 px-1">
+                {!running ? (
+                  <span className="text-[11px] leading-snug text-muted-foreground">
+                    实例未启动，暂不检测域名连通
+                  </span>
+                ) : domainCheck?.state === 'checking' ? (
+                  <span className="text-[11px] leading-snug text-muted-foreground">
+                    域名连通检测中…
+                  </span>
                 ) : domainCheck?.result ? (
                   domainCheck.result.error ? (
-                    <span className="min-w-0 truncate text-[11px] text-destructive" title={domainCheck.result.error}>
+                    <span className="min-w-0 break-words text-[11px] leading-snug text-destructive" title={domainCheck.result.error}>
                       ✗ {domainCheck.result.error}
                     </span>
                   ) : (
-                    <span className="min-w-0 truncate text-[11px] text-emerald-600 dark:text-emerald-400" title={`${domainCheck.result.ip}:${domainCheck.result.port}`}>
+                    <span className="min-w-0 break-words text-[11px] leading-snug text-emerald-600 dark:text-emerald-400" title={`${domainCheck.result.ip}:${domainCheck.result.port}`}>
                       ✓ {domainCheck.result.ip}:{domainCheck.result.port} · TCP {domainCheck.result.latencyMs}ms
                       {domainCheck.result.srv ? ' · SRV' : ''}
                     </span>
                   )
                 ) : (
-                  <span className="text-[11px] text-muted-foreground">未检测</span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">未检测</span>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-                  disabled={domainCheck?.state === 'checking'}
-                  onClick={runDomainCheck}
-                  aria-label="重新检测域名连通性"
-                  title="检测域名连通性"
-                >
-                  <Globe className="h-3.5 w-3.5" />
-                </Button>
+                {running && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    disabled={domainCheck?.state === 'checking'}
+                    onClick={runDomainCheck}
+                    aria-label="重新检测域名连通性"
+                    title="检测域名连通性"
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
             ) : null}
             <InfoRow label={fmtLabel('正版验证')} value={instance.onlineMode ? '开启' : '关闭（离线）'} />
@@ -507,7 +437,7 @@ export function InstanceDetailPage({
               <Button
                 size="lg"
                 variant="outline"
-                className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="col-span-2 border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => setDeleteOpen(true)}
               >
                 <Trash2 className="h-4 w-4" /> 删除实例
