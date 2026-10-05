@@ -2,12 +2,13 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, ImagePlus, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
 import { ConfirmDialog, EditInstanceDialog, ReinstallDialog } from '@/components/dialogs';
 import { FileManagerDialog } from '@/components/file-manager';
+import { BanListDialog } from '@/components/ban-list-dialog';
 import { ModManagerDialog } from '@/components/mod-manager';
 import { AutoRestartDialog } from '@/components/auto-restart-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
@@ -38,7 +39,9 @@ import {
   errText,
   fmtMB,
   fmtUptime,
+  instanceIconUrl,
   latencyTone,
+  setInstanceIcon,
   type Instance,
   type PlayersSnapshot,
   type ServerSummary,
@@ -77,6 +80,12 @@ export function InstanceDetailPage({
   const [domainCheck, setDomainCheck] = useState<
     { state: 'checking' | 'done'; result?: DomainCheckResult } | null
   >(null);
+  const [bansOpen, setBansOpen] = useState(false);
+  // server-icon：上传（前端压缩 64x64）与缓存戳
+  const [iconV, setIconV] = useState(0);
+  const [iconMissing, setIconMissing] = useState(false);
+  const [iconBusy, setIconBusy] = useState(false);
+  const iconRef = useRef<HTMLInputElement>(null);
   // 主区视图：终端 / AI 日志分析
   const [mainView, setMainView] = useState<'console' | 'ai'>('console');
   const [, forceTick] = useState(0);
@@ -194,6 +203,33 @@ export function InstanceDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instance?.address, running]);
 
+  /** server-icon：居中裁剪压缩到 64x64 PNG，返回 base64 */
+  const onIconPick = async (files: FileList | null) => {
+    const f = files && files[0];
+    if (!f) return;
+    setIconBusy(true);
+    try {
+      const bitmap = await createImageBitmap(f);
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 不可用');
+      const side = Math.min(bitmap.width, bitmap.height);
+      ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 64, 64);
+      const url = canvas.toDataURL('image/png');
+      await setInstanceIcon(serverId, instanceName, url.slice(url.indexOf(',') + 1));
+      setIconMissing(false);
+      setIconV(Date.now());
+      success('服务器图标已更新', '游戏内服务器列表重启后生效');
+    } catch (e) {
+      error('图标上传失败', errText(e));
+    } finally {
+      setIconBusy(false);
+      if (iconRef.current) iconRef.current.value = '';
+    }
+  };
+
   /** 复制到剪贴板（域名等玩家要用的地址） */
   const handleCopy = async (text: string) => {
     const ok = await copyText(text);
@@ -289,8 +325,52 @@ export function InstanceDetailPage({
         }`}
       >
         <aside className="grid content-start gap-3 self-start">
-          {/* 实例信息：备注/连接地址可点开就地修改 */}
+          {/* 实例信息：server-icon + 备注/连接地址可点开就地修改 */}
           <div className="grid content-start gap-2 rounded-xl border bg-card p-3.5">
+            <div className="mb-1 flex items-center gap-3">
+              <button
+                type="button"
+                className="group/icon relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border bg-muted/40"
+                onClick={() => iconRef.current?.click()}
+                disabled={iconBusy}
+                title="上传服务器图标（自动压缩到 64×64）"
+              >
+                {!iconMissing ? (
+                  <img
+                    src={instanceIconUrl(server.id, instance.name) + '?v=' + iconV}
+                    alt="server-icon"
+                    className="h-full w-full object-cover"
+                    onError={() => setIconMissing(true)}
+                  />
+                ) : (
+                  <span className="grid h-full w-full place-items-center text-muted-foreground">
+                    <ImagePlus className="h-5 w-5" />
+                  </span>
+                )}
+                {iconBusy && (
+                  <span className="absolute inset-0 grid place-items-center bg-background/70 text-[10px]">
+                    上传中…
+                  </span>
+                )}
+              </button>
+              <input
+                ref={iconRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  void onIconPick(e.target.files);
+                }}
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-medium">服务器图标</p>
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  64×64 PNG，上传自动压缩
+                  <br />
+                  游戏内服务器列表重启后生效
+                </p>
+              </div>
+            </div>
             <InfoRow label={fmtLabel('备注')} value={instance.note || '未设置'} />
             <InfoRow label={fmtLabel('版本')} value={instance.version} />
             <InfoRow label={fmtLabel('内存')} value={fmtMB(instance.memoryMB)} />
@@ -540,6 +620,16 @@ export function InstanceDetailPage({
                 </p>
               )}
             </div>
+            <div className="mt-2 border-t pt-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full text-muted-foreground hover:text-foreground"
+                onClick={() => setBansOpen(true)}
+              >
+                <Ban className="h-3.5 w-3.5" /> 封禁目录
+              </Button>
+            </div>
           </aside>
         )}
       </div>
@@ -630,6 +720,14 @@ export function InstanceDetailPage({
           target={playerAction}
           onClose={() => setPlayerAction(null)}
           onConfirm={sendPlayerCmd}
+        />
+      )}
+      {server && (
+        <BanListDialog
+          serverId={server.id}
+          instance={instance.name}
+          open={bansOpen}
+          onOpenChange={setBansOpen}
         />
       )}
     </div>

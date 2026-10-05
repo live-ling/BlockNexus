@@ -1255,6 +1255,76 @@ class InstanceManager {
     return out;
   }
 
+  // ---------- 封禁目录：banned-players.json / banned-ips.json 的查看与解封 ----------
+  // 运行中走控制台 pardon 命令（服务器内存里的封禁表才是真相源）；停止时直接改 JSON 文件
+  banList(name) {
+    const rec = this.get(name);
+    const dir = this.instDir(name);
+    const readJson = (file) => {
+      const p = path.join(dir, file);
+      if (!fs.existsSync(p)) return [];
+      try {
+        const arr = JSON.parse(fs.readFileSync(p, 'utf8'));
+        return Array.isArray(arr) ? arr : [];
+      } catch {
+        return [];
+      }
+    };
+    const st = this.statusOf(rec);
+    return {
+      players: readJson('banned-players.json'),
+      ips: readJson('banned-ips.json'),
+      running: st === 'running' || st === 'starting',
+    };
+  }
+
+  banUnban(name, kind, target) {
+    const rec = this.get(name);
+    const t = String(target || '').trim();
+    if (!t) throw new Error('缺少解封目标');
+    const st = this.statusOf(rec);
+    if (st === 'running' || st === 'starting') {
+      const cmd = kind === 'ip' ? `pardon-ip ${t}` : `pardon ${t}`;
+      this.command(name, cmd);
+      return { ok: true, via: 'console' };
+    }
+    // 停止状态：服务器不在运行，直接从 JSON 里移除该条目
+    const file = kind === 'ip' ? 'banned-ips.json' : 'banned-players.json';
+    const p = path.join(this.instDir(name), file);
+    if (!fs.existsSync(p)) return { ok: true, via: 'file' };
+    let arr;
+    try {
+      arr = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (!Array.isArray(arr)) arr = [];
+    } catch {
+      throw new Error(file + ' 不是合法 JSON，请用文件管理器检查');
+    }
+    const filtered = arr.filter((e) => e && (kind === 'ip' ? e.ip : e.name) !== t);
+    fs.writeFileSync(p, JSON.stringify(filtered, null, 2));
+    return { ok: true, via: 'file' };
+  }
+
+  // ---------- server-icon：64x64 PNG（前端压缩后以 base64 上传） ----------
+  iconPath(name) {
+    return path.join(this.instDir(name), 'server-icon.png');
+  }
+
+  iconGet(name) {
+    const p = this.iconPath(name);
+    if (!fs.existsSync(p)) return { ok: false };
+    return { ok: true, b64: fs.readFileSync(p).toString('base64') };
+  }
+
+  iconSet(name, b64) {
+    const buf = Buffer.from(String(b64 || ''), 'base64');
+    if (!buf.length || buf.length > 200 * 1024) throw new Error('图片数据无效（64x64 PNG 应远小于 200KB）');
+    if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) {
+      throw new Error('仅支持 PNG 格式');
+    }
+    fs.writeFileSync(this.iconPath(name), buf);
+    return { ok: true };
+  }
+
   // 域名连通检测：解析实例「域名」并 TCP 探测实例端口。
   // 先查 Minecraft SRV 记录（_minecraft._tcp.<域名>，命中则用 SRV 的目标与端口），
   // 无 SRV 回退 A 记录 + meta 端口；探测对象是解析出的 IP，玩家视角的连通性。
@@ -3558,6 +3628,14 @@ class Agent {
         return m.modsToggle(p.name, p.file, p.disable);
       case 'instance.modsDelete':
         return m.modsDelete(p.name, p.file);
+      case 'instance.banList':
+        return m.banList(p.name);
+      case 'instance.banUnban':
+        return m.banUnban(p.name, p.kind, p.target);
+      case 'instance.iconGet':
+        return m.iconGet(p.name);
+      case 'instance.iconSet':
+        return m.iconSet(p.name, p.b64);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.properties.get':

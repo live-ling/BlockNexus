@@ -1770,6 +1770,57 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     });
   }
 
+  // ---------- 封禁目录：查看与解封（运行中走 pardon 命令，停止时改 JSON） ----------
+  router.get('/servers/:id/instances/:name/banlist', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'instance.banList', { name: req.params.name }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/servers/:id/instances/:name/banlist/unban', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(
+        await agent(server)('instance.banUnban', { name: req.params.name, ...(req.body || {}) }, 15000),
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ---------- server-icon：读取（PNG 二进制）/ 设置（前端压缩到 64x64 的 base64） ----------
+  router.get('/servers/:id/instances/:name/icon', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      const r = await agentRead(server, 'instance.iconGet', { name: req.params.name });
+      if (!r || !r.ok || !r.b64) return res.status(404).end();
+      res.setHeader('Content-Type', 'image/png');
+      // 图标基本不变，允许浏览器/外壳短缓存
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.end(Buffer.from(r.b64, 'base64'));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/servers/:id/instances/:name/icon', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(
+        await agent(server)('instance.iconSet', { name: req.params.name, b64: String((req.body || {}).b64 || '') }, 15000),
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // 域名连通检测：Agent 侧解析（含 _minecraft._tcp SRV）+ TCP 探测实例端口
   router.get('/servers/:id/instances/:name/domain-check', async (req, res, next) => {
     const server = requireServer(req, res);

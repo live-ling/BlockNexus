@@ -355,6 +355,54 @@ export function deleteMod(serverId: string, instance: string, file: string): Pro
   });
 }
 
+// ---------- 封禁目录（banned-players / banned-ips） ----------
+
+export interface BanEntry {
+  name?: string;
+  ip?: string;
+  uuid?: string;
+  created?: string;
+  source?: string;
+  expires?: string;
+  reason?: string;
+}
+
+export interface BanList {
+  players: BanEntry[];
+  ips: BanEntry[];
+  /** 实例运行中（解封走 pardon 命令）；否则直接改 JSON */
+  running: boolean;
+}
+
+export function getBanList(serverId: string, instance: string): Promise<BanList> {
+  return api<BanList>(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/banlist`);
+}
+
+export function unbanTarget(
+  serverId: string,
+  instance: string,
+  kind: 'player' | 'ip',
+  target: string,
+): Promise<{ ok: boolean; via: string }> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/banlist/unban`, {
+    method: 'POST',
+    body: { kind, target },
+  });
+}
+
+// ---------- server-icon（64x64 PNG，前端压缩） ----------
+
+export function instanceIconUrl(serverId: string, instance: string): string {
+  return `/api/servers/${serverId}/instances/${encodeURIComponent(instance)}/icon`;
+}
+
+export function setInstanceIcon(serverId: string, instance: string, b64: string): Promise<{ ok: boolean }> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/icon`, {
+    method: 'POST',
+    body: { b64 },
+  });
+}
+
 /** AI 分析：POST + SSE 流（fetch + reader，因为 EventSource 不支持 POST） */
 export interface AiStreamHandlers {
   onMeta?: (meta: { lines: number; status: string; model: string; truncated?: boolean }) => void;
