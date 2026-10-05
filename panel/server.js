@@ -1,6 +1,6 @@
 'use strict';
 // BlockNexus 面板入口：node panel/server.js → http://127.0.0.1:3080
-// 本地 Node 运行时内嵌 HTTP 服务器，浏览器打开即用，无需单独安装前端。
+// 架构参考 DeepSeek Harness：本地 Node 运行时内嵌 HTTP 服务器，浏览器打开即用。
 
 const express = require('express');
 const http = require('http');
@@ -44,6 +44,11 @@ if (process.env.BLOCKNEXUS_PASSWORD) {
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
+// agent.js 匿名下载（手动安装用，文件不含密钥）：根路径方便 curl，
+// README 与前端手动安装命令都指向这里；api.js 里的 /api/agent.js 保留兼容
+app.get('/agent.js', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'agent', 'agent.js'));
+});
 // 前端为 Vite + React (shadcn/ui + beUI) 构建产物：web/dist
 app.use(express.static(path.join(__dirname, '..', 'web', 'dist')));
 app.use('/api', createApi(config, hub, bus));

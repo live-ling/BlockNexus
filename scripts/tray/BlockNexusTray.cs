@@ -104,6 +104,22 @@ namespace BlockNexus
                     "BlockNexus", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
+
+            // 项目根校验：外壳只是桌面窗口，后端面板要靠项目文件拉起。
+            // 缺失时明确告知怎么部署，而不是打开一个必然“拒绝连接”的空白页。
+            if (!File.Exists(Path.Combine(_root, "panel", "server.js")) ||
+                !File.Exists(Path.Combine(_root, "scripts", "blocknexus-launcher.js")))
+            {
+                MessageBox.Show(
+                    "BlockNexus 外壳没有找到项目文件（panel/server.js）。\n\n" +
+                    "外壳只是桌面窗口，后端面板需要项目文件才能启动：\n" +
+                    "· 使用 BlockNexus-portable 整合包：整体解压到任意目录后直接运行（推荐）；\n" +
+                    "· 或把外壳解压到项目根目录（含 panel/、scripts/、web/dist 的目录）；\n" +
+                    "· 或在本目录放 root.txt（内容为项目根路径），或设置环境变量 BLOCKNEXUS_ROOT。",
+                    "BlockNexus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return 1;
+            }
+
             EnsureDataDir();
             _panelUrl = ReadPanelUrl();
 

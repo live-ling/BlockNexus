@@ -25,6 +25,8 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONFIG_FILE = path.join(ROOT, 'data', 'config.json');
+// 首次运行（便携包/全新目录）data/ 还不存在：写日志与 agent runtime.json 前先建好
+fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
 const DRY_RUN = process.argv.includes('--dry-run');
 const STOP = process.argv.includes('--stop');
 const CLOSE_WINDOW = process.argv.includes('--close-window');

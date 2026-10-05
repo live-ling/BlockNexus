@@ -25,3 +25,6 @@ web/dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# 构建脚本同步外壳时写入的本机路径（build-exe.ps1）
+/root.txt
