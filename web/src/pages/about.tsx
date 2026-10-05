@@ -119,9 +119,8 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                     v{me?.version ?? '…'}
                   </span>
                 </div>
-                <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                  在网页上创建和管理 Minecraft 服务器:实时控制台、玩家管理、文件与配置编辑、
-                  备份恢复、定时重启与崩溃自动拉起,多台服务器集中在一个面板。
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                  一站式 Minecraft 服务器管理平台，帮助你轻松创建和管理多个服务器实例。从启动、停止、重启到实时控制台与指令执行，从在线玩家踢出、封禁、管理员设置，到配置文件编辑、存档上传、备份恢复，全部集中完成。支持自动重启与定时重启、多服务器集中管理、各版本/各核心服务端自动下载，并在服务器离线时通过邮件通知你。内置 AI 日志分析，帮你快速定位异常与崩溃原因。无论个人开服还是多服运营，都能显著降低运维成本。
                 </p>
               </div>
             </div>
