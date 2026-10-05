@@ -25,6 +25,16 @@ export type SseEvent =
       done?: boolean;
       ok?: boolean;
       error?: string;
+    }
+  | {
+      /** Agent 自动更新进度（远端版本落后时面板自动执行） */
+      type: 'agent-update';
+      serverId: string;
+      state: 'updating' | 'failed' | 'done';
+      remote?: string;
+      bundled?: string;
+      log?: string;
+      error?: string;
     };
 
 /** 带 serverId 的事件（排除 hello 心跳） */

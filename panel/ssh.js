@@ -310,6 +310,32 @@ RestartSec=5
 WantedBy=multi-user.target
 `;
 
+// Agent 脚本热更新：仅替换 agent.js 并重启 systemd 服务——不动 token/TLS/单元文件/Java。
+// 面板检测到远端 Agent 版本落后（hi 上报的 agentVersion ≠ 随附版本）时自动调用。
+async function updateAgentScript(server, log) {
+  const agentFile = path.join(__dirname, '..', 'agent', 'agent.js');
+  if (!fs.existsSync(agentFile)) throw new Error('找不到 agent/agent.js');
+  const dir = server.agent.installDir || '/opt/blocknexus-agent';
+
+  log(`连接 ${server.ssh.user}@${server.host}:${server.ssh.port} …\n`);
+  const conn = await sshConnect(server);
+  try {
+    const sudo = await ensureSudo(conn, log);
+    log('上传新 agent.js …\n');
+    const sftp = await new Promise((resolve, reject) => conn.sftp((e, s) => (e ? reject(e) : resolve(s))));
+    // 先落 .new 再原子改名：避免传一半被 systemd 拉起的进程读到半截脚本
+    await sftpPut(sftp, agentFile, `${dir}/agent.js.new`);
+    await runChecked(
+      conn,
+      `${sudo}sh -c 'mv ${dir}/agent.js.new ${dir}/agent.js && systemctl restart blocknexus-agent'`,
+      log,
+    );
+    log('已重启 blocknexus-agent，等待 Agent 以新版本回连 …\n');
+  } finally {
+    try { conn.end(); } catch {}
+  }
+}
+
 // 安装/重装 agent。log(text) 用于向前端推送进度。
 async function installAgent(server, log) {
   const agentFile = path.join(__dirname, '..', 'agent', 'agent.js');
@@ -446,4 +472,4 @@ async function uninstallAgent(server, log) {
   }
 }
 
-module.exports = { installAgent, uninstallAgent, checkSsh, suggestPanelUrl, sftpUploadStream };
+module.exports = { installAgent, updateAgentScript, uninstallAgent, checkSsh, suggestPanelUrl, sftpUploadStream };

@@ -19,6 +19,8 @@ const { spawn, spawnSync, execFile } = require('child_process');
 const { EventEmitter } = require('events');
 
 const VERSION = 'BlockNexus/0.1.0';
+// Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
+const AGENT_VERSION = '0.2.0';
 let INSECURE_TLS = false; // 由配置载入后置位（见 loadConfig）
 const FRAME_VERSION = 0x01;
 const MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
@@ -1310,6 +1312,79 @@ class InstanceManager {
       out.error = e.message || '检测失败';
     }
     return out;
+  }
+
+  // ---------- Mod 管理：实例 mods 目录的列表 / 启停（.disabled 后缀约定）/ 删除 ----------
+  // 全部路径锁定在 instances/<name>/mods 内；禁用 = 改名加 .disabled（Forge/Fabric 通用约定）
+  modsDir(name) {
+    return path.join(this.instDir(name), 'mods');
+  }
+
+  modsList(name) {
+    const rec = this.get(name);
+    const dir = this.modsDir(name);
+    const out = [];
+    let exists = true;
+    try {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!ent.isFile()) continue;
+        let file = ent.name;
+        let disabled = false;
+        if (file.toLowerCase().endsWith('.disabled')) {
+          disabled = true;
+          file = ent.name.slice(0, -'.disabled'.length);
+        }
+        if (!/\.jar$/i.test(file)) continue;
+        let size = 0;
+        let mtime = 0;
+        try {
+          const st = fs.statSync(path.join(dir, ent.name));
+          size = st.size;
+          mtime = st.mtimeMs;
+        } catch {}
+        out.push({ name: file, file: ent.name, disabled, size, mtime });
+      }
+    } catch (e) {
+      if (e.code === 'ENOENT') exists = false;
+      else throw e;
+    }
+    out.sort((a, b) => a.disabled - b.disabled || a.name.localeCompare(b.name));
+    return { exists, dir, mods: out };
+  }
+
+  modsToggle(name, file, disable) {
+    const dir = path.resolve(this.modsDir(name));
+    const base = String(file || '');
+    if (!base || base.includes('/') || base.includes('\\') || base.includes('..')) {
+      throw new Error('非法文件名');
+    }
+    const from = path.resolve(dir, base);
+    if (!from.startsWith(dir + path.sep)) throw new Error('路径越界');
+    if (!fs.existsSync(from)) throw new Error('文件不存在');
+    let to;
+    if (disable) {
+      if (!/\.jar$/i.test(base)) throw new Error('仅 .jar 文件可禁用');
+      to = from + '.disabled';
+    } else {
+      if (!/\.disabled$/i.test(base)) throw new Error('该文件未处于禁用状态');
+      to = from.replace(/\.disabled$/i, '');
+    }
+    if (fs.existsSync(to)) throw new Error('目标文件已存在: ' + path.basename(to));
+    fs.renameSync(from, to);
+    return { ok: true, file: path.basename(to), disabled: !!disable };
+  }
+
+  modsDelete(name, file) {
+    const dir = path.resolve(this.modsDir(name));
+    const base = String(file || '');
+    if (!base || base.includes('/') || base.includes('\\') || base.includes('..')) {
+      throw new Error('非法文件名');
+    }
+    const target = path.resolve(dir, base);
+    if (!target.startsWith(dir + path.sep)) throw new Error('路径越界');
+    if (!fs.existsSync(target)) throw new Error('文件不存在');
+    fs.rmSync(target, { force: true });
+    return { ok: true };
   }
 
   // 编辑实例元信息：备注（note）与连接地址（address，仅面板展示用）
@@ -3427,6 +3502,7 @@ class Agent {
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
+      agentVersion: AGENT_VERSION,
       memTotalMB: Math.round(os.totalmem() / 1048576),
       dir: this.conf.dir,
       instancesDir: this.manager.dir,
@@ -3476,6 +3552,12 @@ class Agent {
         return m.edit(p.name, { note: p.note, address: p.address });
       case 'instance.domainCheck':
         return m.domainCheck(p.name);
+      case 'instance.modsList':
+        return m.modsList(p.name);
+      case 'instance.modsToggle':
+        return m.modsToggle(p.name, p.file, p.disable);
+      case 'instance.modsDelete':
+        return m.modsDelete(p.name, p.file);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.properties.get':

@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const { installAgent, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
+const { installAgent, updateAgentScript, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
 const localAgent = require('./localagent');
 const mailTpl = require('./mail');
 
@@ -17,6 +17,16 @@ const SESSION_TTL = 7 * 24 * 3600 * 1000;
 // 面板版本：读 package.json（/api/me、/api/version 共用）
 const APP_VERSION = (() => {
   try { return require('../package.json').version || '0.0.0'; } catch { return '0.0.0'; }
+})();
+
+// 面板随附的 Agent 脚本版本：从 agent/agent.js 头部提取 AGENT_VERSION 常量，
+// 与远端 hi 上报的 info.agentVersion 比对，不一致即自动更新
+const BUNDLED_AGENT_VERSION = (() => {
+  try {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'agent', 'agent.js'), 'utf8');
+    const m = src.match(/AGENT_VERSION\s*=\s*'([^']+)'/);
+    return m ? m[1] : '';
+  } catch { return ''; }
 })();
 
 // 最新版本检查：GitHub Releases（缓存 10 分钟；?refresh=1 跳过缓存）
@@ -226,6 +236,62 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       }
     }
   }
+
+  // ---------- Agent 版本一致性：远端落后自动更新 ----------
+  // hi 上报 info.agentVersion ≠ 随附版本时：SSH 服务器走 updateAgentScript（换脚本+重启 systemd），
+  // 本机 Agent 走 localagent 重装（跑的就是随附脚本，重启即新版）。
+  // 失败退避：同一台连续失败 3 次或 10 分钟内刚试过就不再自动重试，转手动按钮。
+  const agentUpdateState = new Map(); // serverId -> { state: 'updating'|'failed'|'done', error?, at }
+  const agentUpdateTries = new Map(); // serverId -> 连续失败次数
+
+  async function syncAgentVersion(serverId, info) {
+    const server = config.getServer(serverId);
+    if (!server || !BUNDLED_AGENT_VERSION) return;
+    const remote = info && info.agentVersion ? String(info.agentVersion) : '';
+    if (remote === BUNDLED_AGENT_VERSION) {
+      agentUpdateState.delete(serverId);
+      agentUpdateTries.delete(serverId);
+      return;
+    }
+    const st = agentUpdateState.get(serverId);
+    if (st && st.state === 'updating') return;
+    // 刚试过（无论成败）先静默 10 分钟，防止「成功但没换掉」的死循环与失败风暴
+    if (st && Date.now() - st.at < 10 * 60e3) return;
+    const fails = agentUpdateTries.get(serverId) || 0;
+    if (fails >= 3) return;
+    agentUpdateState.set(serverId, { state: 'updating', at: Date.now() });
+    const emit = (extra) =>
+      bus.emit('broadcast', { type: 'agent-update', serverId, remote, bundled: BUNDLED_AGENT_VERSION, ...extra });
+    emit({ state: 'updating' });
+    const log = (line) => emit({ state: 'updating', log: String(line) });
+    try {
+      if (localAgent.isLocalHost(server.host)) {
+        await localAgent.stopAgent(server, () => {});
+        await localAgent.installAgent(server, log);
+      } else {
+        const sshOk =
+          server.ssh && (server.ssh.auth === 'key' ? !!(server.ssh.key || server.ssh.keyPath) : !!server.ssh.password);
+        if (!sshOk) {
+          throw new Error('未保存可用的 SSH 凭据，无法自动更新；请在服务器设置页补全凭据或手动重装 Agent');
+        }
+        await updateAgentScript(server, log);
+      }
+      agentUpdateTries.delete(serverId);
+      agentUpdateState.set(serverId, { state: 'done', at: Date.now() });
+      emit({ state: 'done' });
+    } catch (e) {
+      const error = e.message || String(e);
+      agentUpdateTries.set(serverId, fails + 1);
+      agentUpdateState.set(serverId, { state: 'failed', error, at: Date.now() });
+      emit({ state: 'failed', error });
+    }
+  }
+
+  bus.on('broadcast', (e) => {
+    if (e && e.type === 'agent-event' && e.event === 'hi') {
+      void syncAgentVersion(e.serverId, e.data && e.data.info);
+    }
+  });
 
   hub.on('status', (serverId, status) => {
     maybeNotifyStatus(serverId, status);
@@ -668,7 +734,23 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   }
 
   router.get('/servers', (req, res) => {
-    res.json(config.listServers().map((s) => sanitize(s)));
+    res.json(
+      config.listServers().map((s) => ({
+        ...sanitize(s),
+        agentBundled: BUNDLED_AGENT_VERSION,
+        agentUpdate: agentUpdateState.get(s.id) || null,
+      })),
+    );
+  });
+
+  // 手动触发 Agent 更新（自动更新失败/被限流后的兜底入口）；结果经 SSE agent-update 推送
+  router.post('/servers/:id/agent-update', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    agentUpdateTries.delete(server.id);
+    agentUpdateState.delete(server.id);
+    void syncAgentVersion(server.id, server.info).catch((e) => next(e));
+    res.json({ ok: true, started: true });
   });
 
   // ---------- 添加服务器前：验证 SSH 连接（不落盘） ----------
@@ -1659,6 +1741,34 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       next(e);
     }
   });
+
+  // ---------- Mod 管理：列表 / 启停（.disabled 约定）/ 删除，路径由 Agent 锁定在 mods 目录 ----------
+  router.get('/servers/:id/instances/:name/mods', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'instance.modsList', { name: req.params.name }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  for (const [route, action] of [
+    ['mods/toggle', 'instance.modsToggle'],
+    ['mods/delete', 'instance.modsDelete'],
+  ]) {
+    router.post(`/servers/:id/instances/:name/${route}`, async (req, res, next) => {
+      const server = requireServer(req, res);
+      if (!server) return;
+      try {
+        res.json(
+          await agent(server)(action, { name: req.params.name, ...(req.body || {}) }, 30000),
+        );
+      } catch (e) {
+        next(e);
+      }
+    });
+  }
 
   // 域名连通检测：Agent 侧解析（含 _minecraft._tcp SRV）+ TCP 探测实例端口
   router.get('/servers/:id/instances/:name/domain-check', async (req, res, next) => {

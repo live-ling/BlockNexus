@@ -11,6 +11,8 @@ export interface ServerInfo {
   os: string;
   arch: string;
   node: string;
+  /** Agent 脚本版本（旧版 Agent 未上报时缺省） */
+  agentVersion?: string;
   memTotalMB: number;
   dir: string;
   instancesDir: string;
@@ -38,6 +40,10 @@ export interface ServerSummary {
   } | null;
   /** 面板自身监听地址（127.0.0.1 表示仅本机，手工安装命令对外不可用） */
   panelHost: string;
+  /** 面板随附的 Agent 脚本版本（与 info.agentVersion 比对判断远端是否落后） */
+  agentBundled?: string;
+  /** Agent 自动更新状态（更新中/失败时非空；成功清空） */
+  agentUpdate?: { state: 'updating' | 'failed' | 'done'; error?: string } | null;
   /** host 指向面板所在机器：本机服务器由面板直接托管 Agent 进程，不需要 SSH/systemd */
   isLocal: boolean;
   /** 本机 Agent 的进程状态（远程服务器为 null） */
@@ -70,6 +76,12 @@ export interface ServerSummary {
     hasKey: boolean;
     keyPath: string;
   };
+}
+
+/** 远端 Agent 版本是否落后于面板随附版本 */
+export function agentOutdated(s: Pick<ServerSummary, 'info' | 'agentBundled'>): boolean {
+  const remote = s.info?.agentVersion;
+  return !!s.agentBundled && remote !== s.agentBundled;
 }
 
 /** 添加服务器前的 SSH 连接验证结果（POST /servers/ssh-check） */
@@ -299,6 +311,48 @@ export interface AppVersion {
 
 export async function getVersion(refresh = false): Promise<AppVersion> {
   return api<AppVersion>(`/version${refresh ? '?refresh=1' : ''}`);
+}
+
+// ---------- Mod 管理（实例 mods 目录） ----------
+
+export interface ModInfo {
+  /** 逻辑文件名（不含 .disabled 后缀） */
+  name: string;
+  /** 磁盘上的实际文件名（可能带 .disabled） */
+  file: string;
+  disabled: boolean;
+  size: number;
+  mtime: number;
+}
+
+export interface ModsList {
+  /** mods 目录是否存在（false 通常意味着没装 Forge/Fabric） */
+  exists: boolean;
+  dir: string;
+  mods: ModInfo[];
+}
+
+export function listMods(serverId: string, instance: string): Promise<ModsList> {
+  return api<ModsList>(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/mods`);
+}
+
+export function toggleMod(
+  serverId: string,
+  instance: string,
+  file: string,
+  disable: boolean,
+): Promise<{ ok: boolean; file: string; disabled: boolean }> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/mods/toggle`, {
+    method: 'POST',
+    body: { file, disable },
+  });
+}
+
+export function deleteMod(serverId: string, instance: string, file: string): Promise<{ ok: boolean }> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/mods/delete`, {
+    method: 'POST',
+    body: { file },
+  });
 }
 
 /** AI 分析：POST + SSE 流（fetch + reader，因为 EventSource 不支持 POST） */

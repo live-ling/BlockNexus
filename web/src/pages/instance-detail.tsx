@@ -1,13 +1,14 @@
 // 实例详情页：顶部常驻终端，下方控制按钮与实例信息
 // 路由 #/server/<serverId>/instance/<name>
 
-import { useCallback, useEffect, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
 import { ConfirmDialog, EditInstanceDialog, ReinstallDialog } from '@/components/dialogs';
 import { FileManagerDialog } from '@/components/file-manager';
+import { ModManagerDialog } from '@/components/mod-manager';
 import { AutoRestartDialog } from '@/components/auto-restart-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
 import { InstanceStatusBadge } from '@/components/status-badge';
@@ -61,6 +62,7 @@ export function InstanceDetailPage({
   const [players, setPlayers] = useState<PlayersSnapshot[string] | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [modsOpen, setModsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [watchdogOpen, setWatchdogOpen] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
@@ -164,23 +166,33 @@ export function InstanceDetailPage({
     [serverId, instanceName, success, error],
   );
 
-  /** 域名连通检测（Agent 侧解析 + TCP 探测） */
+  /** 域名连通检测（Agent 侧解析 + TCP 探测）；序号防在途请求把已清空/过期的结果写回 */
+  const checkSeq = useRef(0);
   const runDomainCheck = useCallback(() => {
+    const seq = ++checkSeq.current;
     setDomainCheck({ state: 'checking' });
     api<DomainCheckResult>(
       `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/domain-check`,
     )
-      .then((r) => setDomainCheck({ state: 'done', result: r }))
-      .catch((e) =>
-        setDomainCheck({ state: 'done', result: { error: errText(e) } as DomainCheckResult }),
-      );
+      .then((r) => {
+        if (seq === checkSeq.current) setDomainCheck({ state: 'done', result: r });
+      })
+      .catch((e) => {
+        if (seq === checkSeq.current)
+          setDomainCheck({ state: 'done', result: { error: errText(e) } as DomainCheckResult });
+      });
   }, [serverId, instanceName]);
 
-  // 设置了域名就自动检测一次；域名改动（编辑后）重新检测
+  // 只有实例运行中才自动检测（未运行时端口必然拒绝，检测只会报错）；
+  // 域名改动（编辑后）或由停止转运行时重新检测，停止后清掉旧结果
   useEffect(() => {
-    if (instance?.address) runDomainCheck();
+    if (instance?.address && running) runDomainCheck();
+    else {
+      checkSeq.current++;
+      setDomainCheck(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instance?.address]);
+  }, [instance?.address, running]);
 
   /** 复制到剪贴板（域名等玩家要用的地址） */
   const handleCopy = async (text: string) => {
@@ -295,7 +307,7 @@ export function InstanceDetailPage({
               onCopy={handleCopy}
             />
             {instance.address ? (
-              <div className="flex items-center justify-between gap-2 px-1">
+              <div className="flex min-w-0 items-center justify-between gap-2 px-1">
                 {domainCheck?.state === 'checking' ? (
                   <span className="text-[11px] text-muted-foreground">域名连通检测中…</span>
                 ) : domainCheck?.result ? (
@@ -375,6 +387,9 @@ export function InstanceDetailPage({
               </Button>
               <Button size="lg" variant="outline" onClick={() => setBackupOpen(true)}>
                 <Archive className="h-4 w-4" /> 备份
+              </Button>
+              <Button size="lg" variant="outline" onClick={() => setModsOpen(true)}>
+                <Puzzle className="h-4 w-4" /> Mod 管理
               </Button>
               <Button size="lg" variant="outline" onClick={() => setPropsOpen(true)}>
                 <Settings2 className="h-4 w-4" /> 配置设置
@@ -531,8 +546,15 @@ export function InstanceDetailPage({
 
       <FileManagerDialog
         server={server}
-        instance={instance.name}        open={filesOpen}
+        instance={instance.name}
+        open={filesOpen}
         onOpenChange={setFilesOpen}
+      />
+      <ModManagerDialog
+        serverId={server.id}
+        instance={instance.name}
+        open={modsOpen}
+        onOpenChange={setModsOpen}
       />
       <BackupDialog
         server={server}

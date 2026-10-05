@@ -16,7 +16,7 @@ import {
 } from '@/components/dialogs';
 import { UninstallDialog, uninstallLogKey } from '@/components/uninstall-dialog';
 import { LogViewer } from '@/components/log-viewer';
-import { api, errText, fmtDiskGB, fmtMB, latencyTone, timeago, type Me, type ServerSummary } from '@/lib/api';
+import { api, agentOutdated, errText, fmtDiskGB, fmtMB, latencyTone, timeago, type Me, type ServerSummary } from '@/lib/api';
 import { installLogStore, subscribeServer } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 
@@ -33,6 +33,7 @@ export function ServerSettingsPage({
 }) {
   const { success, error, info } = useToastHelpers();
   const [server, setServer] = useState<ServerSummary | null>(null);
+  const [updatingAgent, setUpdatingAgent] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [tokenOpen, setTokenOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
@@ -403,6 +404,14 @@ export function ServerSettingsPage({
               ['系统', `${server.info.os} · ${server.info.arch}`],
               ['Node', server.info.node],
               [
+                '远端 Agent',
+                server.info.agentVersion ? (
+                  `v${server.info.agentVersion}`
+                ) : (
+                  <span key="av" className="text-muted-foreground">旧版（未上报版本）</span>
+                ),
+              ],
+              [
                 '内存',
                 server.stats
                   ? `${fmtMB(server.stats.memUsedMB)} / ${fmtMB(server.stats.memTotalMB)}`
@@ -428,6 +437,42 @@ export function ServerSettingsPage({
           />
         ) : (
           <p className="text-xs text-muted-foreground">等待 Agent 上线后自动获取。</p>
+        )}
+        {/* Agent 版本落后提示：正常由面板自动更新，这里给失败原因与手动重试 */}
+        {agentOutdated(server) && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+            <span className="min-w-0 flex-1 text-amber-600 dark:text-amber-400">
+              远端 Agent（{server.info?.agentVersion ? `v${server.info.agentVersion}` : '旧版'}）
+              落后于面板（v{server.agentBundled}）
+              {server.agentUpdate?.state === 'updating'
+                ? '，正在自动更新…'
+                : server.agentUpdate?.state === 'failed'
+                  ? `——自动更新失败：${server.agentUpdate.error}`
+                  : '，等待自动更新…'}
+            </span>
+            {server.agentUpdate?.state !== 'updating' && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={updatingAgent}
+                onClick={async () => {
+                  setUpdatingAgent(true);
+                  try {
+                    await api(`/servers/${serverId}/agent-update`, { method: 'POST', body: {} });
+                    success('更新任务已下发', '结果会通过实时通知反馈');
+                  } catch (e) {
+                    error(errText(e));
+                  } finally {
+                    setUpdatingAgent(false);
+                  }
+                }}
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${updatingAgent ? 'animate-spin' : ''}`} />
+                {updatingAgent ? '下发中…' : '立即更新'}
+              </Button>
+            )}
+          </div>
         )}
       </SettingsCard>
 

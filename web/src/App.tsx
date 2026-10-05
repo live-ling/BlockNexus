@@ -15,6 +15,7 @@ import { ServerSettingsPage } from '@/pages/server-settings';
 import { ServersPage } from '@/pages/servers';
 import { api, type Me, type ServerSummary } from '@/lib/api';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
+import { useToastHelpers } from '@/lib/toast';
 
 type Route =
   | { name: 'servers' }
@@ -51,6 +52,7 @@ function parseHash(): Route {
 }
 
 export function App() {
+  const { success: toastSuccess, error: toastError } = useToastHelpers();
   const [me, setMe] = useState<Me | null | undefined>(undefined); // undefined=启动中, null=未登录
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [route, setRoute] = useState<Route>(parseHash);
@@ -119,6 +121,20 @@ export function App() {
       if (e.type === 'agent-event' && (e.event === 'hi' || e.event === 'java.updated')) {
         refreshServer(e.serverId);
         return;
+      }
+      // Agent 自动更新（版本落后时面板自动执行；结果也刷新服务器数据）
+      if (e.type === 'agent-update') {
+        const st = e.state as 'updating' | 'failed' | 'done';
+        if (st === 'failed') toastError('Agent 自动更新失败', e.error || '');
+        if (st === 'done') toastSuccess('Agent 已自动更新', '远端 Agent 现在与面板版本一致');
+        setServers((cur) =>
+          cur.map((s) =>
+            s.id === e.serverId
+              ? { ...s, agentUpdate: st === 'done' ? null : { state: st, error: e.error } }
+              : s,
+          ),
+        );
+        if (st === 'done') refreshServer(e.serverId);
       }
       // 安装/卸载收尾 → 拉取最新状态（失败时清「安装中」、卸载移除时清列表项）
       if ((e.type === 'install' || e.type === 'uninstall') && e.done) {
