@@ -36,6 +36,7 @@ import {
 } from '@/lib/api';
 import { installLogStore, subscribeServer } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
+import { $ } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 export function ServerSettingsPage({
@@ -126,8 +127,8 @@ export function ServerSettingsPage({
         if (e.log) installLogStore.push(serverId, e.log);
         if (e.done) {
           installLogStore.markDone(serverId, !!e.ok);
-          if (e.ok) success('Agent 已上线');
-          else info('安装流程结束', 'Agent 未按时回连，请检查面板地址/防火墙');
+          if (e.ok) success($('serverSettings.toast.agentOnline'));
+          else info($('serverSettings.toast.installEnded'), $('serverSettings.toast.installEndedDetail'));
           load();
         }
       }
@@ -142,8 +143,8 @@ export function ServerSettingsPage({
         load();
         const d = (e.data ?? {}) as { done?: boolean; ok?: boolean; error?: string; java?: { major?: number } };
         if (d.done) {
-          if (d.ok) success('Java 已就绪', d.java ? `版本 ${d.java.major}` : undefined);
-          else error('Java 安装失败', typeof d.error === 'string' ? d.error : undefined);
+          if (d.ok) success($('serverSettings.toast.javaReady'), d.java ? $('serverSettings.toast.javaReadyVersion', d.java.major) : undefined);
+          else error($('serverSettings.toast.javaInstallFailed'), typeof d.error === 'string' ? d.error : undefined);
         }
         return;
       }
@@ -152,8 +153,8 @@ export function ServerSettingsPage({
         if (e.log) installLogStore.push(key, e.log);
         if (e.done) {
           installLogStore.markDone(key, !!e.ok);
-          if (e.ok) success('Agent 已卸载');
-          else error('卸载失败', typeof e.error === 'string' ? e.error : undefined);
+          if (e.ok) success($('serverSettings.toast.agentUninstalled'));
+          else error($('serverSettings.error.uninstall'), typeof e.error === 'string' ? e.error : undefined);
           load();
         }
       }
@@ -162,7 +163,7 @@ export function ServerSettingsPage({
   }, [serverId, load]);
 
   if (!server) {
-    return <div className="p-10 text-center text-sm text-muted-foreground">加载中…</div>;
+    return <div className="p-10 text-center text-sm text-muted-foreground">{$('common.loading')}</div>;
   }
 
   const startInstall = async () => {
@@ -170,9 +171,9 @@ export function ServerSettingsPage({
     setServer({ ...server, installing: true });
     try {
       await api(`/servers/${serverId}/install`, { method: 'POST', body: {} });
-      success('安装任务已开始');
+      success($('serverSettings.toast.installStarted'));
     } catch (e) {
-      error('安装启动失败', errText(e));
+      error($('serverSettings.error.installStart'), errText(e));
       setServer((cur) => (cur ? { ...cur, installing: false } : cur));
     }
   };
@@ -182,23 +183,26 @@ export function ServerSettingsPage({
     setServer((cur) => (cur ? { ...cur, installing: true } : cur));
     try {
       await api(`/servers/${serverId}/local-agent/${kind}`, { method: 'POST', body: {} });
-      success(kind === 'start' ? '本机 Agent 正在启动' : '本机 Agent 正在停止');
+      success(kind === 'start' ? $('serverSettings.toast.localStarting') : $('serverSettings.toast.localStopping'));
     } catch (e) {
-      error(kind === 'start' ? '启动失败' : '停止失败', errText(e));
+      error(kind === 'start' ? $('serverSettings.error.start') : $('serverSettings.error.stop'), errText(e));
       setServer((cur) => (cur ? { ...cur, installing: false } : cur));
     }
   };
 
   const tone = latencyTone(server.latency);
+  const remoteAgentLabel = server.info?.agentVersion
+    ? `v${server.info.agentVersion}`
+    : $('serverSettings.agent.legacyVersion');
 
   return (
     <div className="mx-auto w-full max-w-3xl px-5 pb-24 pt-7">
       {/* 页头 */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <h2 className="text-xl font-semibold">服务器设置</h2>
+        <h2 className="text-xl font-semibold">{$('serverSettings.title')}</h2>
         <AgentBadge online={server.online} installing={server.installing} />
         {server.latency != null && (
           <span
@@ -210,21 +214,21 @@ export function ServerSettingsPage({
                   : 'text-destructive'
             }`}
           >
-            延迟 {server.latency === 0 ? '<1' : server.latency}ms
+            {$('badge.latency', server.latency === 0 ? '<1' : server.latency)}
           </span>
         )}
       </div>
       <p className="mt-1.5 text-xs text-muted-foreground">
-        {server.name} · 最近在线 {timeago(server.lastSeen)}
+        {$('serverSettings.lastSeen', server.name, timeago(server.lastSeen))}
       </p>
 
       {/* 连接信息 */}
       <SettingsCard
-        title="连接信息"
+        title={$('serverSettings.connection.title')}
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-              <Pencil className="h-3.5 w-3.5" /> 编辑
+              <Pencil className="h-3.5 w-3.5" /> {$('serverSettings.action.edit')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setTokenOpen(true)}>
               <KeyRound className="h-3.5 w-3.5" /> Token
@@ -234,32 +238,35 @@ export function ServerSettingsPage({
       >
         <InfoGrid
           rows={[
-            ['名称', server.name],
-            ['地址', server.host],
+            [$('serverSettings.field.name'), server.name],
+            [$('serverSettings.field.host'), server.host],
             // 本机服务器由面板直管进程，不走 SSH —— 展示凭据没有意义，也容易误导
             ...(server.isLocal
               ? []
               : ([
                   [
                     'SSH',
-                    `${server.ssh.user}@${server.host}:${server.ssh.port}（${server.ssh.auth === 'key' ? '私钥' : '密码'}）`,
+                    $('serverSettings.value.withDetail',
+                      `${server.ssh.user}@${server.host}:${server.ssh.port}`,
+                      server.ssh.auth === 'key' ? $('serverSettings.auth.key') : $('serverSettings.auth.password'),
+                    ),
                   ],
                 ] as [string, string][])),
             [
-              '连接方式',
+              $('serverSettings.field.mode'),
               (server.agent.mode || 'outbound') === 'outbound'
-                ? `面板连接 Agent（${server.agent.host || server.host}:${server.agent.port || 3099}）`
-                : 'Agent 连接面板',
+                ? $('serverSettings.mode.outbound', `${server.agent.host || server.host}:${server.agent.port || 3099}`)
+                : $('serverSettings.mode.inbound'),
             ],
             ...((server.agent.mode || 'outbound') === 'inbound'
-              ? [['回连地址', server.agent.panelUrl] as [string, string]]
+              ? [[$('serverSettings.field.panelUrl'), server.agent.panelUrl] as [string, string]]
               : []),
           ]}
         />
         <p className="text-[11px] text-muted-foreground">
           {server.isLocal
-            ? '本机服务器由面板直接托管 Agent 进程，不需要 SSH；只在服务器列表与页头对地址做脱敏展示。'
-            : 'SSH 与回连地址用于安装/重装 Agent；只在服务器列表与页头对地址做脱敏展示。'}
+            ? $('serverSettings.connection.hintLocal')
+            : $('serverSettings.connection.hintRemote')}
         </p>
       </SettingsCard>
 
@@ -268,8 +275,8 @@ export function ServerSettingsPage({
         title="Agent"
         description={
           server.isLocal
-            ? '本机 Agent：由面板直接托管进程（专用目录，无需 SSH / systemd）'
-            : '通过 SSH 部署到远端（默认 /opt/blocknexus-agent，systemd 托管）'
+            ? $('serverSettings.agent.descLocal')
+            : $('serverSettings.agent.descRemote')
         }
         actions={
           <>
@@ -282,7 +289,7 @@ export function ServerSettingsPage({
                     disabled={server.installing}
                     onClick={() => setStopOnlyOpen(true)}
                   >
-                    <Square className="h-3.5 w-3.5" /> 停止 Agent
+                    <Square className="h-3.5 w-3.5" /> {$('serverSettings.agent.stop')}
                   </Button>
                 ) : (
                   <Button
@@ -291,12 +298,12 @@ export function ServerSettingsPage({
                     disabled={server.installing}
                     onClick={() => localTask('start')}
                   >
-                    <Play className="h-3.5 w-3.5" /> 启动 Agent
+                    <Play className="h-3.5 w-3.5" /> {$('serverSettings.agent.start')}
                   </Button>
                 )}
                 <Button size="sm" onClick={startInstall} disabled={server.installing}>
                   <Download className="h-3.5 w-3.5" />
-                  {server.info ? '重装' : '安装 Agent'}
+                  {server.info ? $('serverSettings.agent.reinstall') : $('serverSettings.agent.install')}
                 </Button>
                 <Button
                   variant="outline"
@@ -305,17 +312,17 @@ export function ServerSettingsPage({
                   disabled={server.installing}
                   onClick={() => setUninstallOpen(true)}
                 >
-                  <Trash className="h-3.5 w-3.5" /> 卸载
+                  <Trash className="h-3.5 w-3.5" /> {$('serverSettings.agent.uninstall')}
                 </Button>
               </>
             ) : (
               <>
                 <Button variant="outline" size="sm" onClick={() => setManualOpen(true)}>
-                  手动安装
+                  {$('serverSettings.agent.manualInstall')}
                 </Button>
                 <Button size="sm" onClick={startInstall} disabled={server.installing}>
                   <Download className="h-3.5 w-3.5" />
-                  {server.info ? '重装' : '安装 Agent'}
+                  {server.info ? $('serverSettings.agent.reinstall') : $('serverSettings.agent.install')}
                 </Button>
                 <Button
                   variant="outline"
@@ -324,11 +331,11 @@ export function ServerSettingsPage({
                   disabled={server.installing}
                   onClick={() => setUninstallOpen(true)}
                 >
-                  <Trash className="h-3.5 w-3.5" /> 卸载
+                  <Trash className="h-3.5 w-3.5" /> {$('serverSettings.agent.uninstall')}
                 </Button>
               </>
             )}
-            <Button variant="outline" size="icon-sm" onClick={load} aria-label="刷新状态">
+            <Button variant="outline" size="icon-sm" onClick={load} aria-label={$('serverSettings.agent.refreshAria')}>
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </>
@@ -342,14 +349,14 @@ export function ServerSettingsPage({
           <div className="grid gap-1.5 text-xs">
             <p className="text-muted-foreground">
               {server.localAgent?.running
-                ? `本机 Agent 进程运行中（pid ${server.localAgent.pid}）。停止只结束进程，实例与存档保留。`
-                : '本机 Agent 未运行。启动后面板会自动连上（实例与存档均保留）。'}
+                ? $('serverSettings.agent.localRunning', server.localAgent.pid)
+                : $('serverSettings.agent.localStopped')}
             </p>
             {server.localAgent && (
               <dl className="grid gap-1 text-muted-foreground sm:grid-cols-[auto,1fr] sm:gap-x-3">
-                <dt className="shrink-0">专用目录</dt>
+                <dt className="shrink-0">{$('serverSettings.field.dirLabel')}</dt>
                 <dd className="break-all font-mono">{server.localAgent.dir}</dd>
-                <dt className="shrink-0">实例目录</dt>
+                <dt className="shrink-0">{$('serverSettings.field.instancesDir')}</dt>
                 <dd className="break-all font-mono">{server.localAgent.instancesDir}</dd>
               </dl>
             )}
@@ -357,8 +364,8 @@ export function ServerSettingsPage({
         ) : (
           <p className="text-xs text-muted-foreground">
             {server.online
-              ? 'Agent 在线。修改过 SSH 信息或迁移机器后可在此重装。'
-              : 'Agent 离线：点击「安装 Agent」通过 SSH 自动部署，或使用「手动安装」拿到命令。'}
+              ? $('serverSettings.agent.onlineHint')
+              : $('serverSettings.agent.offlineHint')}
           </p>
         )}
       </SettingsCard>
@@ -368,14 +375,14 @@ export function ServerSettingsPage({
 
       {/* 系统信息 */}
       <SettingsCard
-        title="系统信息"
-        description={server.info ? undefined : 'Agent 离线时暂无数据'}
+        title={$('serverSettings.sys.title')}
+        description={server.info ? undefined : $('serverSettings.sys.noData')}
       >
         {server.info ? (
           <InfoGrid
             rows={[
-              ['主机名', server.info.hostname],
-              ['系统', `${server.info.os} · ${server.info.arch}`],
+              [$('serverSettings.field.hostname'), server.info.hostname],
+              [$('serverSettings.field.os'), `${server.info.os} · ${server.info.arch}`],
               ['Node', server.info.node],
               [
                 'Agent',
@@ -385,47 +392,47 @@ export function ServerSettingsPage({
                     agentOutdated(server) ? 'text-amber-600 dark:text-amber-400' : undefined
                   }
                 >
-                  远端{' '}
+                  {$('serverSettings.sys.agentRemote')}{' '}
                   {server.info.agentVersion ? (
                     `v${server.info.agentVersion}`
                   ) : (
-                    <span className="text-muted-foreground">旧版（未上报版本）</span>
+                    <span className="text-muted-foreground">{$('serverSettings.sys.agentLegacyVersion')}</span>
                   )}{' '}
-                  · 本地 v{server.agentBundled ?? '—'}
-                  {agentOutdated(server) ? '（待自动更新）' : ''}
+                  {$('serverSettings.sys.agentLocal', `v${server.agentBundled ?? '—'}`)}
+                  {agentOutdated(server) ? $('serverSettings.sys.agentOutdatedSuffix') : ''}
                 </span>,
               ],
               [
-                '内存',
+                $('serverSettings.field.memory'),
                 server.stats
                   ? `${fmtMB(server.stats.memUsedMB)} / ${fmtMB(server.stats.memTotalMB)}`
                   : fmtMB(server.info.memTotalMB),
               ],
               [
-                '磁盘',
+                $('serverSettings.field.disk'),
                 server.stats?.disk
                   ? fmtDiskGB(server.stats.disk.totalGB - server.stats.disk.freeGB, server.stats.disk.totalGB) +
-                    `（${server.info.instancesDir} 所在分区）`
+                    $('serverSettings.sys.diskPartition', server.info.instancesDir)
                   : '—',
               ],
-              ['实例目录', server.info.instancesDir],
+              [$('serverSettings.field.instancesDir'), server.info.instancesDir],
             ]}
           />
         ) : (
-          <p className="text-xs text-muted-foreground">等待 Agent 上线后自动获取。</p>
+          <p className="text-xs text-muted-foreground">{$('serverSettings.sys.waiting')}</p>
         )}
         {/* Agent 版本落后提示：正常由面板自动更新，这里给失败原因与手动重试 */}
         {agentOutdated(server) && (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
             <span className="min-w-0 flex-1 text-amber-600 dark:text-amber-400">
-              远端 Agent（{server.info?.agentVersion ? `v${server.info.agentVersion}` : '旧版'}）
-              落后于面板（v{server.agentBundled}）
+              {$('serverSettings.agentUpdate.remote', remoteAgentLabel)}
+              {$('serverSettings.agentUpdate.behind', `v${server.agentBundled}`)}
               {server.agentUpdate?.state === 'updating'
-                ? '，正在自动更新…'
+                ? $('serverSettings.agentUpdate.state.updating')
                 : server.agentUpdate?.state === 'failed'
-                  ? `——自动更新失败：${server.agentUpdate.error}`
-                  : '，等待自动更新…'}
+                  ? $('serverSettings.agentUpdate.state.failed', server.agentUpdate.error)
+                  : $('serverSettings.agentUpdate.state.waiting')}
             </span>
             {server.agentUpdate?.state !== 'updating' && (
               <Button
@@ -436,7 +443,7 @@ export function ServerSettingsPage({
                   setUpdatingAgent(true);
                   try {
                     await api(`/servers/${serverId}/agent-update`, { method: 'POST', body: {} });
-                    success('更新任务已下发', '结果会通过实时通知反馈');
+                    success($('serverSettings.agentUpdate.toast.started'), $('serverSettings.agentUpdate.toast.startedDetail'));
                   } catch (e) {
                     error(errText(e));
                   } finally {
@@ -445,7 +452,7 @@ export function ServerSettingsPage({
                 }}
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${updatingAgent ? 'animate-spin' : ''}`} />
-                {updatingAgent ? '下发中…' : '立即更新'}
+                {updatingAgent ? $('serverSettings.agentUpdate.btn.busy') : $('serverSettings.agentUpdate.btn.now')}
               </Button>
             )}
           </div>
@@ -457,9 +464,9 @@ export function ServerSettingsPage({
         <CardContent className="flex flex-wrap items-center gap-3">
           <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium">删除服务器</div>
+            <div className="text-sm font-medium">{$('serverSettings.danger.title')}</div>
             <p className="text-[11px] text-muted-foreground">
-              仅从面板移除该服务器及其记录，远端 Agent 与 MC 实例不受影响（可手动卸载）。
+              {$('serverSettings.danger.desc')}
             </p>
           </div>
           <Button
@@ -468,7 +475,7 @@ export function ServerSettingsPage({
             className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
             onClick={() => setDeleteOpen(true)}
           >
-            <Trash2 className="h-3.5 w-3.5" /> 删除
+            <Trash2 className="h-3.5 w-3.5" /> {$('common.delete')}
           </Button>
         </CardContent>
       </Card>
@@ -493,15 +500,15 @@ export function ServerSettingsPage({
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title={`删除服务器「${server.name}」？`}
+        title={$('serverSettings.delete.title', server.name)}
         description={
           server.isLocal
-            ? '仅从面板移除，本机 Agent 进程与实例目录不受影响（可在 Agent 卡停止或卸载）。'
-            : '仅从面板移除，远程 Agent 与实例不受影响（可手动卸载）。'
+            ? $('serverSettings.delete.descLocal')
+            : $('serverSettings.delete.descRemote')
         }
         onConfirm={async () => {
           await api(`/servers/${serverId}`, { method: 'DELETE' });
-          success('已删除');
+          success($('serverSettings.toast.deleted'));
           onDeleted();
         }}
       />
@@ -556,21 +563,21 @@ function JavaCard({
         method: 'POST',
         body: { major: Number(target) },
       });
-      success(r.busy ? 'Java 安装已在进行中' : `Java ${target} 安装任务已下发`, '完成后自动更新状态');
+      success(r.busy ? $('serverSettings.java.toast.busy') : $('serverSettings.java.toast.queued', target), $('serverSettings.java.toast.queuedDetail'));
     } catch (e) {
       error(errText(e));
     }
   };
 
   const setDefault = async (t: string, label: string) => {
-    setActing(`正在切换默认 Java 到 ${label}…`);
+    setActing($('serverSettings.java.switching', label));
     try {
       await switchJava(server.id, t);
-      success(`默认 Java 已切换到 ${label}`);
+      success($('serverSettings.java.switched', label));
       onReload();
       refresh();
     } catch (e) {
-      error('切换失败', errText(e));
+      error($('serverSettings.java.error.switch'), errText(e));
     } finally {
       setActing('');
       onBusyReset();
@@ -578,15 +585,15 @@ function JavaCard({
   };
 
   const doUninstall = async (entry: JavaEntry) => {
-    setActing(`正在卸载 ${entry.name}…`);
+    setActing($('serverSettings.java.uninstalling', entry.name));
     try {
       await uninstallJava(server.id, entry.path);
-      success(`${entry.name} 已卸载`);
+      success($('serverSettings.java.uninstalled', entry.name));
       setConfirmTarget(null);
       onReload();
       refresh();
     } catch (e) {
-      error('卸载失败', errText(e));
+      error($('serverSettings.error.uninstall'), errText(e));
     } finally {
       setActing('');
       onBusyReset();
@@ -601,8 +608,8 @@ function JavaCard({
 
   return (
     <SettingsCard
-      title="Java 环境"
-      description="Temurin JRE 多版本管理"
+      title={$('serverSettings.java.title')}
+      description={$('serverSettings.java.desc')}
       actions={
         server.online && info ? (
           <div className="flex items-center gap-2">
@@ -611,15 +618,15 @@ function JavaCard({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="25">Java 25（最新）</SelectItem>
-                <SelectItem value="21">Java 21（推荐 · 1.20.5+）</SelectItem>
-                <SelectItem value="17">Java 17（1.17 – 1.20.4）</SelectItem>
-                <SelectItem value="11">Java 11（旧版备用）</SelectItem>
-                <SelectItem value="8">Java 8（MC ≤ 1.16）</SelectItem>
+                <SelectItem value="25">{$('serverSettings.java.opt.25')}</SelectItem>
+                <SelectItem value="21">{$('serverSettings.java.opt.21')}</SelectItem>
+                <SelectItem value="17">{$('serverSettings.java.opt.17')}</SelectItem>
+                <SelectItem value="11">{$('serverSettings.java.opt.11')}</SelectItem>
+                <SelectItem value="8">{$('serverSettings.java.opt.8')}</SelectItem>
               </SelectContent>
             </Select>
             <Button variant="secondary" size="sm" disabled={frozen} onClick={install}>
-              {javaBusy ? '安装中…' : '安装'}
+              {javaBusy ? $('serverSettings.java.btn.installing') : $('serverSettings.java.btn.install')}
             </Button>
           </div>
         ) : null
@@ -630,7 +637,7 @@ function JavaCard({
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
           {javaBusy ? (
             <>
-              正在安装 Java… {javaMsg && <span className="font-mono">{javaMsg}</span>}
+              {$('serverSettings.java.installingProgress')} {javaMsg && <span className="font-mono">{javaMsg}</span>}
             </>
           ) : (
             acting
@@ -643,11 +650,11 @@ function JavaCard({
           <InfoGrid
             rows={[
               [
-                '当前生效',
+                $('serverSettings.java.current'),
                 <span key="java" className={warn ? 'text-amber-600 dark:text-amber-400' : undefined}>
                   {liveJava?.installed
-                    ? `${liveJava.major}（${liveJava.raw?.match(/"([^"]+)"/)?.[1] ?? liveJava.raw ?? ''}）`
-                    : '未安装（新版 MC 需 Java 21+，旧版 MC 需 8–17）'}
+                    ? $('serverSettings.value.withDetail', liveJava.major, liveJava.raw?.match(/"([^"]+)"/)?.[1] ?? liveJava.raw ?? '')
+                    : $('serverSettings.java.notInstalled')}
                 </span>,
               ],
             ]}
@@ -657,11 +664,11 @@ function JavaCard({
           {loadErr ? (
             <p className="text-[11px] text-muted-foreground">
               {agentOutdated(server)
-                ? `版本列表需要更新的 Agent 支持——远端 v${server.info?.agentVersion ?? '旧版'} 将自动更新到 v${server.agentBundled ?? '?'}`
-                : `版本列表获取失败：${loadErr}`}
+                ? $('serverSettings.java.listNeedsAgent', server.info?.agentVersion ?? $('serverSettings.agent.legacyVersion'), server.agentBundled ?? '?')
+                : $('serverSettings.java.listLoadFailed', loadErr)}
             </p>
           ) : javas && (javas.managed.length || javas.system) ? (
-            <div className="grid gap-1" role="radiogroup" aria-label="默认 Java 版本">
+            <div className="grid gap-1" role="radiogroup" aria-label={$('serverSettings.java.radiogroupAria')}>
               {[...javas.managed, ...(javas.system ? [javas.system] : [])].map((entry) => {
                 const sys = entry.path === 'system';
                 const ver = entry.raw?.match(/"([^"]+)"/)?.[1];
@@ -678,19 +685,19 @@ function JavaCard({
                       role="radio"
                       aria-checked={entry.active}
                       disabled={frozen}
-                      title={entry.active ? '当前生效' : '设为默认'}
+                      title={entry.active ? $('serverSettings.java.current') : $('serverSettings.java.setAsDefault')}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                      onClick={() => !entry.active && setDefault(entry.path, sys ? '系统 Java' : entry.name)}
+                      onClick={() => !entry.active && setDefault(entry.path, sys ? $('serverSettings.java.systemJava') : entry.name)}
                     >
                       <RadioDot checked={entry.active} />
-                      <span className="min-w-0 shrink-0 font-mono">{sys ? '系统包 Java' : entry.name}</span>
+                      <span className="min-w-0 shrink-0 font-mono">{sys ? $('serverSettings.java.systemPackageJava') : entry.name}</span>
                       <span className="min-w-0 truncate text-[11px] text-muted-foreground">
-                        {ver ? `Java ${entry.major} · ${ver}` : `Java ${entry.major}`}
+                        {ver ? $('serverSettings.java.versionWithRaw', entry.major, ver) : `Java ${entry.major}`}
                       </span>
                     </button>
                     {entry.active ? (
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> 使用中
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {$('serverSettings.java.inUse')}
                       </span>
                     ) : sys ? (
                       <span className="shrink-0 text-[11px] text-muted-foreground">/usr/bin/java</span>
@@ -702,7 +709,7 @@ function JavaCard({
                         disabled={frozen}
                         onClick={() => setConfirmTarget(entry)}
                       >
-                        <Trash2 className="h-3.5 w-3.5" /> 卸载
+                        <Trash2 className="h-3.5 w-3.5" /> {$('serverSettings.agent.uninstall')}
                       </Button>
                     )}
                   </div>
@@ -711,22 +718,22 @@ function JavaCard({
             </div>
           ) : (
             <p className="text-[11px] text-muted-foreground">
-              服务器上没有发现可用的 Java——选择版本点「安装」，会下载 Temurin JRE 到 /opt/blocknexus-java 并设为默认；各版本独立目录，可随时切换或卸载。
+              {$('serverSettings.java.emptyHint')}
             </p>
           )}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">等待 Agent 上线后自动获取。</p>
+        <p className="text-xs text-muted-foreground">{$('serverSettings.sys.waiting')}</p>
       )}
 
       <ConfirmDialog
         open={!!confirmTarget}
         onOpenChange={(v) => !v && setConfirmTarget(null)}
-        title={`卸载 ${confirmTarget?.name ?? ''}？`}
+        title={$('serverSettings.java.uninstallTitle', confirmTarget?.name ?? '')}
         description={
           confirmTarget?.active
-            ? '这是当前默认版本，卸载时会自动切换到其余版本或系统 Java。该操作不可恢复。'
-            : '将永久删除该版本的安装目录。该操作不可恢复。'
+            ? $('serverSettings.java.uninstallDescActive')
+            : $('serverSettings.java.uninstallDesc')
         }
         onConfirm={async () => {
           if (confirmTarget) await doUninstall(confirmTarget);
