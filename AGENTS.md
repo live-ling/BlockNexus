@@ -2,10 +2,9 @@
 
 Minecraft 服务器管理面板：本地 Web 面板（Express + WebView2 外壳）+ SSH 部署到远程 Linux 的 Agent（零依赖单文件）。开源仓库即本仓库：github.com/live-ling/BlockNexus。
 
-## 双工作区（重要）
+## 与 mcpan 旧工作区的关系（历史背景）
 
-- **本目录（Desktop\BlockNexus）= 发布仓库**：与 GitHub 同源历史，从这里提交并 `git push origin main`（勿 force push）；
-- `Desktop\mcpan` = 个人工作区：**独立 git 历史、无 remote**，日常迭代在这里。发布 = 把 mcpan 内容迁移过来（`git -C ..\mcpan archive <commit> | tar -x -C .`）+ 手工合 README（两边 README 真分叉，本仓库版是基底）→ 功能级提交 → 推送。两仓库无共同祖先，切勿互相强推。
+本目录（Desktop\BlockNexus）现在**既是开发工作区又是发布仓库**：与 GitHub 同源历史，日常改动直接在这里提交并 `git push origin main`（勿 force push）。旧的 `Desktop\mcpan` 个人工作区（独立 git 历史、无 remote）已于 2026-10-06 完成迁移后弃用——运行根（root.txt）、`data/` 运行时数据均已迁到本目录；其历史备份在 `DE Project\BlockNexus Project\mcpan-workspace-history.bundle`（`git clone` 该 bundle 可找回旧提交）。勿从旧仓库向本仓库 force push。
 
 ## 构建与测试
 
