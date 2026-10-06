@@ -23,6 +23,10 @@ jobs:
             node --check "$f" || fail=1
           done
           exit $fail
+      - name: Agent 产物新鲜度（改了 agent/src 忘了 build:agent 会被拦下）
+        run: node agent/build.js --check
+      - name: Agent 测试（零依赖，不需要面板与真实服务器）
+        run: npm run test:agent
 
   frontend:
     name: 前端构建
@@ -34,6 +38,12 @@ jobs:
           node-version: 20
       - name: 安装依赖
         run: npm ci
+        working-directory: web
+      - name: Lint
+        run: npx oxlint
+        working-directory: web
+      - name: 单元测试
+        run: npm test
         working-directory: web
       - name: 构建
         run: npm run build
