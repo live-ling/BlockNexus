@@ -718,19 +718,15 @@ OPanel 用 `platform-modules.json` 作为**唯一模块事实源**，被三处�
 | 项 | 位置 | 处理 |
 |---|---|---|
 | HKDF info 标签 `mcpan/a2p`·`mcpan/p2a`·`mcpan/proof` | `panel/crypto.js`、`agent/src/crypto.js` | ✅ **已改为 `blocknexus/*`**（`AGENT_VERSION` 0.3.5 → 0.3.6）；两端逐字核对一致，加密握手 e2e 全绿 |
-| 实例元数据 `mcpan.json` 自动改名回退 | `agent/src/instance/manager.js:48-50` | ⬜ 可删——不再存在 `mcpan.json` 的实例目录 |
-| 旧 Java 软链 `/opt/mcpan-java` 清洗 | `agent/src/instance/java.js:165-166`、`:305` | ⬜ 可删旧路径分支，只认 `blocknexus-java` |
-| 旧 systemd 服务 `mcpan-agent` 清理 | `panel/ssh.js:405-406`、`:452-453` | ⬜ 可删——安装/卸载只处理 `blocknexus-agent` |
-| README「从 MCPan 更名升级」整节 | `README.md:100-108` | ⬜ 可删或改为历史说明 |
+| 实例元数据 `mcpan.json` 自动改名回退 | `agent/src/instance/manager.js` | ✅ 已删。**副作用需知悉**：若仍有实例目录停留在 `mcpan.json`，改造后不再自动改名，需手动改名 |
+| 旧 Java 软链 `/opt/mcpan-java` 清洗 | `agent/src/instance/java.js` | ✅ 已删旧路径分支，改为统一用 `JAVA_ROOT` 常量判断（不再硬编码字符串，更稳） |
+| 旧 systemd 服务 `mcpan-agent` 清理 | `panel/ssh.js` | ✅ 安装与卸载都只处理 `blocknexus-agent` |
+| README「从 MCPan 更名升级」整节 | `README.md` | ✅ 已改写为「兼容期已结束」并说明旧 Agent 不再能连、如何恢复 |
 
-**执行注意**：这些都是**删除**操作，删前应确认没有真实的旧部署；按用户要求
-「危险操作先建副本」。建议一次性做完并用 `agent/e2e-panel-install.js`（覆盖安装链路）
-与 `test-fs-ops.js` 兜底。
-
-**`AGENT_VERSION` 已递增的含义**：远端 Agent 只要在线就会被面板比对版本并**自动更新**。
-由于这是破坏性协议变更，**新旧混用期间握手必然失败**——因此升级顺序上，
-面板需先更新（面板会主动推送新 Agent），未更新的旧 Agent 在更新完成前会短暂失联。
-既然已确认无生产旧 Agent，此风险可接受。
+**`AGENT_VERSION` 递增的含义（重要）**：远端 Agent 上线时会被面板比对版本并**自动更新**。
+但这是**破坏性协议变更**：`AGENT_VERSION < 0.3.6` 的旧 Agent 在更新完成前**无法建立加密连接**，
+面板会把它显示为离线，并在它上线后推送更新。已确认无生产旧 Agent，所以可接受；
+README 已明确写出这个行为与恢复手段（服务器设置页重装一次）。
 
 ### 4.6 文档纪律
 

@@ -97,14 +97,23 @@ node agent.js --panel ws://<面板地址>:3080 --token <服务器token> --id <�
 
 Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "...", "id": "..." }`。
 
-## 从 MCPan 更名升级
+## 从 MCPan 更名升级（兼容期已结束）
 
-项目已由 **MCPan** 更名为 **BlockNexus**，品牌字符串、安装目录（`/opt/mcpan-agent` → `/opt/blocknexus-agent`，仅新增服务器默认值）、systemd 服务名（`mcpan-agent` → `blocknexus-agent`）、环境变量前缀（`MCPAN_*` → `BLOCKNEXUS_*`）、登录 Cookie、上传临时文件后缀等已全部同步。升级注意：
+项目已由 **MCPan** 更名为 **BlockNexus**：品牌字符串、安装目录（`/opt/mcpan-agent` → `/opt/blocknexus-agent`）、systemd 服务名（`mcpan-agent` → `blocknexus-agent`）、环境变量前缀（`MCPAN_*` → `BLOCKNEXUS_*`）、登录 Cookie、上传临时文件后缀均已同步。
 
-- **面板**：重启即生效（`data/config.json`、实例数据不动）；
-- **远程 Agent**：旧版 Agent **无需立即重装**——加密协议握手标识未变，新面板可继续管理旧 Agent；想换到新服务名时在服务器设置页点「重装 Agent」，安装器会自动清掉旧的 `mcpan-agent` 服务；卸载逻辑对新旧两个服务名都兼容；
-- **实例元数据**：`mcpan.json` → `blocknexus.json`，Agent 首次扫描实例目录时自动改名，无需手动处理；
-- **需要重新登录/选主题**：会话 Cookie 名与主题存储键随更名更换，更新后首次打开要重新登录、主题恢复默认；
+> ⚠️ **更名兼容期已于 0.3.1 结束。** 加密通道的握手标识已从 `mcpan/*` 改为 `blocknexus/*`，
+> 因此**旧版 MCPan/BlockNexus Agent（`AGENT_VERSION` < 0.3.6）无法再与本面板建立加密连接**。
+> 面板会把这类 Agent 显示为离线，并在其上线后按版本号**自动推送更新**（见「Agent 版本与自动更新」）。
+>
+> 若某台服务器长期未上线导致没能自动更新，请在该服务器的设置页点「重装 Agent」重装一次。
+
+迁移要点：
+
+- **面板**：重启即生效（`data/config.json` 与实例数据不受影响）；
+- **远程 Agent**：需更新到 `AGENT_VERSION ≥ 0.3.6`。通常由面板自动完成；无法自动更新时手动重装一次；
+- **实例元数据**：`mcpan.json` → `blocknexus.json`。0.3.6 起已移除自动改名回退，
+  **若仍有实例目录停留在旧文件名，需手动把 `mcpan.json` 改名为 `blocknexus.json`**；
+- **需要重新登录/选主题**：会话 Cookie 名与主题存储键随更名更换，更新后首次打开需重新登录、主题恢复默认；
 - **Windows 桌面外壳**：运行 `npm run build:exe` 生成 `BlockNexus.exe`，再 `npm run shortcut` 重建桌面快捷方式（旧 `MCPan.exe`、`MCPan.lnk` 可删除）。
 
 ## 加密通道设计

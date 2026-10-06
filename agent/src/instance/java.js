@@ -162,8 +162,8 @@ module.exports = {
         let canLink = true;
         try {
           const cur = fs.readlinkSync(linkPath);
-          // 只覆盖我们自己建的链接（含 MCPan 时代旧路径 /opt/mcpan-java）
-          canLink = cur.includes('blocknexus-java') || cur.includes('mcpan-java');
+          // 只覆盖我们自己建的链接（指向本 Agent 的 JAVA_ROOT）
+          canLink = cur.includes(JAVA_ROOT);
         } catch {
           canLink = true; // 不存在
         }
@@ -302,7 +302,7 @@ module.exports = {
       } catch {
         // 链接不存在 → 已在用系统 java
       }
-      if (cur && (cur.includes('blocknexus-java') || cur.includes('mcpan-java'))) {
+      if (cur && cur.includes(JAVA_ROOT)) {
         await this.runSh(`${sudo}rm -f ${JAVA_LINK}`, sudo, 60000);
       }
       this._javaCmd = null;
