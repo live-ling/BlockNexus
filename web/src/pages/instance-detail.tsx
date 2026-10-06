@@ -15,7 +15,7 @@ import { BackupScheduleDialog } from '@/components/backup-schedule-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
 import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
-import { InstanceStatusBadge } from '@/components/status-badge';
+import { InstanceStatusBadge, LatencyBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -42,11 +42,11 @@ import {
   errText,
   fmtMB,
   fmtUptime,
-  latencyTone,
   type Instance,
   type PlayersSnapshot,
   type ServerSummary,
 } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { subscribeServer } from '@/lib/sse';
 import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
@@ -183,8 +183,8 @@ export function InstanceDetailPage({
         e.data?.trigger === 'schedule' &&
         e.data?.done
       ) {
-        if (e.data.ok) success('定时备份完成', String(e.data.file || ''));
-        else error('定时备份失败', String(e.data.error || '未知错误'));
+        if (e.data.ok) success($('instanceDetail.backup.done'), String(e.data.file || ''));
+        else error($('instanceDetail.backup.failed'), String(e.data.error || $('common.unknown')));
         loadInstance();
       }
     });
@@ -199,10 +199,10 @@ export function InstanceDetailPage({
           method: 'POST',
           body: { cmd },
         });
-        success(okText, `已执行：${cmd}`);
+        success(okText, $('instanceDetail.cmd.executed', cmd));
         return true;
       } catch (e) {
-        error('指令发送失败', errText(e));
+        error($('instanceDetail.error.cmd'), errText(e));
         return false;
       }
     },
@@ -240,8 +240,8 @@ export function InstanceDetailPage({
   /** 复制到剪贴板（域名等玩家要用的地址） */
   const handleCopy = async (text: string) => {
     const ok = await copyText(text);
-    if (ok) success('已复制', text);
-    else error('复制失败', '请手动选择复制');
+    if (ok) success($('instanceDetail.copied'), text);
+    else error($('instanceDetail.copyFailed'), $('instanceDetail.copyFailed.hint'));
   };
 
   const op = async (action: 'start' | 'stop' | 'restart') => {    setBusy(true);
@@ -250,7 +250,11 @@ export function InstanceDetailPage({
         method: 'POST',
         body: {},
       });
-      success(action === 'start' ? '启动指令已发送' : action === 'stop' ? '停止指令已发送' : '重启中…');
+      success(action === 'start'
+        ? $('instanceDetail.op.started')
+        : action === 'stop'
+          ? $('instanceDetail.op.stopped')
+          : $('instanceDetail.op.restarting'));
       setTimeout(() => {
         loadInstance();
         loadPlayers();
@@ -270,10 +274,10 @@ export function InstanceDetailPage({
         method: 'POST',
         body: {},
       });
-      success('面板已接手下载', '面板下载核心后自动传输安装，请留意控制台');
+      success($('instanceDetail.panelInstall.done'), $('instanceDetail.panelInstall.doneDetail'));
       setTimeout(loadInstance, 800);
     } catch (e) {
-      error('面板代下失败', errText(e));
+      error($('instanceDetail.panelInstall.failed'), errText(e));
     } finally {
       setBusy(false);
     }
@@ -282,19 +286,18 @@ export function InstanceDetailPage({
   if (notFound) {
     return (
       <div className="mx-auto w-full max-w-5xl px-5 pt-10 text-center">
-        <p className="text-sm text-muted-foreground">实例不存在或已被删除</p>
+        <p className="text-sm text-muted-foreground">{$('instanceDetail.notFound')}</p>
         <Button className="mt-4" variant="outline" onClick={onBack}>
-          返回实例列表
+          {$('instanceDetail.backToList')}
         </Button>
       </div>
     );
   }
 
   if (!server || !instance) {
-    return <div className="p-10 text-center text-sm text-muted-foreground">加载中…</div>;
+    return <div className="p-10 text-center text-sm text-muted-foreground">{$('common.loading')}</div>;
   }
 
-  const tone = latencyTone(server.latency);
   // 安装失败：删除时跳过备份（目录里只有半成品，备份无意义且可能卡住）
   const isFailed = instance.status === 'failed';
   // 自动重启是否已启用（按钮上显示小绿点）
@@ -307,25 +310,12 @@ export function InstanceDetailPage({
     <div className="mx-auto w-full max-w-[1600px] px-4 pb-24 pt-7">
       {/* 头部 */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <h2 className="text-xl font-semibold">{instance.name}</h2>
         <InstanceStatusBadge status={instance.status} />
-        {active && server.latency != null && (
-          <span
-            className={`font-mono text-xs ${
-              tone === 'good'
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : tone === 'fair'
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : 'text-destructive'
-            }`}
-            title="面板 → 服务器 实测往返延迟"
-          >
-            延迟 {server.latency === 0 ? '<1' : server.latency}ms
-          </span>
-        )}
+        {active && server.latency != null && <LatencyBadge latency={server.latency} />}
       </div>
 
       {/* 左：信息 + 控件；中：终端；右：在线玩家（运行时才占位，保证终端不被无谓压缩） */}
@@ -337,30 +327,30 @@ export function InstanceDetailPage({
         <aside className="grid content-start gap-3 self-start">
           {/* 实例信息：备注/连接地址可点开就地修改（server-icon 在「编辑」里设置） */}
           <div className="grid content-start gap-2 rounded-xl border bg-card p-3.5">
-            <InfoRow label={fmtLabel('备注')} value={instance.note || '未设置'} />
-            <InfoRow label={fmtLabel('版本')} value={instance.version} />
-            <InfoRow label={fmtLabel('内存')} value={fmtMB(instance.memoryMB)} />
+            <InfoRow label={fmtLabel($('instanceDetail.field.note'))} value={instance.note || $('instanceDetail.value.unset')} />
+            <InfoRow label={fmtLabel($('instanceDetail.field.version'))} value={instance.version} />
+            <InfoRow label={fmtLabel($('instanceDetail.field.memory'))} value={fmtMB(instance.memoryMB)} />
             <InfoRow
-              label={fmtLabel('在线玩家')}
+              label={fmtLabel($('instanceDetail.field.players'))}
               value={players ? `${players.online ?? '—'}/${players.max}` : `—/${instance.maxPlayers}`}
               tone={players && players.online ? 'good' : undefined}
             />
-            <InfoRow label={fmtLabel('连接地址')} value={`${server.host}:${instance.port}`} />
+            <InfoRow label={fmtLabel($('instanceDetail.field.address'))} value={`${server.host}:${instance.port}`} />
             <CopyRow
-              label={fmtLabel('域名')}
+              label={fmtLabel($('instanceDetail.field.domain'))}
               value={instance.address}
-              placeholder="未设置"
+              placeholder={$('instanceDetail.value.unset')}
               onCopy={handleCopy}
             />
             {instance.address ? (
               <div className="flex min-w-0 items-start justify-between gap-2 px-1">
                 {!running ? (
                   <span className="text-[11px] leading-snug text-muted-foreground">
-                    实例未启动，暂不检测域名连通
+                    {$('instanceDetail.domain.notRunning')}
                   </span>
                 ) : domainCheck?.state === 'checking' ? (
                   <span className="text-[11px] leading-snug text-muted-foreground">
-                    域名连通检测中…
+                    {$('instanceDetail.domain.checking')}
                   </span>
                 ) : domainCheck?.result ? (
                   domainCheck.result.error ? (
@@ -374,7 +364,7 @@ export function InstanceDetailPage({
                     </span>
                   )
                 ) : (
-                  <span className="text-[11px] leading-snug text-muted-foreground">未检测</span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">{$('instanceDetail.domain.unchecked')}</span>
                 )}
                 {running && (
                   <Button
@@ -383,19 +373,19 @@ export function InstanceDetailPage({
                     className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
                     disabled={domainCheck?.state === 'checking'}
                     onClick={runDomainCheck}
-                    aria-label="重新检测域名连通性"
-                    title="检测域名连通性"
+                    aria-label={$('instanceDetail.domain.recheck')}
+                    title={$('instanceDetail.domain.check')}
                   >
                     <Globe className="h-3.5 w-3.5" />
                   </Button>
                 )}
               </div>
             ) : null}
-            <InfoRow label={fmtLabel('正版验证')} value={instance.onlineMode ? '开启' : '关闭（离线）'} />
+            <InfoRow label={fmtLabel($('instanceDetail.field.onlineMode'))} value={instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')} />
             {active && (
               <InfoRow
-                label={fmtLabel('运行时间')}
-                value={starting ? '启动中…' : fmtUptime(instance.startedAt)}
+                label={fmtLabel($('instanceDetail.field.uptime'))}
+                value={starting ? $('server.detail.starting') : fmtUptime(instance.startedAt)}
               />
             )}
           </div>
