@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CloudDownload, Play, Plus, RotateCw, Settings, Square } from 'lucide-react';
 import { CreateInstanceDialog } from '@/components/dialogs';
 import { MaskedText } from '@/components/masked-text';
-import { AgentBadge, InstanceStatusBadge } from '@/components/status-badge';
+import { AgentBadge, InstanceStatusBadge, LatencyBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -15,12 +15,12 @@ import {
   errText,
   fmtMB,
   fmtUptime,
-  latencyTone,
   CORE_LABEL,
   type Instance,
   type PlayersSnapshot,
   type ServerSummary,
 } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { subscribeServer } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 
@@ -61,7 +61,7 @@ export function ServerDetailPage({
       api<Instance[]>(`/servers/${id}/instances`)
         .then(setInstances)
         .catch((e) => {
-          if (!quiet) error('实例列表获取失败', errText(e));
+          if (!quiet) error($('server.detail.error.loadInstances'), errText(e));
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,7 +139,7 @@ export function ServerDetailPage({
         method: 'POST',
         body: {},
       });
-      success(action === 'start' ? '启动指令已发送' : '停止指令已发送');
+      success(action === 'start' ? $('server.detail.toast.started') : $('server.detail.toast.stopped'));
       setTimeout(() => {
         loadInstances(true);
         loadPlayers();
@@ -159,7 +159,7 @@ export function ServerDetailPage({
         method: 'POST',
         body: {},
       });
-      success('已重新开始安装', '进度见下方卡片与实例控制台');
+      success($('server.detail.toast.reinstalled'), $('server.detail.toast.reinstalledDetail'));
       setProgress((cur) => ({ ...cur, [name]: 0 }));
       setTimeout(() => loadInstances(true), 800);
     } catch (e) {
@@ -177,76 +177,61 @@ export function ServerDetailPage({
         method: 'POST',
         body: {},
       });
-      success('面板已接手下载', '面板下载核心后自动传输安装，进度见卡片');
+      success($('server.detail.toast.panelTookOver'), $('server.detail.toast.panelTookOverDetail'));
       setProgress((cur) => ({ ...cur, [name]: 0 }));
       setTimeout(() => loadInstances(true), 800);
     } catch (e) {
-      error('面板代下失败', errText(e));
+      error($('server.detail.error.panelInstall'), errText(e));
     } finally {
       setBusyName(null);
     }
   };
 
   if (!server) {
-    return <div className="p-10 text-center text-sm text-muted-foreground">加载中…</div>;
+    return <div className="p-10 text-center text-sm text-muted-foreground">{$('common.loading')}</div>;
   }
-
-  const tone = latencyTone(server.latency);
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 pb-24 pt-7">
       {/* 头部：只保留身份信息与设置入口 */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={() => (navigate('/'))}>
+        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={() => (navigate('/'))}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <h2 className="text-xl font-semibold">{server.name}</h2>
         <AgentBadge online={server.online} installing={server.installing} />
-        {server.latency != null && (
-          <span
-            className={`font-mono text-xs ${
-              tone === 'good'
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : tone === 'fair'
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : 'text-destructive'
-            }`}
-            title="面板 → 服务器 实测往返延迟"
-          >
-            延迟 {server.latency === 0 ? '<1' : server.latency}ms
-          </span>
-        )}
+        {server.latency != null && <LatencyBadge latency={server.latency} />}
         <MaskedText value={server.host} className="text-xs text-muted-foreground" />
         <Button variant="outline" size="sm" className="ml-auto" onClick={onOpenSettings}>
-          <Settings className="h-3.5 w-3.5" /> 服务器设置
+          <Settings className="h-3.5 w-3.5" /> {$('server.detail.settings')}
         </Button>
       </div>
 
       {/* 实例 */}
       <div className="mt-6">
         <div className="flex items-center">
-          <h3 className="text-[15px] font-semibold">MC 实例</h3>
+          <h3 className="text-[15px] font-semibold">{$('server.detail.instances')}</h3>
           <Button
             className="ml-auto"
             size="sm"
             disabled={!server.online}
-            onClick={() => (server.online ? setCreateOpen(true) : error('Agent 未连接，无法创建实例'))}
+            onClick={() => (server.online ? setCreateOpen(true) : error($('server.detail.error.agentOfflineCreate')))}
           >
-            <Plus className="h-4 w-4" /> 新建实例
+            <Plus className="h-4 w-4" /> {$('server.detail.create')}
           </Button>
         </div>
 
         {!server.online ? (
           <div className="mt-4 rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
-            Agent 未连接
+            {$('server.detail.agentOffline')}
             <br />
-            <span className="text-xs">请到「服务器设置」安装或重装 Agent</span>
+            <span className="text-xs">{$('server.detail.agentOffline.hint')}</span>
           </div>
         ) : instances.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
-            还没有 MC 实例
+            {$('server.detail.empty')}
             <br />
-            <span className="text-xs">点击「新建实例」，Agent 会自动从官方源下载对应版本服务端</span>
+            <span className="text-xs">{$('server.detail.empty.hint')}</span>
           </div>
         ) : (
           <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
@@ -269,22 +254,22 @@ export function ServerDetailPage({
                     {inst.note && <p className="-mt-1.5 text-xs text-muted-foreground">{inst.note}</p>}
                     {/* 信息区：4 列网格（标签列按内容自适应，不换行、不浪费宽度） */}
                     <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1.5 text-xs">
-                      <CellLabel>核心</CellLabel>
+                      <CellLabel>{$('server.detail.field.core')}</CellLabel>
                       <CellValue>{CORE_LABEL[inst.source ?? 'vanilla'] ?? inst.source ?? '—'}</CellValue>
-                      <CellLabel>版本</CellLabel>
+                      <CellLabel>{$('server.detail.field.version')}</CellLabel>
                       <CellValue>{inst.version}</CellValue>
 
-                      <CellLabel>内存</CellLabel>
+                      <CellLabel>{$('server.detail.field.memory')}</CellLabel>
                       <CellValue>{fmtMB(inst.memoryMB)}</CellValue>
-                      <CellLabel>玩家</CellLabel>
+                      <CellLabel>{$('server.detail.field.players')}</CellLabel>
                       <CellValue
                         tone={onlineCount ? 'good' : undefined}
                       >{`${inst.status === 'running' ? (onlineCount ?? '—') : '—'}/${p?.max ?? inst.maxPlayers}`}</CellValue>
 
-                      <CellLabel>运行时间</CellLabel>
+                      <CellLabel>{$('server.detail.field.uptime')}</CellLabel>
                       <CellValue className="col-span-3">
                         {inst.status === 'starting'
-                          ? '启动中…'
+                          ? $('server.detail.starting')
                           : inst.status === 'running'
                             ? fmtUptime(inst.startedAt)
                             : '—'}
@@ -294,7 +279,7 @@ export function ServerDetailPage({
                       <CellValue className="col-span-3">{`${server.host}:${inst.port}`}</CellValue>
                       {inst.address && (
                         <>
-                          <CellLabel>域名</CellLabel>
+                          <CellLabel>{$('server.detail.field.domain')}</CellLabel>
                           <CellValue className="col-span-3" tone="primary">{inst.address}</CellValue>
                         </>
                       )}
@@ -302,7 +287,7 @@ export function ServerDetailPage({
                     {inst.status === 'downloading' && (
                       <div className="grid gap-1">
                         <span className="text-xs text-muted-foreground">
-                          正在下载 server.jar… {progress[inst.name] ?? 0}%
+                          {$('server.detail.downloading', progress[inst.name] ?? 0)}
                         </span>
                         <Progress value={progress[inst.name] ?? 0} className="h-1.5" showValue />
                       </div>
@@ -310,20 +295,20 @@ export function ServerDetailPage({
                     {inst.status === 'failed' && (
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="min-w-0 flex-1 text-xs text-destructive">
-                          {inst.error || '安装失败'}
+                          {inst.error || $('server.detail.error.installFailed')}
                         </p>
                         {inst.source !== 'upload' && (
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={busyName === inst.name}
-                            title="服务器拉不动核心站点时，由面板下载后经加密通道传到服务器"
+                            title={$('server.detail.panelInstall.tooltip')}
                             onClick={(e) => {
                               e.stopPropagation();
                               panelInstall(inst.name);
                             }}
                           >
-                            <CloudDownload className="h-3.5 w-3.5" /> 面板代下
+                            <CloudDownload className="h-3.5 w-3.5" /> {$('server.detail.panelInstall')}
                           </Button>
                         )}
                         <Button
@@ -335,7 +320,7 @@ export function ServerDetailPage({
                             retryInstall(inst.name);
                           }}
                         >
-                          <RotateCw className="h-3.5 w-3.5" /> 重试安装
+                          <RotateCw className="h-3.5 w-3.5" /> {$('server.detail.retryInstall')}
                         </Button>
                       </div>
                     )}
@@ -353,7 +338,7 @@ export function ServerDetailPage({
                             op(inst.name, 'stop');
                           }}
                         >
-                          <Square className="h-3.5 w-3.5" /> 停止
+                          <Square className="h-3.5 w-3.5" /> {$('server.detail.stop')}
                         </Button>
                       ) : (
                         <Button
@@ -366,7 +351,7 @@ export function ServerDetailPage({
                             op(inst.name, 'start');
                           }}
                         >
-                          <Play className="h-3.5 w-3.5" /> 启动
+                          <Play className="h-3.5 w-3.5" /> {$('server.detail.start')}
                         </Button>
                       )}
                     </div>
