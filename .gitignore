@@ -37,3 +37,6 @@ Thumbs.db
 
 # 官网（另一个 agent 开发中，独立管理，不入本仓库）
 /website/
+
+# 第三方参考仓库（只读克隆，仅用于技术调研，不入本仓库）
+/.opanel-reference/
