@@ -27,14 +27,18 @@ export type Translations = Record<string, string>
 
 /**
  * 允许的键 —— 以中文包为准。
- * 因此**新增文案必须先写进 zh 包**；en 包漏了同名的键会在编译期被下面的
- * `Record<TranslationKey, string>` 拦下。
+ * 因此**新增文案必须先写进 zh 包**；en 包缺键或多键由下面的类型守卫拦下。
  */
 export type TranslationKey = keyof typeof zh
 
-// 编译期守卫：en 必须包含 zh 的全部键且没有多余键。
-// 这行不产生任何运行时代码，纯粹是类型检查。
-const _enCompleteness: Record<TranslationKey, string> = en
+// 编译期守卫：en 必须**恰好**包含 zh 的全部键（既不缺也不多）。
+//
+// ⚠ 这里必须用 `satisfies` 而不是 `const x: Record<TranslationKey, string> = en`：
+//   赋值给 Record 时 TS 的「多余属性检查」只对**对象字面量**生效，
+//   而 `en` 是一个变量引用 —— 缺键不会报错，多键也不会报错。
+//   早期版本正是踩了这个坑：以为有守卫，实际 en 少了 19 个键 tsc 却是绿的。
+//   `satisfies` 保持 en 的字面量类型并强制其键集与 Record 完全一致。
+const _enCompleteness = en satisfies Record<TranslationKey, string>
 void _enCompleteness
 
 export const LANGUAGES: Record<LanguageCode, Translations> = {
