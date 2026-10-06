@@ -24,3 +24,6 @@ web/dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ZCode 会话工作区
+.zcode/

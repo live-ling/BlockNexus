@@ -182,7 +182,8 @@ export function PluginConfigDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[88vh] w-[min(1100px,94vw)] max-w-[1100px] flex-col gap-3">
+      {/* 宽度须在 sm: 变体内覆盖基件的 sm:max-w-sm（512px）；无变体的 max-w-* 会被它压回去 */}
+      <DialogContent className="flex max-h-[88vh] flex-col gap-3 sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <SlidersHorizontal className="h-4 w-4" /> 插件配置 · {instance.name}
