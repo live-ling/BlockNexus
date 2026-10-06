@@ -113,4 +113,9 @@ export const zh = {
   'badge.online': '在线',
   'badge.latency.tooltip': '面板 → 服务器 实测往返延迟',
   'badge.latency': '延迟 {0}ms',
+
+  // ---------- App 级事件提示 ----------
+  'app.agentUpdate.failed': 'Agent 自动更新失败',
+  'app.agentUpdate.done': 'Agent 已自动更新',
+  'app.agentUpdate.doneDetail': '远端 Agent 现在与面板版本一致',
 } as const

@@ -106,4 +106,9 @@ export const en = {
   'badge.online': 'Online',
   'badge.latency.tooltip': 'Measured panel → server round-trip latency',
   'badge.latency': 'Latency {0}ms',
+
+  // ---------- App 级事件提示 ----------
+  'app.agentUpdate.failed': 'Agent auto-update failed',
+  'app.agentUpdate.done': 'Agent updated',
+  'app.agentUpdate.doneDetail': 'The remote Agent now matches the panel version',
 } as const

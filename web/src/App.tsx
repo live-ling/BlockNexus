@@ -107,8 +107,8 @@ export function App() {
       // Agent 自动更新（版本落后时面板自动执行；结果也刷新服务器数据）
       if (e.type === 'agent-update') {
         const st = e.state as 'updating' | 'failed' | 'done';
-        if (st === 'failed') toastError('Agent 自动更新失败', e.error || '');
-        if (st === 'done') toastSuccess('Agent 已自动更新', '远端 Agent 现在与面板版本一致');
+        if (st === 'failed') toastError($('app.agentUpdate.failed'), e.error || '');
+        if (st === 'done') toastSuccess($('app.agentUpdate.done'), $('app.agentUpdate.doneDetail'));
         setServers((cur) =>
           cur.map((s) =>
             s.id === e.serverId
