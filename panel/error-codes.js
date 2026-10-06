@@ -36,6 +36,11 @@ const ERROR_CODES = {
     zh: '尝试次数过多，请 {seconds} 秒后再试',
     en: 'Too many attempts. Try again in {seconds} seconds',
   },
+  'auth.too-many-attempts-minutes': {
+    status: 429,
+    zh: '尝试次数过多，请 {minutes} 分钟后再试',
+    en: 'Too many attempts. Try again in {minutes} minutes',
+  },
   'auth.login-locked': {
     status: 403,
     zh: '尝试次数过多，已锁定 {minutes} 分钟',
@@ -84,22 +89,23 @@ const ERROR_CODES = {
     en: 'Please wait {seconds} seconds',
   },
   'auth.reset.code-expired': {
-    status: 403,
+    // 状态码一律沿用改造前的实现（这些路径原本都用 400），不借迁移之机改语义
+    status: 400,
     zh: '验证码已过期，请重新获取',
     en: 'The verification code has expired. Request a new one',
   },
   'auth.reset.code-wrong': {
-    status: 403,
+    status: 400,
     zh: '验证码不正确（还可尝试 {left} 次）',
     en: 'Incorrect verification code ({left} attempts left)',
   },
   'auth.reset.verify-too-many': {
-    status: 429,
+    status: 400,
     zh: '验证码尝试次数过多，请重新获取',
     en: 'Too many verification attempts. Request a new code',
   },
   'auth.reset.ticket-invalid': {
-    status: 403,
+    status: 400,
     zh: '验证已失效，请先获取并验证邮箱验证码',
     en: 'Verification expired. Request and verify an email code first',
   },
