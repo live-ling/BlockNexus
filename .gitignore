@@ -27,3 +27,9 @@ Thumbs.db
 
 # ZCode 会话工作区
 .zcode/
+
+# 外壳目录标记（build-exe.ps1 写入，外壳目录就是仓库根）
+/root.txt
+
+# Release 产物
+/release/
