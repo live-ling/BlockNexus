@@ -11,9 +11,21 @@ Minecraft 服务器管理面板：本地 Web 面板（Express + WebView2 外壳�
 ```bash
 npm run build:web     # 前端到 web/dist（面板托管的就是它）
 npm run build:agent   # 重新生成 agent/agent.js（改 agent/src/** 后必须跑，忘跑会被测试拦下）
-npm run test:agent    # 全部 Agent 测试（零依赖，不需要面板与真实服务器）
+npm run test:agent    # 全部 Agent 测试（零依赖测试框架，不需要面板与真实服务器）
 powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1   # 托盘外壳 exe（会结束运行中的托盘）
 ```
+
+## Agent 侧约束（2026-10-06 更新）
+
+- **允许加第三方依赖**（旧约束「零依赖」已放宽）。但**部署链路的前提要保住**：SSH 只上传一个文件、
+  systemd `ExecStart=/usr/bin/env node {DIR}/agent.js`、面板 `/agent.js` 匿名下载、README 的手动 `curl` 安装。
+  因此**加依赖要走「内联进产物」而不是「目标机 npm install」**，详见 `docs/iteration-roadmap.md` §4.3。
+- ⚠️ 两处会让「直接 npm i」失败的闸，改依赖前必读：
+  1. `agent/build.js` **只改写相对 require**，裸模块名原样透传 → 需扩展打包器才能内联 npm 包；
+  2. `agent/test-bundle-fresh.js` 有一条**拒绝非标准库 require** 的断言 → 内联依赖后要改成
+     「不允许出现 `node_modules` 路径或未内联的裸模块名」，**不能直接删掉这条防护**。
+- **内存占用必须尽量小**（Agent 跑在 MC 服务器上，与游戏争资源）。给按实例/按会话增长的 Map 加上限，
+  参照 `loginFails` 那次的「表满淘汰最旧而非拒绝服务」思路。
 
 ## 发版流程
 
