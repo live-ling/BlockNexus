@@ -461,7 +461,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     try {
       res.json({ text: fs.readFileSync(path.join(__dirname, '..', 'LICENSE'), 'utf8') });
     } catch {
-      res.status(404).json({ error: 'LICENSE 未随面板部署' });
+      fail(res, 'internal.license-missing');
     }
   });
 
@@ -498,13 +498,13 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       rec.windowStart = now;
     }
     if (rec.count >= FORGOT_MAX_PER_WINDOW) {
-      return res.status(429).json({
-        error: `发送过于频繁，请 ${Math.ceil((rec.windowStart + FORGOT_WINDOW_MS - now) / 60000)} 分钟后再试`,
+      return fail(res, 'auth.reset.send-too-frequent', {
+        minutes: Math.ceil((rec.windowStart + FORGOT_WINDOW_MS - now) / 60000),
       });
     }
     if (now - rec.lastAt < FORGOT_COOLDOWN_MS) {
-      return res.status(429).json({
-        error: `请 ${Math.ceil((FORGOT_COOLDOWN_MS - (now - rec.lastAt)) / 1000)} 秒后再试`,
+      return fail(res, 'auth.reset.cooldown', {
+        seconds: Math.ceil((FORGOT_COOLDOWN_MS - (now - rec.lastAt)) / 1000),
       });
     }
     // 不论邮箱是否匹配都计数：否则不匹配的请求可以无限打（拿它探测+轰炸管理员邮箱）
@@ -535,7 +535,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         mailTpl.resetCodeMail({ code }),
       );
     } catch (e) {
-      return res.status(502).json({ error: '邮件发送失败: ' + e.message });
+      return fail(res, 'notification.send-failed', { detail: e.message });
     }
     res.json({ ok: true, sent: true, cooldownSec: FORGOT_COOLDOWN_MS / 1000 });
   });
@@ -546,9 +546,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const now = Date.now();
     const rec = verifyFails.get(ip);
     if (rec && rec.until > now) {
-      return res.status(429).json({
-        error: `尝试次数过多，请 ${Math.ceil((rec.until - now) / 60000)} 分钟后再试`,
-      });
+      return fail(res, 'auth.too-many-attempts-minutes', { minutes: Math.ceil((rec.until - now) / 60000) });
     }
     const code = String((req.body || {}).code || '').trim();
     const rt = config.data.panel.resetCode;
@@ -560,7 +558,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (codeTries.count > VERIFY_MAX_GLOBAL) {
         delete config.data.panel.resetCode;
         config.save();
-        return res.status(400).json({ error: '验证码尝试次数过多，请重新获取' });
+        return fail(res, 'auth.reset.verify-too-many');
       }
     }
     if (!usable || !/^\d{6}$/.test(code) || !hashEquals(rt && rt.hash, code)) {
@@ -569,11 +567,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       const until = count >= VERIFY_MAX_FAILS ? now + VERIFY_LOCK_MS : 0;
       verifyFails.set(ip, { count, until, at: now });
       if (until) {
-        return res.status(429).json({ error: '尝试次数过多，已锁定 15 分钟，请稍后再试' });
+        return fail(res, 'auth.reset.relock-15min');
       }
-      return res.status(400).json({
-        error: usable ? `验证码不正确（还可尝试 ${VERIFY_MAX_FAILS - count} 次）` : '验证码已过期，请重新获取',
-      });
+      if (usable) {
+        return fail(res, 'auth.reset.code-wrong', { left: Math.max(0, VERIFY_MAX_FAILS - count) });
+      }
+      return fail(res, 'auth.reset.code-expired');
     }
     // 通过：验证码一次性作废（防止同码二次使用），换一张短时改密票据
     verifyFails.delete(ip);
@@ -589,7 +588,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const b = req.body || {};
     const password = String(b.password ?? '');
     if (password.length < 6) {
-      return res.status(400).json({ error: '密码至少 6 位' });
+      return fail(res, 'auth.password-too-short');
     }
     const now = Date.now();
     const ticket = String(b.ticket || '');
@@ -610,7 +609,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       }
     }
     if (!ok) {
-      return res.status(400).json({ error: '验证已失效，请先获取并验证邮箱验证码' });
+      return fail(res, 'auth.reset.ticket-invalid');
     }
     config.setCredentials({ password });
     config.data.panel.authEnabled = true;
@@ -707,13 +706,13 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (b.authEnabled) {
         const newUser = String(b.username ?? '').trim();
         if (newUser && !/^[A-Za-z0-9_.@-]{3,40}$/.test(newUser)) {
-          return res.status(400).json({ error: '用户名需 3-40 位，可用字母数字与 _ . @ -' });
+          return fail(res, 'auth.username-invalid');
         }
         if (!hasPassword && (!b.password || String(b.password).length < 6)) {
-          return res.status(400).json({ error: '启用密码保护需要至少 6 位的密码' });
+          return fail(res, 'auth.password-too-short-for-protection');
         }
         if (b.password && String(b.password).length < 6) {
-          return res.status(400).json({ error: '密码至少 6 位' });
+          return fail(res, 'auth.password-too-short');
         }
         config.setCredentials({ username: newUser || undefined, password: b.password || undefined });
         config.data.panel.authEnabled = true;
@@ -744,7 +743,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (b.adminEmail !== undefined) {
       const e = String(b.adminEmail).trim();
       if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
-        return res.status(400).json({ error: '邮箱格式不正确' });
+        return fail(res, 'auth.reset.email-format-invalid');
       }
       st.adminEmail = e;
     }
@@ -772,7 +771,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (a.enabled !== undefined) st.ai.enabled = !!a.enabled;
       if (a.baseUrl !== undefined) {
         const u = String(a.baseUrl).trim().replace(/\/+$/, '');
-        if (u && !/^https?:\/\//i.test(u)) return res.status(400).json({ error: '接口地址需以 http:// 或 https:// 开头' });
+        if (u && !/^https?:\/\//i.test(u)) return fail(res, 'ai.url-invalid');
         st.ai.baseUrl = u;
       }
       if (a.model !== undefined) st.ai.model = String(a.model).trim();
@@ -787,8 +786,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/settings/smtp-test', async (req, res) => {
     const st = config.data.settings;
     try {
-      if (!smtpConfigured()) return res.status(400).json({ error: '请先填写 SMTP 服务器、用户名与密码并保存' });
-      if (!st.adminEmail) return res.status(400).json({ error: '请先在「通知设置」中填写管理员邮箱' });
+      if (!smtpConfigured()) return fail(res, 'settings.smtp-incomplete');
+      if (!st.adminEmail) return fail(res, 'settings.admin-email-missing');
       await sendMail(
         st.adminEmail,
         '[BlockNexus] SMTP 测试邮件',
@@ -796,7 +795,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       );
       res.json({ ok: true });
     } catch (e) {
-      res.status(502).json({ error: '发送失败: ' + e.message });
+      fail(res, 'notification.send-failed', { detail: e.message });
     }
   });
 
@@ -836,7 +835,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   function requireServer(req, res) {
     const server = config.getServer(req.params.id);
     if (!server) {
-      res.status(404).json({ error: '服务器不存在' });
+      fail(res, 'server.not-found');
       return null;
     }
     return server;
@@ -855,7 +854,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // 服务器卡片排序（首页拖动后持久化）；返回重排后的完整列表
   router.post('/servers/reorder', (req, res) => {
     const ids = (req.body || {}).ids;
-    if (!Array.isArray(ids)) return res.status(400).json({ error: '缺少 ids 数组' });
+    if (!Array.isArray(ids)) return fail(res, 'instance.ids-required');
     config.reorderServers(ids);
     res.json({ ok: true });
   });
@@ -875,7 +874,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // 连接失败返回 400 + error；本机地址不走 SSH，由面板直接托管 Agent。
   router.post('/servers/ssh-check', async (req, res, next) => {
     const b = req.body || {};
-    if (!b.host) return res.status(400).json({ error: '缺少主机地址' });
+    if (!b.host) return fail(res, 'server.host-required');
     if (localAgent.isLocalHost(b.host)) {
       return res.json({
         ok: true,
@@ -905,7 +904,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
   router.post('/servers', (req, res) => {
     const b = req.body || {};
-    if (!b.host) return res.status(400).json({ error: '缺少主机地址' });
+    if (!b.host) return fail(res, 'server.host-required');
     const server = config.addServer(b);
     hub.syncOutbound();
     res.json(sanitize(server, { revealToken: true }));
@@ -993,9 +992,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/servers/:id/install', async (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
-    if (installing.has(server.id)) return res.status(409).json({ error: '该服务器正在安装中' });
+    if (installing.has(server.id)) return fail(res, 'server.install-in-progress');
     if ((server.agent.mode || 'outbound') === 'inbound' && !server.agent.panelUrl) {
-      return res.status(400).json({ error: '该服务器使用「Agent 回连面板」模式，需要填写面板地址' });
+      return fail(res, 'server.panel-url-required');
     }
     installing.add(server.id);
     config.updateServer(server.id, { installing: true });
@@ -1742,16 +1741,16 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/servers/:id/instances/:name/panel-install', async (req, res, next) => {
     const server = requireServer(req, res);
     if (!server) return;
-    if (!hub.isOnline(server.id)) return res.status(502).json({ error: 'Agent 未连接，无法面板代下' });
+    if (!hub.isOnline(server.id)) return fail(res, 'server.agent-offline-panel-install');
     // 常见错误同步校验、立即报给用户；下载+传输可能要几分钟，放后台执行，进度走 SSE 与控制台
     try {
       const list = await hub.request(server.id, 'instance.list', {}, 20000);
       const inst = (Array.isArray(list) ? list : []).find((x) => x && x.name === req.params.name);
-      if (!inst) return res.status(404).json({ error: '实例不存在' });
+      if (!inst) return fail(res, 'instance.not-found');
       if ((inst.source || 'vanilla') === 'upload') {
-        return res.status(400).json({ error: '上传型实例请在文件管理里直接上传 server.jar' });
+        return fail(res, 'instance.upload-core-manual');
       }
-      if (inst.status === 'downloading') return res.status(409).json({ error: 'Agent 正在安装中，无需面板代下' });
+      if (inst.status === 'downloading') return fail(res, 'server.agent-installing-no-panel-install');
     } catch (e) {
       return next(e);
     }
@@ -2197,7 +2196,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const apiKey = b.apiKey ? String(b.apiKey).trim() : st.ai.apiKey;
     const endpoint = aiEndpoint(baseUrl);
     if (!endpoint || !apiKey || !model) {
-      return res.status(400).json({ error: '请先填写接口地址、密钥与模型' });
+      return fail(res, 'ai.connection-incomplete-with-model');
     }
     try {
       const r = await aiChat({
@@ -2225,7 +2224,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
           : null,
       });
     } catch (e) {
-      res.status(502).json({ error: '连接失败: ' + e.message });
+      fail(res, 'ai.connect-failed', { detail: e.message });
     }
   });
 
@@ -2237,7 +2236,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const apiKey = b.apiKey ? String(b.apiKey).trim() : st.ai.apiKey;
     const url = aiModelsUrl(baseUrl);
     if (!url || !apiKey) {
-      return res.status(400).json({ error: '请先填写接口地址与密钥' });
+      return fail(res, 'ai.connection-incomplete');
     }
     try {
       const data = await aiListModels({ url, apiKey });
@@ -2254,7 +2253,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       });
       res.json({ ok: true, models: uniq });
     } catch (e) {
-      res.status(502).json({ error: '查询模型失败: ' + e.message });
+      fail(res, 'ai.models-failed', { detail: e.message });
     }
   });
 
@@ -2264,8 +2263,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!server) return;
     const st = config.data.settings;
     const ai = st.ai || {};
-    if (!ai.enabled) return res.status(400).json({ error: 'AI 日志分析未启用，请先在面板设置中开启' });
-    if (!ai.apiKey || !ai.model) return res.status(400).json({ error: '请先在面板设置中填写 AI 接口密钥与模型' });
+    if (!ai.enabled) return fail(res, 'ai.disabled');
+    if (!ai.apiKey || !ai.model) return fail(res, 'ai.config-incomplete');
 
     const b = req.body || {};
     const question = String(b.question || '').trim().slice(0, 2000);
@@ -2297,7 +2296,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       return next(e);
     }
     if (!logText.trim()) {
-      return res.status(400).json({ error: '当前没有可分析的日志（实例可能未运行过）' });
+      return fail(res, 'ai.no-logs');
     }
 
     const messages = [
@@ -2864,7 +2863,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/servers/:id/uninstall', async (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
-    if (installing.has(server.id)) return res.status(409).json({ error: '该服务器正在执行安装/卸载任务' });
+    if (installing.has(server.id)) return fail(res, 'server.install-busy');
     installing.add(server.id);
     res.json({ ok: true, started: true });
 
@@ -2943,9 +2942,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const server = requireServer(req, res);
     if (!server) return;
     if (!localAgent.isLocalHost(server.host)) {
-      return res.status(400).json({ error: '该服务器不是本机服务器' });
+      return fail(res, 'panel.not-local-server');
     }
-    if (installing.has(server.id)) return res.status(409).json({ error: '该服务器正在执行安装/卸载任务' });
+    if (installing.has(server.id)) return fail(res, 'server.install-busy');
     installing.add(server.id);
     config.updateServer(server.id, { installing: true });
     res.json({ ok: true, started: true });
@@ -2974,9 +2973,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const server = requireServer(req, res);
     if (!server) return;
     if (!localAgent.isLocalHost(server.host)) {
-      return res.status(400).json({ error: '该服务器不是本机服务器' });
+      return fail(res, 'panel.not-local-server');
     }
-    if (installing.has(server.id)) return res.status(409).json({ error: '该服务器正在执行安装/卸载任务' });
+    if (installing.has(server.id)) return fail(res, 'server.install-busy');
     installing.add(server.id);
     res.json({ ok: true, started: true });
     taskLogReset(server.id, 'uninstall');
@@ -3016,8 +3015,19 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // ---------- 错误处理 ----------
   // eslint-disable-next-line no-unused-vars
   router.use((err, req, res, next) => {
-    const code = err.code === 'AGENT_OFFLINE' ? 502 : err.code === 'AGENT_TIMEOUT' ? 504 : 500;
-    res.status(err.status || code).json({ error: err.message });
+    if (!err) return res.status(500).json(errorResponse('internal.error').body);
+    // 已知的通道故障 → 稳定 code（状态码取自码表）
+    const known = err.code === 'AGENT_OFFLINE' ? 'agent.offline'
+      : err.code === 'AGENT_TIMEOUT' ? 'agent.timeout'
+        : null;
+    if (known) {
+      const { status, body } = errorResponse(known);
+      // 保留 Agent 的原始说明作为 error 文案（排查时需要它），code 给前端做本地化与分支
+      return res.status(status).json({ error: err.message || body.error, code: body.code });
+    }
+    // 其余：保留原始 message，避免丢失排查细节；code 标为 internal.error
+    const fb = errorResponse('internal.error').body;
+    res.status(err.status || 500).json({ error: err.message || fb.error, code: fb.code });
   });
 
   return router;
