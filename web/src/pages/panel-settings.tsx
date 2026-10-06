@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { aiListModels, aiTest, api, errText, getVersion, type AiTestResult, type AppVersion, type PanelSettings } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 // 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
@@ -67,7 +68,7 @@ export function PanelSettingsPage({
           },
         });
       })
-      .catch((e) => error('读取设置失败', errText(e)));
+      .catch((e) => error($('panelSettings.error.load'), errText(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -76,21 +77,21 @@ export function PanelSettingsPage({
   }, [load]);
 
   if (!data) {
-    return <div className="p-10 text-center text-sm text-muted-foreground">加载中…</div>;
+    return <div className="p-10 text-center text-sm text-muted-foreground">{$('common.loading')}</div>;
   }
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-5 pb-24 pt-8">
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <h2 className="text-xl font-semibold">面板设置</h2>
+        <h2 className="text-xl font-semibold">{$('panelSettings.title')}</h2>
         <div className="ml-auto">
           <ThemeToggle variant="circle-blur" />
         </div>
       </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">安全凭据 · 对外访问域名 · SMTP 与通知</p>
+      <p className="mt-1.5 text-xs text-muted-foreground">{$('panelSettings.subtitle')}</p>
 
       {/* 同排卡片等高（grid 默认 stretch）；内容密度不同的卡片靠留白对齐，避免「矮一截」 */}
       <div className="mt-6 grid grid-cols-12 gap-5">
@@ -162,9 +163,9 @@ function AboutEntryCard({ accent, className = '' }: { accent: Accent; className?
           <Info className="h-[18px] w-[18px]" />
         </span>
         <span className="grid min-w-0 flex-1 gap-0.5">
-          <b className="text-sm">关于 BlockNexus</b>
+          <b className="text-sm">{$('panelSettings.about.title')}</b>
           <span className="text-xs text-muted-foreground">
-            版本信息、引用服务与开源依赖、免责声明
+            {$('panelSettings.about.desc')}
           </span>
         </span>
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -186,7 +187,7 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
       setBusy(true);
       getVersion(refresh)
         .then(setInfo)
-        .catch((e) => toastError('检查更新失败', errText(e)))
+        .catch((e) => toastError($('panelSettings.version.error.check'), errText(e)))
         .finally(() => setBusy(false));
     },
     [toastError],
@@ -199,8 +200,8 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
   const hasUpdate = !!info?.hasUpdate;
   return (
     <SettingsCard
-      title="版本与更新"
-      description="当前版本与 GitHub 最新 Release 对比"
+      title={$('panelSettings.version.title')}
+      description={$('panelSettings.version.desc')}
       icon={<Rocket className="h-[18px] w-[18px]" />}
       accent={accent}
       className={className}
@@ -209,25 +210,25 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
           hasUpdate ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-              有新版本
+              {$('panelSettings.version.hasNew')}
             </span>
           ) : (
-            <StateChip ok okText="已是最新" badText="" />
+            <StateChip ok okText={$('panelSettings.version.latest')} badText="" />
           )
         ) : undefined
       }
     >
       <div className="grid gap-x-6 gap-y-1.5 text-xs">
         <div className="flex justify-between gap-3">
-          <span className="text-muted-foreground">当前版本</span>
+          <span className="text-muted-foreground">{$('panelSettings.version.current')}</span>
           <span className="font-mono">v{info?.version ?? '…'}</span>
         </div>
         <div className="flex justify-between gap-3">
-          <span className="text-muted-foreground">最新版本</span>
+          <span className="text-muted-foreground">{$('panelSettings.version.latestLabel')}</span>
           <span className="font-mono">{info?.latest ? `v${info.latest}` : '—'}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <span className="shrink-0 text-muted-foreground">源码地址</span>
+          <span className="shrink-0 text-muted-foreground">{$('panelSettings.version.repo')}</span>
           <a
             href={info?.repoUrl}
             target="_blank"
@@ -239,7 +240,7 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
         </div>
         {info?.error && (
           <p className="text-xs leading-snug text-muted-foreground">
-            检查失败：{info.error}（无网络或 GitHub 访问受限时不影响使用）
+            {$('panelSettings.version.checkFailed', info.error)}
           </p>
         )}
         {hasUpdate && info?.releaseUrl && (
@@ -249,7 +250,7 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
             rel="noreferrer"
             className="text-xs text-cyan-600 underline underline-offset-2 hover:text-cyan-500 dark:text-cyan-400"
           >
-            前往 GitHub 查看新版本 →
+            {$('panelSettings.version.goto')}
           </a>
         )}
       </div>
@@ -262,7 +263,7 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
             className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
           >
             <span className="text-xs font-medium text-muted-foreground">
-              更新日志（v{info.latest}）
+              {$('panelSettings.version.changelog', info.latest)}
             </span>
             <span className="ml-auto text-muted-foreground">
               {logOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -278,7 +279,7 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
       <div className="mt-auto flex items-center justify-end pt-1">
         <Button variant="outline" size="sm" disabled={busy} onClick={() => check(true)}>
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
-          {busy ? '检查中…' : '检查更新'}
+          {busy ? $('panelSettings.version.checking') : $('panelSettings.version.check')}
         </Button>
       </div>
     </SettingsCard>
@@ -400,8 +401,8 @@ function AuthCard({
   const needPassword = authOn && !data.authEnabled;
   const pwMissing = needPassword && pw1.length === 0;
   // 只在用户真的输过东西后才报错，避免刚展开就红字警告；空值靠 hint 引导
-  const pw1Error = pwTooShort ? '至少 6 位' : undefined;
-  const pwHint = needPassword ? '至少 6 位，保存后需用它登录' : '已设置，留空表示不修改';
+  const pw1Error = pwTooShort ? $('panelSettings.auth.password.tooShort') : undefined;
+  const pwHint = needPassword ? $('panelSettings.auth.password.hintSet') : $('panelSettings.auth.password.hintKeep');
 
   // 没做任何改动时禁用保存（避免空请求）
   const nothingChanged = authOn === data.authEnabled && pw1.length === 0;
@@ -412,13 +413,13 @@ function AuthCard({
       const body: Record<string, unknown> = { authEnabled: authOn, username: newUser };
       if (authOn && pw1) body.password = pw1;
       const r = await api<{ authEnabled: boolean }>('/settings', { method: 'PUT', body });
-      success(r.authEnabled ? '密码保护已开启' : '密码保护已关闭');
+      success(r.authEnabled ? $('panelSettings.auth.toast.enabled') : $('panelSettings.auth.toast.disabled'));
       setPw1('');
       setPw2('');
       onAuthChanged(r.authEnabled);
       reload();
     } catch (e) {
-      error('保存失败', errText(e));
+      error($('panelSettings.error.save'), errText(e));
     } finally {
       setBusy(false);
     }
@@ -426,8 +427,8 @@ function AuthCard({
 
   return (
     <SettingsCard
-      title="登录保护"
-      description="面板是本地服务，默认无需密码；暴露给局域网/公网时建议开启。"
+      title={$('panelSettings.auth.title')}
+      description={$('panelSettings.auth.desc')}
       icon={<Lock className="h-4 w-4" />}
       accent={accent}
       className={className}
@@ -438,7 +439,7 @@ function AuthCard({
             checked={authOn}
             onCheckedChange={(v) => setAuthOn(v === true)}
           />
-          <StateChip ok={authOn} okText="已启用" badText="未启用" />
+          <StateChip ok={authOn} okText={$('panelSettings.auth.enabled')} badText={$('panelSettings.auth.disabled')} />
         </div>
       }
     >
@@ -452,9 +453,9 @@ function AuthCard({
         {/* 用户名跨整行：下方密码/确认才是稳定双列，避免长短行混排错位 */}
         <Field
           htmlFor="ps-user"
-          label="用户名"
-          hint="3-40 位，可用字母数字与 _ . @ -"
-          error={authOn ? userInvalid ? '格式不符合要求' : undefined : undefined}
+          label={$('panelSettings.auth.username')}
+          hint={$('panelSettings.auth.username.hint')}
+          error={authOn ? userInvalid ? $('panelSettings.auth.username.invalid') : undefined : undefined}
           className="sm:col-span-2"
         >
           <Input
@@ -469,7 +470,7 @@ function AuthCard({
         </Field>
         <Field
           htmlFor="ps-pw1"
-          label="密码"
+          label={$('panelSettings.auth.password')}
           hint={pwHint}
           error={authOn ? pw1Error || undefined : undefined}
         >
@@ -484,9 +485,9 @@ function AuthCard({
         </Field>
         <Field
           htmlFor="ps-pw2"
-          label="确认密码"
-          hint="再次输入上面的密码"
-          error={authOn ? pw2Mismatch ? '两次输入不一致' : undefined : undefined}
+          label={$('panelSettings.auth.passwordConfirm')}
+          hint={$('panelSettings.auth.passwordConfirm.hint')}
+          error={authOn ? pw2Mismatch ? $('panelSettings.auth.passwordConfirm.mismatch') : undefined : undefined}
         >
           <Input
             id="ps-pw2"
@@ -504,7 +505,7 @@ function AuthCard({
           disabled={busy || nothingChanged || userInvalid || userEmpty || pwTooShort || pwMissing || pw2Mismatch}
           onClick={save}
         >
-          保存
+          {$('common.save')}
         </Button>
       </div>
     </SettingsCard>
@@ -530,17 +531,17 @@ function DomainCard({
 
   return (
     <SettingsCard
-      title="公网访问"
-      description="面板部署到公网时的对外地址，用于通知邮件与找回密码邮件。"
+      title={$('panelSettings.domain.title')}
+      description={$('panelSettings.domain.desc')}
       icon={<Globe className="h-4 w-4" />}
       accent={accent}
       className={className}
-      status={<StateChip ok={!!domain.trim()} okText="已绑定" badText="未绑定" />}
+      status={<StateChip ok={!!domain.trim()} okText={$('panelSettings.domain.bound')} badText={$('panelSettings.domain.unbound')} />}
     >
       <Field
         htmlFor="ps-domain"
-        label="绑定域名"
-        hint="例：panel.example.com 或 https://panel.example.com"
+        label={$('panelSettings.domain.label')}
+        hint={$('panelSettings.domain.hint')}
       >
         <Input
           id="ps-domain"
@@ -550,8 +551,9 @@ function DomainCard({
         />
       </Field>
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        HTTPS 证书由 nginx 等反向代理负责，面板本身无需配置 SSL；记得让面板监听{' '}
-        <code className="font-mono">--host 0.0.0.0</code> 并开启登录保护。
+        {$('panelSettings.domain.sslHint.pre')}
+        <code className="font-mono">--host 0.0.0.0</code>
+        {$('panelSettings.domain.sslHint.post')}
       </p>
       <div className="mt-auto flex justify-end">
         <Button
@@ -561,16 +563,16 @@ function DomainCard({
             setBusy(true);
             try {
               await api('/settings', { method: 'PUT', body: { domain } });
-              success('已保存');
+              success($('panelSettings.saved'));
               reload();
             } catch (e) {
-              error('保存失败', errText(e));
+              error($('panelSettings.error.save'), errText(e));
             } finally {
               setBusy(false);
             }
           }}
         >
-          保存
+          {$('common.save')}
         </Button>
       </div>
     </SettingsCard>
@@ -625,17 +627,17 @@ function SmtpCard({
 
   return (
     <SettingsCard
-      title="SMTP 邮件"
-      description="用于服务器离线通知与找回密码邮件；QQ 邮箱用 smtp.qq.com:465，163 用 smtp.163.com:465，密码填授权码。"
+      title={$('panelSettings.smtp.title')}
+      description={$('panelSettings.smtp.desc')}
       icon={<Mail className="h-4 w-4" />}
-      status={<StateChip ok={data.smtpReady} okText="可发信" badText="未配置" />}
+      status={<StateChip ok={data.smtpReady} okText={$('panelSettings.smtp.ready')} badText={$('panelSettings.smtp.notConfigured')} />}
       accent={accent}
       className={className}
     >
       <div className="grid gap-3">
         {/* 与其它卡片一致用等宽双列：非对称模板会让不同卡片的控件左边界对不齐 */}
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field htmlFor="ps-smtp-host" label="SMTP 服务器" hint="例：smtp.qq.com">
+          <Field htmlFor="ps-smtp-host" label={$('panelSettings.smtp.host')} hint={$('panelSettings.smtp.host.hint')}>
             <Input
               id="ps-smtp-host"
               value={host}
@@ -643,7 +645,7 @@ function SmtpCard({
               placeholder="smtp.qq.com"
             />
           </Field>
-          <Field htmlFor="ps-smtp-port" label="端口" hint="465 SSL / 587 STARTTLS">
+          <Field htmlFor="ps-smtp-port" label={$('panelSettings.smtp.port')} hint={$('panelSettings.smtp.port.hint')}>
             <Input
               id="ps-smtp-port"
               inputMode="numeric"
@@ -654,7 +656,7 @@ function SmtpCard({
           </Field>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field htmlFor="ps-smtp-user" label="用户名" hint="通常是邮箱">
+          <Field htmlFor="ps-smtp-user" label={$('panelSettings.smtp.user')} hint={$('panelSettings.smtp.user.hint')}>
             <Input
               id="ps-smtp-user"
               value={user}
@@ -664,8 +666,8 @@ function SmtpCard({
           </Field>
           <Field
             htmlFor="ps-smtp-pass"
-            label="密码 / 授权码"
-            hint={data.smtp.hasPass ? '已保存，留空不修改' : undefined}
+            label={$('panelSettings.smtp.pass')}
+            hint={data.smtp.hasPass ? $('panelSettings.smtp.pass.hintSaved') : undefined}
           >
             <Input
               id="ps-smtp-pass"
@@ -679,22 +681,22 @@ function SmtpCard({
         <div className="grid content-start gap-3 sm:grid-cols-2">
           <Field
             htmlFor="ps-smtp-from"
-            label="发件人"
-            hint="留空则使用 SMTP 用户名；可填「BlockNexus <你邮箱地址>」显示署名"
-            error={fromInvalid ? '发件人应为邮箱地址，或「显示名 <邮箱地址>」格式' : undefined}
+            label={$('panelSettings.smtp.from')}
+            hint={$('panelSettings.smtp.from.hint')}
+            error={fromInvalid ? $('panelSettings.smtp.from.invalid') : undefined}
           >
             <Input
               id="ps-smtp-from"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              placeholder="BlockNexus <你邮箱地址>"
+              placeholder={$('panelSettings.smtp.from.placeholder')}
             />
           </Field>
           {/* items-stretch 让开关块与左侧输入框等高，基线不再错位 */}
           <div className="flex">
             <ToggleRow
-              title="SSL/TLS"
-              description={secure ? '465 端口直连 SSL' : '587 STARTTLS 或明文'}
+              title={$('panelSettings.smtp.tls')}
+              description={secure ? $('panelSettings.smtp.secureOn') : $('panelSettings.smtp.secureOff')}
               checked={secure}
               onCheckedChange={setSecure}
               className="w-full"
@@ -712,16 +714,16 @@ function SmtpCard({
             try {
               await api('/settings', { method: 'PUT', body: saveBody() });
               await api('/settings/smtp-test', { method: 'POST', body: {} });
-              success('测试邮件已发送', '请查收管理员邮箱');
+              success($('panelSettings.smtp.testSent'), $('panelSettings.smtp.testSentDetail'));
               reload();
             } catch (e) {
-              error('测试失败', errText(e));
+              error($('panelSettings.smtp.testFailed'), errText(e));
             } finally {
               setTesting(false);
             }
           }}
         >
-          <MailCheck className="h-3.5 w-3.5" /> {testing ? '发送中…' : '保存并发送测试邮件'}
+          <MailCheck className="h-3.5 w-3.5" /> {testing ? $('panelSettings.smtp.testing') : $('panelSettings.smtp.saveAndTest')}
         </Button>
         <Button
           size="sm"
@@ -730,16 +732,16 @@ function SmtpCard({
             setBusy(true);
             try {
               await api('/settings', { method: 'PUT', body: saveBody() });
-              success('SMTP 已保存');
+              success($('panelSettings.smtp.saved'));
               reload();
             } catch (e) {
-              error('保存失败', errText(e));
+              error($('panelSettings.error.save'), errText(e));
             } finally {
               setBusy(false);
             }
           }}
         >
-          保存
+          {$('common.save')}
         </Button>
       </div>
     </SettingsCard>
@@ -751,37 +753,37 @@ function AiTestSummary({ result }: { result: AiTestResult }) {
   const ms = (n?: number) => (n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(2) + ' s' : n + ' ms');
   const u = result.usage;
   const tokens =
-    u && u.totalTokens != null ? String(u.totalTokens) : u ? '—' : '未返回';
+    u && u.totalTokens != null ? String(u.totalTokens) : u ? '—' : $('panelSettings.ai.test.tokensMissing');
   const detail =
     u && (u.promptTokens != null || u.completionTokens != null)
-      ? `（提示 ${u.promptTokens ?? '—'} / 补全 ${u.completionTokens ?? '—'}）`
+      ? $('panelSettings.ai.test.usageDetail', u.promptTokens ?? '—', u.completionTokens ?? '—')
       : '';
   return (
     <div className="grid gap-2 rounded-lg border bg-muted/30 px-3 py-2.5 text-xs">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-muted-foreground">状态</span>
+          <span className="text-muted-foreground">{$('panelSettings.ai.test.status')}</span>
           <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            {result.status ?? 200} 正常
+            {$('panelSettings.ai.test.ok', result.status ?? 200)}
           </span>
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-muted-foreground">模型</span>
+          <span className="text-muted-foreground">{$('panelSettings.ai.test.model')}</span>
           <span className="font-mono font-medium">{result.model || '—'}</span>
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-muted-foreground">首字</span>
+          <span className="text-muted-foreground">{$('panelSettings.ai.test.firstToken')}</span>
           <span className="font-mono">{ms(result.firstTokenMs)}</span>
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-muted-foreground">总耗时</span>
+          <span className="text-muted-foreground">{$('panelSettings.ai.test.totalTime')}</span>
           <span className="font-mono">{ms(result.totalMs)}</span>
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-muted-foreground">Token</span>
+          <span className="text-muted-foreground">{$('panelSettings.ai.test.tokens')}</span>
           <span className="font-mono">
             {tokens}
             {detail && <span className="text-muted-foreground"> {detail}</span>}
@@ -790,7 +792,7 @@ function AiTestSummary({ result }: { result: AiTestResult }) {
       </div>
       {result.reply && (
         <div className="text-muted-foreground">
-          回复：<span className="text-foreground">{result.reply}</span>
+          {$('panelSettings.ai.test.reply')}<span className="text-foreground">{result.reply}</span>
         </div>
       )}
     </div>
@@ -824,17 +826,17 @@ function NotifyCard({
 
   return (
     <SettingsCard
-      title="通知设置"
-      description="管理员邮箱同时用于接收通知与找回密码（只有匹配该邮箱的请求才会发信）。"
+      title={$('panelSettings.notify.title')}
+      description={$('panelSettings.notify.desc')}
       icon={<Bell className="h-4 w-4" />}
       accent={accent}
       className={className}
     >
       <Field
         htmlFor="ps-admin-email"
-        label="管理员邮箱"
-        hint="接收通知与重置验证码"
-        error={emailInvalid ? '邮箱格式不正确' : undefined}
+        label={$('panelSettings.notify.email')}
+        hint={$('panelSettings.notify.email.hint')}
+        error={emailInvalid ? $('panelSettings.notify.email.invalid') : undefined}
       >
         <Input
           id="ps-admin-email"
@@ -847,14 +849,14 @@ function NotifyCard({
       {/* 两个开关各占一行（面板宽度必然触发 sm，不能用 sm:flex-row 并排） */}
       <div className="flex flex-col gap-3">
         <ToggleRow
-          title="服务器离线时通知"
-          description="Agent 断开时发信；同一次离线只发一封（24 小时后补发提醒），抖动重连不刷屏"
+          title={$('panelSettings.notify.offline')}
+          description={$('panelSettings.notify.offline.desc')}
           checked={offline}
           onCheckedChange={setOffline}
         />
         <ToggleRow
-          title="恢复上线时通知"
-          description="仅在发送过离线通知后生效"
+          title={$('panelSettings.notify.recovery')}
+          description={$('panelSettings.notify.recovery.desc')}
           checked={recovery}
           onCheckedChange={setRecovery}
         />
@@ -870,16 +872,16 @@ function NotifyCard({
                 method: 'PUT',
                 body: { adminEmail, notify: { offline, recovery } },
               });
-              success('通知设置已保存');
+              success($('panelSettings.notify.toast.saved'));
               reload();
             } catch (e) {
-              error('保存失败', errText(e));
+              error($('panelSettings.error.save'), errText(e));
             } finally {
               setBusy(false);
             }
           }}
         >
-          保存
+          {$('common.save')}
         </Button>
       </div>
     </SettingsCard>
@@ -950,10 +952,10 @@ function AiCard({
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       });
       setModels(list);
-      if (!list.length) error('未查到可用模型', '请检查接口地址与密钥，或手动填写模型名');
-      else success(`查到 ${list.length} 个模型`);
+      if (!list.length) error($('panelSettings.ai.fetchModels.error.none'), $('panelSettings.ai.fetchModels.error.noneDetail'));
+      else success($('panelSettings.ai.fetchModels.success', list.length));
     } catch (e) {
-      error('查询模型失败', errText(e));
+      error($('panelSettings.ai.fetchModels.error'), errText(e));
     } finally {
       setLoadingModels(false);
     }
@@ -961,8 +963,8 @@ function AiCard({
 
   return (
     <SettingsCard
-      title="AI 日志分析"
-      description="实例详情页「AI 分析」用它解读控制台日志；接口需兼容 OpenAI Chat Completions，密钥仅保存在本机。"
+      title={$('panelSettings.ai.title')}
+      description={$('panelSettings.ai.desc')}
       icon={<Sparkles className="h-4 w-4" />}
       accent={accent}
       className={className}
@@ -973,7 +975,7 @@ function AiCard({
             checked={aiOn}
             onCheckedChange={(v) => setAiOn(v === true)}
           />
-          <StateChip ok={aiOn} okText="已启用" badText="未启用" />
+          <StateChip ok={aiOn} okText={$('panelSettings.ai.enabled')} badText={$('panelSettings.ai.disabled')} />
         </div>
       }
     >
@@ -982,9 +984,9 @@ function AiCard({
       <div className="grid gap-3 sm:grid-cols-2">
         <Field
           htmlFor="ps-ai-base"
-          label="接口地址"
-          hint="例：https://api.deepseek.com"
-          error={baseInvalid ? '需以 http:// 或 https:// 开头' : undefined}
+          label={$('panelSettings.ai.base')}
+          hint={$('panelSettings.ai.base.hint')}
+          error={baseInvalid ? $('panelSettings.ai.base.invalid') : undefined}
         >
           <Input
             id="ps-ai-base"
@@ -996,14 +998,14 @@ function AiCard({
         </Field>
         <Field
           htmlFor="ps-ai-model"
-          label="模型"
-          hint={models.length ? `${models.length} 个可选` : '可点右侧「查询模型」拉取列表'}
+          label={$('panelSettings.ai.model')}
+          hint={models.length ? $('panelSettings.ai.model.hintCount', models.length) : $('panelSettings.ai.model.hintFetch')}
         >
           <div className="flex flex-wrap items-center gap-1.5">
             {models.length ? (
               <Select value={model} onValueChange={setModel}>
-                <SelectTrigger id="ps-ai-model" className="w-60" aria-label="模型">
-                  <SelectValue placeholder="选择模型" />
+                <SelectTrigger id="ps-ai-model" className="w-60" aria-label={$('panelSettings.ai.model')}>
+                  <SelectValue placeholder={$('panelSettings.ai.model.placeholder')} />
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
                   {models.map((m) => (
@@ -1027,17 +1029,17 @@ function AiCard({
               size="sm"
               disabled={loadingModels || baseInvalid || !baseTrim || !hasKey}
               onClick={fetchModels}
-              title="用上面的接口地址与密钥拉取服务商模型列表"
+              title={$('panelSettings.ai.fetchModels.tooltip')}
             >
-              {loadingModels ? '查询中…' : '查询模型'}
+              {loadingModels ? $('panelSettings.ai.fetching') : $('panelSettings.ai.fetchModels')}
             </Button>
           </div>
         </Field>
         <Field
           htmlFor="ps-ai-key"
-          label="API 密钥"
-          hint={data.ai.hasKey ? '已保存，留空不修改' : undefined}
-          error={keyMissing ? '填写密钥后才能查询模型或测试连接' : undefined}
+          label={$('panelSettings.ai.key')}
+          hint={data.ai.hasKey ? $('panelSettings.ai.key.hintSaved') : undefined}
+          error={keyMissing ? $('panelSettings.ai.key.hintMissing') : undefined}
           className="sm:col-span-2"
         >
           <Input
@@ -1046,12 +1048,12 @@ function AiCard({
             className="sm:max-w-sm"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={data.ai.hasKey ? '已保存，留空不修改' : 'sk-…'}
+            placeholder={data.ai.hasKey ? $('panelSettings.ai.key.hintSaved') : 'sk-…'}
           />
         </Field>
       </div>
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        分析时会把实例控制台日志（最多最近 500 行，即 Agent 缓冲的全部内容）发给模型；日志可能含玩家名与地址，请自行确认服务商可信。
+        {$('panelSettings.ai.privacy')}
       </p>
       {testResult && <AiTestSummary result={testResult} />}
       <div className="mt-auto flex flex-wrap justify-end gap-2">
@@ -1069,15 +1071,15 @@ function AiCard({
                 ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
               });
               setTestResult(r);
-              success('连接成功', r.reply || '模型已正常响应');
+              success($('panelSettings.ai.test.success'), r.reply || $('panelSettings.ai.test.successDetail'));
             } catch (e) {
-              error('测试失败', errText(e));
+              error($('panelSettings.ai.test.failed'), errText(e));
             } finally {
               setTesting(false);
             }
           }}
         >
-          <Sparkles className="h-3.5 w-3.5" /> {testing ? '测试中…' : '测试连接'}
+          <Sparkles className="h-3.5 w-3.5" /> {testing ? $('panelSettings.ai.test.busy') : $('panelSettings.ai.test.button')}
         </Button>
         <Button
           size="sm"
@@ -1086,17 +1088,17 @@ function AiCard({
             setBusy(true);
             try {
               await api('/settings', { method: 'PUT', body: saveBody() });
-              success(aiOn ? 'AI 日志分析已启用' : 'AI 日志分析已关闭');
+              success(aiOn ? $('panelSettings.ai.toast.enabled') : $('panelSettings.ai.toast.disabled'));
               setApiKey('');
               reload();
             } catch (e) {
-              error('保存失败', errText(e));
+              error($('panelSettings.error.save'), errText(e));
             } finally {
               setBusy(false);
             }
           }}
         >
-          保存
+          {$('common.save')}
         </Button>
       </div>
     </SettingsCard>

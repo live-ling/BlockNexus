@@ -42,6 +42,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { api, errText, type ServerSummary } from '@/lib/api';
 import { abortUpload, uploadFile, uploadFileViaSftp } from '@/lib/upload';
+import { $ } from '@/lib/i18n';
 import { UploadChannelSelect, type UploadChannel } from '@/components/upload-channel';
 import { useToastHelpers } from '@/lib/toast';
 import { ConfirmDialog } from '@/components/dialogs';
@@ -182,7 +183,7 @@ export function FileManagerDialog({
         const entries = await api<FileEntry[]>(`${base}?path=${encodeURIComponent(dir)}`);
         setTree((cur) => mergeChildren(cur, dir, entries));
       } catch (e) {
-        if (!quiet) error('目录读取失败', errText(e));
+        if (!quiet) error($('fileManager.error.load-dir'), errText(e));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,10 +267,10 @@ export function FileManagerDialog({
     if (!preview || draft === null) return;
     try {
       await api(`${base}/content`, { method: 'PUT', body: { path: preview.path, content: draft } });
-      success('已保存', preview.path);
+      success($('common.saved'), preview.path);
       setPreview({ ...preview, content: draft });
     } catch (e) {
-      error('保存失败', errText(e));
+      error($('fileManager.error.save'), errText(e));
     }
   };
 
@@ -297,7 +298,7 @@ export function FileManagerDialog({
       } catch (e) {
         // 出错不 abort：保留 Agent 侧半成品，点重试即断点续传；只有移除条目才真正取消
         setItem({ status: 'error', error: errText(e) });
-        error('上传失败', `${file.name}: ${errText(e)}`);
+        error($('fileManager.error.upload'), $('fileManager.error.upload-detail', file.name, errText(e)));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -335,10 +336,10 @@ export function FileManagerDialog({
     try {
       await api(`${base}/mkdir`, { method: 'POST', body: { path: `${currentDir ? currentDir + '/' : ''}${name}` } });
       setMkdirOpen(false);
-      success('文件夹已创建');
+      success($('fileManager.toast.folder-created'));
       loadDir(currentDir, true);
     } catch (e) {
-      error('创建失败', errText(e));
+      error($('fileManager.error.mkdir'), errText(e));
     }
   };
 
@@ -381,7 +382,10 @@ export function FileManagerDialog({
   const copyOrCut = (mode: 'copy' | 'cut') => {
     if (!batchTargets.length) return;
     setClip({ items: batchTargets, mode });
-    success(mode === 'copy' ? '已复制' : '已剪切', batchTargets.length > 1 ? `${batchTargets.length} 项` : batchTargets[0].name);
+    success(
+      mode === 'copy' ? $('instanceDetail.copied') : $('fileManager.toast.cut'),
+      batchTargets.length > 1 ? $('fileManager.items-count', batchTargets.length) : batchTargets[0].name,
+    );
   };
 
   const pasteClip = async () => {
@@ -389,7 +393,7 @@ export function FileManagerDialog({
     const used = new Set(childNodesOf(currentDir).map((c) => c.name));
     const srcDirs = new Set<string>();
     const pasted: string[] = [];
-    const failed: string[] = [];
+    const failed: { name: string; err: string }[] = [];
     for (const item of clip.items) {
       const name = uniqueName([...used], item.name);
       const target = `${currentDir ? currentDir + '/' : ''}${name}`;
@@ -402,14 +406,19 @@ export function FileManagerDialog({
         pasted.push(target);
         srcDirs.add(parentOf(item.path));
       } catch (e) {
-        failed.push(`${item.name}：${errText(e)}`);
+        failed.push({ name: item.name, err: errText(e) });
       }
     }
     if (pasted.length) {
-      success(clip.mode === 'copy' ? `已粘贴 ${pasted.length} 项` : `已移动 ${pasted.length} 项`, failed.length ? `另有 ${failed.length} 项失败` : undefined);
+      success(
+        clip.mode === 'copy'
+          ? $('fileManager.toast.pasted', pasted.length)
+          : $('fileManager.toast.moved', pasted.length),
+        failed.length ? $('fileManager.toast.paste-extra-failed', failed.length) : undefined,
+      );
       if (clip.mode === 'cut') {
         // 剪切成功的项从剪贴板与勾选集中移除（源路径已不存在）
-        const okPaths = new Set(clip.items.filter((it) => !failed.some((f) => f.startsWith(`${it.name}：`))).map((it) => it.path));
+        const okPaths = new Set(clip.items.filter((it) => !failed.some((f) => f.name === it.name)).map((it) => it.path));
         setClip((cur) => (cur ? { ...cur, items: cur.items.filter((it) => !okPaths.has(it.path)) } : null));
         setChecked((cur) => cur.filter((p) => !okPaths.has(p)));
       }
@@ -418,7 +427,15 @@ export function FileManagerDialog({
         if (d !== currentDir) loadDir(d, true);
       });
     }
-    if (failed.length) error('部分粘贴失败', failed.slice(0, 3).join('；'));
+    if (failed.length) {
+      error(
+        $('fileManager.error.paste-partial'),
+        failed
+          .slice(0, 3)
+          .map((f) => $('fileManager.error.item', f.name, f.err))
+          .join($('fileManager.error.sep')),
+      );
+    }
   };
 
   const renameSelected = async (newName: string) => {
@@ -428,12 +445,12 @@ export function FileManagerDialog({
     try {
       await api(`${base}/move`, { method: 'POST', body: { from: selected.value, to: newPath } });
       setRenameOpen(false);
-      success('已重命名', `${baseName(selected.value)} → ${newName}`);
+      success($('fileManager.toast.renamed'), $('fileManager.toast.renamed-detail', baseName(selected.value), newName));
       setSelected({ ...selected, value: newPath });
       if (preview?.path === selected.value) setPreview({ ...preview, path: newPath });
       loadDir(parent, true);
     } catch (e) {
-      error('重命名失败', errText(e));
+      error($('fileManager.error.rename'), errText(e));
     }
   };
 
@@ -441,7 +458,9 @@ export function FileManagerDialog({
     if (!batchTargets.length || archiveBusy) return;
     const parent = parentOf(batchTargets[0].path);
     const outName =
-      batchTargets.length === 1 ? `${batchTargets[0].name}.tar.gz` : `已选${batchTargets.length}项.tar.gz`;
+      batchTargets.length === 1
+        ? `${batchTargets[0].name}.tar.gz`
+        : $('fileManager.archive.selected-name', batchTargets.length);
     const out = uniqueName(childNodesOf(parent).map((c) => c.name), outName);
     setArchiveBusy(true);
     try {
@@ -449,10 +468,10 @@ export function FileManagerDialog({
         method: 'POST',
         body: { paths: batchTargets.map((t) => t.path), out: `${parent ? parent + '/' : ''}${out}` },
       });
-      success('已压缩', out);
+      success($('fileManager.toast.archived'), out);
       loadDir(parent, true);
     } catch (e) {
-      error('压缩失败', errText(e));
+      error($('fileManager.error.archive'), errText(e));
     } finally {
       setArchiveBusy(false);
     }
@@ -463,11 +482,11 @@ export function FileManagerDialog({
     setArchiveBusy(true);
     try {
       await api(`${base}/extract`, { method: 'POST', body: { path: extractTarget } });
-      success('已解压', `到 /${parentOf(extractTarget)}`);
+      success($('fileManager.toast.extracted'), $('fileManager.toast.extracted-detail', parentOf(extractTarget)));
       setExtractTarget(null);
       loadDir(parentOf(extractTarget), true);
     } catch (e) {
-      error('解压失败', errText(e));
+      error($('fileManager.error.extract'), errText(e));
     } finally {
       setArchiveBusy(false);
     }
@@ -481,13 +500,16 @@ export function FileManagerDialog({
       try {
         await api(`${base}/delete`, { method: 'POST', body: { path: p } });
       } catch (e) {
-        failed.push(`${baseName(p)}：${errText(e)}`);
+        failed.push($('fileManager.error.item', baseName(p), errText(e)));
       }
     }
     if (!failed.length) {
-      success(targets.length > 1 ? `已删除 ${targets.length} 项` : '已删除', baseName(targets[0]));
+      success(
+        targets.length > 1 ? $('fileManager.toast.deleted-count', targets.length) : $('fileManager.toast.deleted'),
+        baseName(targets[0]),
+      );
     } else {
-      error('部分删除失败', failed.slice(0, 3).join('；'));
+      error($('fileManager.error.delete-partial'), failed.slice(0, 3).join($('fileManager.error.sep')));
     }
     setDeleteTargets(null);
     setChecked((cur) => cur.filter((p) => !targets.includes(p)));
@@ -549,12 +571,12 @@ export function FileManagerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[82vh] max-h-[82vh] flex-col sm:max-w-4xl">
         <DialogHeader className="shrink-0">
-          <DialogTitle>文件管理 · {instance}</DialogTitle>
+          <DialogTitle>{`${$('fileManager.title')} · ${instance}`}</DialogTitle>
           <DialogDescription>
             {selected ? (
               <span className="font-mono">/{selected.value}</span>
             ) : (
-              '选择左侧文件查看；文件夹会按需加载'
+              $('fileManager.hint.empty')
             )}
           </DialogDescription>
         </DialogHeader>
@@ -564,7 +586,7 @@ export function FileManagerDialog({
           <div className="w-60 shrink-0 overflow-auto rounded-lg border p-1">
             {tree.length ? (
               <FileTree
-                ariaLabel="实例文件树"
+                ariaLabel={$('fileManager.tree.aria')}
                 value={selected?.value ?? null}
                 onValueChange={selectNode}
                 expandedIds={expanded}
@@ -575,7 +597,7 @@ export function FileManagerDialog({
                 {renderNodes}
               </FileTree>
             ) : (
-              <div className="p-4 text-xs text-muted-foreground">加载中…</div>
+              <div className="p-4 text-xs text-muted-foreground">{$('common.loading')}</div>
             )}
           </div>
 
@@ -583,9 +605,11 @@ export function FileManagerDialog({
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                {currentDir ? `/${currentDir}` : '/（实例根目录）'}
+                {currentDir ? `/${currentDir}` : $('fileManager.path.root')}
                 {checked.length > 0 && (
-                  <span className="ml-2 font-sans text-foreground">已勾选 {checked.length} 项</span>
+                  <span className="ml-2 font-sans text-foreground">
+                    {$('fileManager.checked-count', checked.length)}
+                  </span>
                 )}
               </span>
               <Button
@@ -593,7 +617,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!currentChildren.length}
                 onClick={toggleSelectAll}
-                title={allChecked ? '取消勾选当前目录全部子项' : '勾选当前目录全部子项'}
+                title={allChecked ? $('fileManager.action.uncheck-all') : $('fileManager.action.check-all')}
               >
                 <ListChecks className="h-3.5 w-3.5" />
               </Button>
@@ -602,7 +626,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!batchTargets.length}
                 onClick={() => copyOrCut('copy')}
-                title="复制选中项（可多选，粘贴到目标目录）"
+                title={$('fileManager.action.copy')}
               >
                 <Copy className="h-3.5 w-3.5" />
               </Button>
@@ -611,7 +635,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!batchTargets.length}
                 onClick={() => copyOrCut('cut')}
-                title="剪切选中项（可多选，粘贴到目标目录 = 移动）"
+                title={$('fileManager.action.cut')}
               >
                 <Scissors className="h-3.5 w-3.5" />
               </Button>
@@ -628,8 +652,9 @@ export function FileManagerDialog({
                 onClick={pasteClip}
                 title={
                   clip
-                    ? `粘贴 ${clip.items.length} 项到当前目录${clip.mode === 'cut' ? '（剪切=移动）' : ''}`
-                    : '先复制或剪切文件'
+                    ? $('fileManager.action.paste', clip.items.length) +
+                      (clip.mode === 'cut' ? $('fileManager.action.paste-cut-suffix') : '')
+                    : $('fileManager.action.paste-disabled')
                 }
               >
                 <ClipboardPaste className="h-3.5 w-3.5" />
@@ -640,7 +665,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!selected}
                 onClick={() => setRenameOpen(true)}
-                title="重命名选中项"
+                title={$('fileManager.action.rename')}
               >
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
@@ -649,7 +674,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!batchTargets.length || archiveBusy}
                 onClick={compressSelected}
-                title="压缩选中项为 .tar.gz（可多选，放在第一个选中项所在目录）"
+                title={$('fileManager.action.compress')}
               >
                 <Archive className="h-3.5 w-3.5" />
               </Button>
@@ -658,7 +683,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!selectedIsFile || !selected || !ARCHIVE_EXT.test(selected.value) || archiveBusy}
                 onClick={() => selected && setExtractTarget(selected.value)}
-                title="解压 .zip / .tar.gz / .tgz / .tar 到所在目录"
+                title={$('fileManager.action.extract')}
               >
                 <ArchiveRestore className="h-3.5 w-3.5" />
               </Button>
@@ -667,7 +692,7 @@ export function FileManagerDialog({
                 size="sm"
                 disabled={!batchTargets.some((t) => t.type === 'file')}
                 onClick={triggerDownload}
-                title="下载选中的文件（可多选，仅文件）"
+                title={$('fileManager.action.download')}
               >
                 <Download className="h-3.5 w-3.5" />
               </Button>
@@ -677,12 +702,12 @@ export function FileManagerDialog({
                 className="text-destructive hover:text-destructive"
                 disabled={!batchTargets.length}
                 onClick={() => setDeleteTargets(batchTargets.map((t) => t.path))}
-                title="删除选中项（可多选）"
+                title={$('fileManager.action.delete')}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
               <Button variant="outline" size="sm" onClick={() => mkdirOpen || setMkdirOpen(true)}>
-                <FolderPlus className="h-3.5 w-3.5" /> 新建文件夹
+                <FolderPlus className="h-3.5 w-3.5" /> {$('fileManager.action.mkdir')}
               </Button>
               <Button variant="outline" size="sm" onClick={() => loadDir(currentDir, true)}>
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -692,7 +717,7 @@ export function FileManagerDialog({
                 size="sm"
                 onClick={() => setShowUpload((v) => !v)}
               >
-                <UploadCloud className="h-3.5 w-3.5" /> 上传
+                <UploadCloud className="h-3.5 w-3.5" /> {$('fileManager.action.upload')}
               </Button>
             </div>
 
@@ -706,11 +731,12 @@ export function FileManagerDialog({
                   onRetry={onUploadRetry}
                   onRemove={onUploadRemove}
                   multiple
-                  title="拖拽文件到此处，或点击选择"
-                  description={`将上传到 /${currentDir}${
-                    channel === 'sftp' ? '（SFTP 直传，无大小限制）' : '（大文件自动分块，单文件上限 200MB）'
-                  }`}
-                  browseLabel="选择文件"
+                  title={$('fileManager.upload.drop-title')}
+                  description={
+                    $('fileManager.upload.target', currentDir) +
+                    (channel === 'sftp' ? $('fileManager.upload.sftp-note') : $('fileManager.upload.chunk-note'))
+                  }
+                  browseLabel={$('createInstance.upload.browse')}
                 />
               </div>
             )}
@@ -726,7 +752,7 @@ export function FileManagerDialog({
                     </span>
                     {preview && !previewErr && (
                       <Button size="sm" variant={dirty ? 'default' : 'secondary'} disabled={!dirty} onClick={saveFile}>
-                        <Save className="h-3.5 w-3.5" /> {dirty ? '保存修改' : '已同步'}
+                        <Save className="h-3.5 w-3.5" /> {dirty ? $('fileManager.action.save-changes') : $('fileManager.state.synced')}
                       </Button>
                     )}
                   </div>
@@ -746,8 +772,8 @@ export function FileManagerDialog({
               ) : (
                 <div className="grid flex-1 place-items-center p-4 text-center text-xs text-muted-foreground">
                   {selected
-                    ? '已选中文件夹（上传/新建将作用于该目录）'
-                    : '在左侧选择文件查看与编辑（文本文件）'}
+                    ? $('fileManager.hint.dir-selected')
+                    : $('fileManager.hint.select-to-edit')}
                 </div>
               )}
             </div>
@@ -758,19 +784,19 @@ export function FileManagerDialog({
         <NameDialog
           open={mkdirOpen}
           onOpenChange={setMkdirOpen}
-          title="新建文件夹"
-          description="在当前选中目录下创建。"
-          confirmLabel="创建"
-          placeholder="文件夹名称"
+          title={$('fileManager.action.mkdir')}
+          description={$('fileManager.mkdir.desc')}
+          confirmLabel={$('fileManager.mkdir.confirm')}
+          placeholder={$('fileManager.mkdir.placeholder')}
           onSubmit={mkdir}
         />
         <NameDialog
           open={renameOpen}
           onOpenChange={setRenameOpen}
-          title="重命名"
-          description="在所在目录内改名（也可用剪切+粘贴移动到其他目录）。"
-          confirmLabel="重命名"
-          placeholder="新名称"
+          title={$('fileManager.rename.title')}
+          description={$('fileManager.rename.desc')}
+          confirmLabel={$('fileManager.rename.title')}
+          placeholder={$('fileManager.rename.placeholder')}
           initial={selected ? baseName(selected.value) : ''}
           onSubmit={renameSelected}
         />
@@ -781,8 +807,8 @@ export function FileManagerDialog({
           onOpenChange={(v) => {
             if (!v) setExtractTarget(null);
           }}
-          title={`解压 ${baseName(extractTarget ?? '')}？`}
-          description={`将解压到 /${extractTarget ? parentOf(extractTarget) : ''}（同名文件会被覆盖）。`}
+          title={$('fileManager.extract.confirm-title', baseName(extractTarget ?? ''))}
+          description={$('fileManager.extract.confirm-desc', extractTarget ? parentOf(extractTarget) : '')}
           onConfirm={extractSelected}
         />
 
@@ -794,18 +820,18 @@ export function FileManagerDialog({
           }}
           title={
             deleteTargets && deleteTargets.length > 1
-              ? `删除 ${deleteTargets.length} 项？`
-              : `删除 ${baseName(deleteTargets?.[0] ?? '')}？`
+              ? $('fileManager.delete.confirm-count', deleteTargets.length)
+              : $('fileManager.delete.confirm-one', baseName(deleteTargets?.[0] ?? ''))
           }
           description={
             <div>
               {deleteTargets && deleteTargets.length > 1 && (
                 <p className="mb-1.5 font-mono text-xs">
-                  {deleteTargets.slice(0, 5).map((t) => baseName(t)).join('、')}
-                  {deleteTargets.length > 5 ? ' 等' : ''}
+                  {deleteTargets.slice(0, 5).map((t) => baseName(t)).join($('fileManager.delete.list-sep'))}
+                  {deleteTargets.length > 5 ? $('fileManager.delete.more-suffix') : ''}
                 </p>
               )}
-              <p>所选文件/文件夹（含全部内容）将被永久删除。</p>
+              <p>{$('fileManager.delete.confirm-desc')}</p>
             </div>
           }
           onConfirm={deleteSelected}
@@ -864,7 +890,7 @@ function NameDialog({
         />
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button
             size="sm"
