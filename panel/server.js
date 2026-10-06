@@ -12,6 +12,7 @@ const { Config } = require('./config');
 const { AgentHub } = require('./agentlink');
 const { createApi } = require('./api');
 const { parseTrustProxy } = require('./net');
+const { requestErrorHandler } = require('./http-errors');
 
 // ---------- 启动参数（命令行优先，其次环境变量）----------
 function argOf(name) {
@@ -97,6 +98,16 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// ---------- app 级错误兜底（**必须留在最后**）----------
+// 为什么非补不可：上面的 express.json() 是 **app 级**中间件，在任何 router 之前运行。
+// 它抛出的解析错误**不会**进入 api.js 里那个 router 级错误处理器（那个只在 router 内部生效）。
+// 而此前 server.js 没有 app 级错误处理器 → 落到 Express 内置默认处理器 →
+// NODE_ENV 未设为 production（本项目从不设置它）时会把**完整堆栈**回给客户端。
+// 后果：未认证请求发一个畸形 JSON body 就能拿到面板安装的绝对路径与模块布局
+// （实测确认响应为 text/html + SyntaxError 堆栈，且堆栈同时打到 stderr）。
+// 实现放在 panel/http-errors.js，以便测试直接覆盖同一份代码。
+app.use(requestErrorHandler);
 
 // 面板自身也可上 HTTPS；tlsOn 已在上方判定（createApi 注册时会用到）
 let server;
