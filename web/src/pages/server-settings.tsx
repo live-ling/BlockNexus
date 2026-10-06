@@ -364,7 +364,7 @@ export function ServerSettingsPage({
       </SettingsCard>
 
       {/* Java 环境（多版本安装/切换/卸载） */}
-      <JavaCard server={server} javaBusy={javaBusy} javaMsg={javaMsg} onReload={load} />
+      <JavaCard server={server} javaBusy={javaBusy} javaMsg={javaMsg} onReload={load} onBusyReset={() => { setJavaBusy(false); setJavaMsg(''); }} />
 
       {/* 系统信息 */}
       <SettingsCard
@@ -516,18 +516,23 @@ function JavaCard({
   javaBusy,
   javaMsg,
   onReload,
+  onBusyReset,
 }: {
   server: ServerSummary;
   javaBusy: boolean;
   javaMsg: string;
   onReload: () => void;
+  /** 切换/卸载等同步操作结束后调用：清掉可能被 install.progress 误置的安装中状态 */
+  onBusyReset: () => void;
 }) {
   const { success, error } = useToastHelpers();
   const [javas, setJavas] = useState<JavaListResult | null>(null);
   const [loadErr, setLoadErr] = useState('');
   const [target, setTarget] = useState('21');
-  const [acting, setActing] = useState(false);
+  // 切换/卸载进行中：值为给用户看的提示文案（同步 RPC，返回即结束；期间冻结整卡控件）
+  const [acting, setActing] = useState('');
   const [confirmTarget, setConfirmTarget] = useState<JavaEntry | null>(null);
+  const frozen = javaBusy || !!acting;
 
   const refresh = useCallback(() => {
     listJavas(server.id)
@@ -545,6 +550,7 @@ function JavaCard({
   }, [refresh, server.online, server.info?.java?.raw, server.info?.java?.installed]);
 
   const install = async () => {
+    if (frozen) return; // 已有操作在途：按钮虽已禁用，这里再兜一道防连点
     try {
       const r = await api<{ busy?: boolean }>(`/servers/${server.id}/java-install`, {
         method: 'POST',
@@ -557,7 +563,7 @@ function JavaCard({
   };
 
   const setDefault = async (t: string, label: string) => {
-    setActing(true);
+    setActing(`正在切换默认 Java 到 ${label}…`);
     try {
       await switchJava(server.id, t);
       success(`默认 Java 已切换到 ${label}`);
@@ -566,12 +572,13 @@ function JavaCard({
     } catch (e) {
       error('切换失败', errText(e));
     } finally {
-      setActing(false);
+      setActing('');
+      onBusyReset();
     }
   };
 
   const doUninstall = async (entry: JavaEntry) => {
-    setActing(true);
+    setActing(`正在卸载 ${entry.name}…`);
     try {
       await uninstallJava(server.id, entry.path);
       success(`${entry.name} 已卸载`);
@@ -581,7 +588,8 @@ function JavaCard({
     } catch (e) {
       error('卸载失败', errText(e));
     } finally {
-      setActing(false);
+      setActing('');
+      onBusyReset();
     }
   };
 
@@ -598,7 +606,7 @@ function JavaCard({
       actions={
         server.online && info ? (
           <div className="flex items-center gap-2">
-            <Select value={target} onValueChange={setTarget}>
+            <Select value={target} onValueChange={setTarget} disabled={frozen}>
               <SelectTrigger size="sm" className="w-[190px]">
                 <SelectValue />
               </SelectTrigger>
@@ -610,17 +618,23 @@ function JavaCard({
                 <SelectItem value="8">Java 8（MC ≤ 1.16）</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="secondary" size="sm" disabled={javaBusy} onClick={install}>
+            <Button variant="secondary" size="sm" disabled={frozen} onClick={install}>
               {javaBusy ? '安装中…' : '安装'}
             </Button>
           </div>
         ) : null
       }
     >
-      {javaBusy && (
+      {(javaBusy || acting) && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-          正在安装 Java… {javaMsg && <span className="font-mono">{javaMsg}</span>}
+          {javaBusy ? (
+            <>
+              正在安装 Java… {javaMsg && <span className="font-mono">{javaMsg}</span>}
+            </>
+          ) : (
+            acting
+          )}
         </div>
       )}
 
@@ -663,7 +677,7 @@ function JavaCard({
                       type="button"
                       role="radio"
                       aria-checked={entry.active}
-                      disabled={acting || javaBusy}
+                      disabled={frozen}
                       title={entry.active ? '当前生效' : '设为默认'}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                       onClick={() => !entry.active && setDefault(entry.path, sys ? '系统 Java' : entry.name)}
@@ -685,7 +699,7 @@ function JavaCard({
                         variant="ghost"
                         size="sm"
                         className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        disabled={acting || javaBusy}
+                        disabled={frozen}
                         onClick={() => setConfirmTarget(entry)}
                       >
                         <Trash2 className="h-3.5 w-3.5" /> 卸载
