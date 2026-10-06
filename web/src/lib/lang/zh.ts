@@ -86,4 +86,31 @@ export const zh = {
 
   // ---------- 关于页 ----------
   'about.title': '关于',
+
+  // ---------- 服务器列表页 ----------
+  'servers.title': '我的服务器',
+  'servers.add': '添加服务器',
+  'servers.empty.title': '还没有服务器',
+  'servers.empty.hint': '点击右上角「添加服务器」，面板会通过 SSH 自动安装 Agent',
+  'servers.drag.tooltip': '拖动排序',
+  'servers.field.hostname': '主机',
+  'servers.field.system': '系统',
+  'servers.field.memory': '内存',
+  'servers.field.disk': '磁盘',
+  'servers.field.online': '在线',
+  'servers.java.notInstalled': '未安装',
+  'servers.uptime': '已在线 {0}',
+  'servers.lastSeen': '最近活跃 {0}',
+  'servers.neverOnline': '从未上线',
+  'servers.agent.installing': 'Agent 安装中…',
+  'servers.agent.offline': 'Agent 离线，暂无系统信息',
+  'servers.error.reorder': '排序保存失败：',
+
+  // ---------- 状态徽章 ----------
+  'badge.installing': '安装中',
+  'badge.agent.online': 'Agent 在线',
+  'badge.offline': '离线',
+  'badge.online': '在线',
+  'badge.latency.tooltip': '面板 → 服务器 实测往返延迟',
+  'badge.latency': '延迟 {0}ms',
 } as const

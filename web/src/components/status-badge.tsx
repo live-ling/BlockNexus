@@ -2,29 +2,32 @@
 
 import { AnimatedBadge } from '@/components/motion/animated-badge';
 import { latencyTone, type InstanceStatus } from '@/lib/api';
+import { $, type TranslationKey } from '@/lib/i18n';
 
+/** 实例状态 → 徽章外观 + i18n 键。未收录的状态回退显示原始值，绝不空白 */
 const INSTANCE_MAP: Record<
   string,
-  { status: 'success' | 'neutral' | 'loading' | 'danger' | 'warning'; label: string; pulse?: boolean }
+  { status: 'success' | 'neutral' | 'loading' | 'danger' | 'warning'; key: TranslationKey; pulse?: boolean }
 > = {
-  running: { status: 'success', label: '运行中' },
-  starting: { status: 'loading', label: '启动中', pulse: true },
-  stopped: { status: 'neutral', label: '已停止' },
-  downloading: { status: 'loading', label: '下载中', pulse: true },
-  failed: { status: 'danger', label: '安装失败' },
-  incomplete: { status: 'warning', label: '未完成' },
+  running: { status: 'success', key: 'console.status.running' },
+  starting: { status: 'loading', key: 'console.status.starting', pulse: true },
+  stopped: { status: 'neutral', key: 'console.status.stopped' },
+  downloading: { status: 'loading', key: 'console.status.downloading', pulse: true },
+  failed: { status: 'danger', key: 'console.status.failed' },
+  incomplete: { status: 'warning', key: 'console.status.incomplete' },
 };
 
 export function InstanceStatusBadge({ status }: { status: InstanceStatus | string }) {
-  const conf = INSTANCE_MAP[status] || { status: 'neutral' as const, label: status };
+  const conf = INSTANCE_MAP[status];
+  const statusKind = conf?.status ?? 'neutral';
   return (
     <AnimatedBadge
       size="sm"
-      status={conf.status}
-      pulse={conf.pulse}
+      status={statusKind}
+      pulse={conf?.pulse}
       contentKey={status}
     >
-      {conf.label}
+      {conf ? $(conf.key) : status}
     </AnimatedBadge>
   );
 }
@@ -33,17 +36,17 @@ export function AgentBadge({ online, installing }: { online: boolean; installing
   if (installing) {
     return (
       <AnimatedBadge size="sm" status="loading" pulse contentKey="installing">
-        安装中
+        {$('badge.installing')}
       </AnimatedBadge>
     );
   }
   return online ? (
     <AnimatedBadge size="sm" status="success" pulse contentKey="online">
-      Agent 在线
+      {$('badge.agent.online')}
     </AnimatedBadge>
   ) : (
     <AnimatedBadge size="sm" status="neutral" contentKey="offline">
-      离线
+      {$('badge.offline')}
     </AnimatedBadge>
   );
 }
@@ -61,14 +64,14 @@ export function ServerLinkBadge({
   if (installing) {
     return (
       <AnimatedBadge size="sm" status="loading" pulse contentKey="installing">
-        安装中
+        {$('badge.installing')}
       </AnimatedBadge>
     );
   }
   if (!online) {
     return (
       <AnimatedBadge size="sm" status="danger" pulse contentKey="offline">
-        离线
+        {$('badge.offline')}
       </AnimatedBadge>
     );
   }
@@ -76,7 +79,7 @@ export function ServerLinkBadge({
     // 刚连上、首次测速还没回来
     return (
       <AnimatedBadge size="sm" status="success" contentKey="online">
-        在线
+        {$('badge.online')}
       </AnimatedBadge>
     );
   }
@@ -90,9 +93,9 @@ export function ServerLinkBadge({
   return (
     <span
       className={`inline-flex h-6 items-center rounded-full border px-2 font-mono text-[11px] ${cls}`}
-      title="面板 → 服务器 实测往返延迟"
+      title={$('badge.latency.tooltip')}
     >
-      延迟 {latency === 0 ? '<1' : latency}ms
+      {$('badge.latency', latency === 0 ? '<1' : latency)}
     </span>
   );
 }
