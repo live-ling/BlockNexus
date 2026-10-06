@@ -90,6 +90,14 @@ async function failLogin5(base, ip) {
   return last;
 }
 
+/** 读一次错误响应的 { status, code, error }，用于同时断言状态码与错误代码 */
+async function errorOf(base, path, body, headers = {}) {
+  const r = await post(base, path, body, headers);
+  let j = {};
+  try { j = await r.json(); } catch { /* 非 JSON */ }
+  return { status: r.status, code: j.code, error: j.error };
+}
+
 async function main() {
   // ================= A. parseTrustProxy 取值解析 =================
   check('parseTrustProxy: 空值 → 不信任', parseTrustProxy('') === null && parseTrustProxy(null) === null && parseTrustProxy(undefined) === null);
@@ -234,6 +242,32 @@ async function main() {
     const p = await makePanel();
     const r = await fetch(`${p.base}/me`);
     check('GET 不受 CSRF 检查影响', r.status === 200, `got ${r.status}`);
+    await p.close();
+  }
+
+  // ================= N. 错误响应契约：code + error 并存 =================
+  {
+    const p = await makePanel({ trustProxy: 1, limiterOpts: { lockMs: 60e3 } });
+    // 单次凭据错误 → auth.bad-credentials（前 3 次不提示剩余次数）
+    const e1 = await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'X-Forwarded-For': '30.0.0.1' });
+    check('错误响应含 code 字段（前端据此本地化）', e1.code === 'auth.bad-credentials', JSON.stringify(e1));
+    check('错误响应同时保留 error 文案（过渡期兼容旧调用方）',
+      typeof e1.error === 'string' && e1.error.length > 0, JSON.stringify(e1));
+
+    // 同一来源连打 5 次：第 4 次才提示剩余次数，第 5 次锁定
+    const ips = '30.0.0.2';
+    const seq = [];
+    for (let i = 0; i < 5; i++) {
+      seq.push(await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'X-Forwarded-For': ips }));
+    }
+    check('第 4 次失败提示剩余次数', seq[3].code === 'auth.bad-credentials-with-left', JSON.stringify(seq[3]));
+    check('第 5 次失败返回 auth.login-locked', seq[4].code === 'auth.login-locked', JSON.stringify(seq[4]));
+    check('锁定文案里的分钟数取自 LOGIN_LOCK_MS（非硬编码）',
+      seq[4].error.includes('1 分钟'), seq[4].error);
+
+    // 已锁定状态下再请求 → auth.too-many-attempts
+    const e6 = await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'X-Forwarded-For': ips });
+    check('锁定期间返回 auth.too-many-attempts', e6.code === 'auth.too-many-attempts', JSON.stringify(e6));
     await p.close();
   }
 

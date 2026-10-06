@@ -554,11 +554,17 @@ export async function aiAnalyzeStream(
   }
 }
 
+/** 服务端错误代码；未知 code 时为 undefined（向后兼容尚未迁移的接口） */
+export type ApiErrorCode = string;
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** 来自后端 error-codes.js 的稳定标识，用于判断错误类型与本地化 */
+  code?: ApiErrorCode;
+  constructor(status: number, message: string, code?: ApiErrorCode) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -578,8 +584,10 @@ export async function api<T>(
     // 空响应体
   }
   if (!res.ok) {
-    const msg = (data as { error?: string }).error || `请求失败 ${res.status}`;
-    throw new ApiError(res.status, msg);
+    const d = data as { error?: string; code?: string };
+    // 优先用后端文案（已按当前语言渲染）；过渡期未迁移的接口没有 code，走同一条路径
+    const msg = d.error || `请求失败 ${res.status}`;
+    throw new ApiError(res.status, msg, d.code);
   }
   return data as T;
 }

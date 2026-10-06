@@ -13,7 +13,7 @@ import { InstanceDetailPage } from '@/pages/instance-detail';
 import { ServerDetailPage } from '@/pages/server-detail';
 import { ServerSettingsPage } from '@/pages/server-settings';
 import { ServersPage } from '@/pages/servers';
-import { api, type Me, type ServerSummary } from '@/lib/api';
+import { ApiError, api, type Me, type ServerSummary } from '@/lib/api';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 import { navigate, routeFromLocation, type Route } from '@/lib/router';
@@ -195,10 +195,17 @@ export function App() {
   );
 }
 
-// 401 时统一回到登录态
+// 会话失效时统一回到登录态。
+// 判定优先用后端给的稳定错误代码（ApiError.code），文案不再是契约的一部分——
+// 之前这里靠 msg.includes('未登录') 匹配中文，改文案就会静默失效。
+// 保留文案兜底是过渡期考虑：尚未迁移的错误接口没有 code。
 window.addEventListener('unhandledrejection', (e) => {
-  const msg = e.reason instanceof Error ? e.reason.message : '';
-  if (msg.includes('未登录')) {
+  const err = e.reason;
+  const isNotLoggedIn =
+    (err instanceof ApiError && err.code === 'auth.not-logged-in') ||
+    (err instanceof ApiError && err.status === 401) ||
+    (err instanceof Error && err.message.includes('未登录'));
+  if (isNotLoggedIn) {
     closeSSE();
     location.reload();
   }
