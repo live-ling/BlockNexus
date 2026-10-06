@@ -17,15 +17,35 @@ powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1   # 托盘外壳 
 
 ## Agent 侧约束（2026-10-06 更新）
 
-- **允许加第三方依赖**（旧约束「零依赖」已放宽）。但**部署链路的前提要保住**：SSH 只上传一个文件、
-  systemd `ExecStart=/usr/bin/env node {DIR}/agent.js`、面板 `/agent.js` 匿名下载、README 的手动 `curl` 安装。
-  因此**加依赖要走「内联进产物」而不是「目标机 npm install」**，详见 `docs/iteration-roadmap.md` §4.3。
-- ⚠️ 两处会让「直接 npm i」失败的闸，改依赖前必读：
-  1. `agent/build.js` **只改写相对 require**，裸模块名原样透传 → 需扩展打包器才能内联 npm 包；
-  2. `agent/test-bundle-fresh.js` 有一条**拒绝非标准库 require** 的断言 → 内联依赖后要改成
-     「不允许出现 `node_modules` 路径或未内联的裸模块名」，**不能直接删掉这条防护**。
-- **内存占用必须尽量小**（Agent 跑在 MC 服务器上，与游戏争资源）。给按实例/按会话增长的 Map 加上限，
-  参照 `loginFails` 那次的「表满淘汰最旧而非拒绝服务」思路。
+- **允许加第三方依赖**（旧约束「零依赖」已放宽）。**依赖由打包器内联进产物**，目标机无需 npm。
+  - ✅ `agent/build.js` **已支持内联 npm 包**（`resolveNpm`，含 exports 嵌套条件 / 子路径 / scoped 包）。
+  - `agent/test-bundle-fresh.js` 的旧「零依赖」断言已改为两条更强的：**依赖必须已内联**、**不允许漏网的裸模块名**。
+  - 新增常驻回归测试 `agent/test-npm-inline.js`（13 用例）：真实内联 `node-cron` 并**在没有 node_modules 的目录里运行产物**。
+- ⚠️ **打包器不是通用 bundler**，只支持**纯 CJS、纯 JS** 的包。不支持 ESM、原生扩展（`.node`）、
+  动态 require（变量拼接路径）、`import.meta`、以及需要非 JS 资源的包。
+  **新增依赖前必须先确认能被内联**（跑 `npm run test:agent`）；选库时优先「零传递依赖 + 提供 CJS 构建」。
+- **内存占用必须尽量小**：目标 **≤ 80 MB**，大内存服务器（12G+）可放宽到 **120 MB**。
+  Agent 跑在 MC 服务器上、与游戏争资源。给按实例/按会话增长的 Map 加上限，
+  参照 `loginFails` 那次的「表满淘汰最旧而非拒绝服务」思路；并在 `sys.stats` 里暴露自身 RSS。
+
+### 已选定的依赖：node-cron
+
+2026-10-06 实测对比后选定 **[node-cron](https://github.com/node-cron/node-cron)**（`^4.6.0`）作为 cron 解析/调度库：
+
+| 维度 | node-cron | cron-parser |
+|---|---|---|
+| 传递依赖 | **0** | **luxon**（时间库） |
+| 需内联的运行时体积 | **27 KB**（单文件 `dist/node-cron.cjs`） | 78.5 KB + **luxon 256 KB** ≈ 335 KB |
+| 对 80 MB 内存目标的压力 | 小 | 明显更大（luxon 体量大得多） |
+| CJS 入口 | `exports['.'].require.default` → `.cjs` | `main: dist/index.js`（CJS） |
+| 附加能力 | 自带走秒 cron、`validate`、`schedule`、任务查询 | 侧重「算下次执行时刻」 |
+
+**理由**：cron 解析只是调度的一个环节，node-cron 的 27 KB 零依赖远优于 cron-parser 的「+luxon 256 KB」。
+且 node-cron 自带 `validate` 便于在**创建任务时**就拒绝非法表达式（与既有「创建时校验」的做法一致）。
+
+⚠️ 内联它时踩到过一个真实坑：它的 `exports['.'].require` **本身是对象** `{types, default}`，
+不是字符串——解析 exports 必须**递归**穿透条件对象。已修并在 `test-npm-inline.js` 里钉住。
+
 
 ## 平台适配范围（2026-10-06 确认）
 
@@ -40,11 +60,27 @@ powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1   # 托盘外壳 
 - ✅ **HKDF info 标签已改为 `'blocknexus/*'`**（原先刻意保留 `'mcpan/*'` 作兼容锚点，现已解除）。
   `AGENT_VERSION` 已随之 0.3.5 → 0.3.6（**破坏性协议变更，必须靠版本号驱动远端自动更新**）。
   ⚠ `panel/crypto.js` 与 `agent/src/crypto.js` 的标签必须**逐字一致**，改动后务必递增 `AGENT_VERSION`。
-- ⬜ 待清理的遗留兼容代码（均为删除操作，删前建副本）：
-  `agent/src/instance/manager.js` 的 `mcpan.json` 改名回退、
-  `agent/src/instance/java.js` 的 `/opt/mcpan-java` 旧软链分支、
-  `panel/ssh.js` 的 `mcpan-agent` 旧 systemd 服务清理、`README.md` 的「从 MCPan 更名升级」整节。
-- 清单与执行注意见 `docs/iteration-roadmap.md` §4.5。
+- ✅ **遗留兼容代码已全部清理**（2026-10-06 完成）：
+  `agent/src/instance/manager.js` 的 `mcpan.json` 改名回退、`agent/src/instance/java.js` 的
+  `/opt/mcpan-java` 旧软链分支、`panel/ssh.js` 的 `mcpan-agent` 旧 systemd 服务清理、
+  `README.md` 的「从 MCPan 更名升级」整节（已改写为「兼容期已结束」）。
+- ⚠️ **旧 Agent 无法靠自动更新自救**：握手 proof 在建立连接时校验，旧标签必然失败 →
+  连不上 → 永远发不出 `hi`（而自动更新靠 `hi` 触发）。**必须手动重装一次**。README 已写明。
+- **协议不匹配的诊断（P0-a）已取消**——用户确认旧命名与旧 Agent 已全面废弃，
+  不需要为此新增状态链路。
+
+## 版本与发版策略（2026-10-06 确认）
+
+- 本次迭代目标 **v0.4.0**；大范围修改完成后**一次性**推送并发 v0.4.0。
+- **未到 v1.0.0 一概视为开发测试版**——不必为破坏性变更纠结 semver 严格性。
+- 面板 `version` 与 Agent `AGENT_VERSION` 仍是两条独立版本线。
+
+## mcpan 处置（2026-10-06 确认）
+
+- **全面废弃**：代码层已清理完毕（见上）。
+- **v0.4.0 发布确认通过后再清理**剩余归档物（历史 bundle、旧工作区残留等）。
+  在此之前保留，便于必要时回查。
+
 
 ## 发版流程
 
