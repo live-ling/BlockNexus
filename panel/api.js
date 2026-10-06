@@ -94,6 +94,19 @@ async function checkLatestRelease(version, force = false) {
   }
 }
 
+/**
+ * 从 Accept-Language 判断用哪种语言渲染 error 文案。
+ * 面板的语言设置存在浏览器 localStorage，后端无从得知，因此由前端把它作为请求头带上来。
+ * 不做内容协商的复杂处理（q 值、通配符）：只认「是否以 en 开头」，其余一律中文。
+ *
+ * 注意：`error` 只是**给不认 code 的调用方的兜底文案**；
+ * 认 code 的调用方应当自行本地化，那时 error 文案是什么语言都无所谓。
+ */
+function langOf(req) {
+  const al = String((req && req.headers && req.headers['accept-language']) || '');
+  return /^\s*en\b/i.test(al) ? 'en' : 'zh';
+}
+
 function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const router = express.Router();
   const sessions = new Map(); // sid -> expires
@@ -106,10 +119,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const FORCE_SECURE_COOKIE = opts.secureCookies === true;
 
   // 错误响应统一出口：文案来自 panel/error-codes.js，后端只给 code + 参数。
-  // 过渡期同时回 `error`（已渲染文案）与 `code`，因此旧的前端缓存也照常显示。
-  // `_req` 目前未用，是为将来按 Accept-Language 出多语言文案预留的落点（不做猜测，保持中文）。
+  // 过渡期同时回 `error`（按请求语言渲染好的文案）与 `code`，因此旧前端缓存照常显示。
   function fail(res, code, params, statusOverride) {
-    const { status, body } = errorResponse(code, params, { status: statusOverride });
+    const { status, body } = errorResponse(code, params, {
+      status: statusOverride,
+      lang: langOf(res.req),
+    });
     return res.status(status).json(body);
   }
 
@@ -3015,18 +3030,19 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // ---------- 错误处理 ----------
   // eslint-disable-next-line no-unused-vars
   router.use((err, req, res, next) => {
-    if (!err) return res.status(500).json(errorResponse('internal.error').body);
+    const lang = langOf(req);
+    if (!err) return res.status(500).json(errorResponse('internal.error', undefined, { lang }).body);
     // 已知的通道故障 → 稳定 code（状态码取自码表）
     const known = err.code === 'AGENT_OFFLINE' ? 'agent.offline'
       : err.code === 'AGENT_TIMEOUT' ? 'agent.timeout'
         : null;
     if (known) {
-      const { status, body } = errorResponse(known);
+      const { status, body } = errorResponse(known, undefined, { lang });
       // 保留 Agent 的原始说明作为 error 文案（排查时需要它），code 给前端做本地化与分支
       return res.status(status).json({ error: err.message || body.error, code: body.code });
     }
     // 其余：保留原始 message，避免丢失排查细节；code 标为 internal.error
-    const fb = errorResponse('internal.error').body;
+    const fb = errorResponse('internal.error', undefined, { lang }).body;
     res.status(err.status || 500).json({ error: err.message || fb.error, code: fb.code });
   });
 

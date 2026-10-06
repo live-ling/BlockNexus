@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, api, errText } from './api'
+import { __resetLanguageForTest, setLanguage } from './i18n'
 
 /**
  * 错误契约测试：后端返回 `{ error, code }`，前端必须把 code 带到 ApiError 上。
@@ -8,7 +9,7 @@ import { ApiError, api, errText } from './api'
  */
 
 function stubFetch(status: number, body: unknown, opts: { nonJson?: boolean } = {}) {
-  const fn = vi.fn(async () => ({
+  const fn = vi.fn(async (_url: string, _init?: RequestInit) => ({
     ok: status >= 200 && status < 300,
     status,
     json: async () => {
@@ -20,14 +21,42 @@ function stubFetch(status: number, body: unknown, opts: { nonJson?: boolean } = 
   return fn
 }
 
+/** 取第 n 次 fetch 调用的请求头（断言 Accept-Language / Content-Type 用） */
+function headersOf(fn: ReturnType<typeof stubFetch>, call = 0): Record<string, string> {
+  const init = fn.mock.calls[call]?.[1]
+  return (init?.headers ?? {}) as Record<string, string>
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
+  __resetLanguageForTest()
 })
 
 describe('api() 成功路径', () => {
   it('2xx 直接返回解析后的 body', async () => {
     stubFetch(200, { ok: true, name: 'srv' })
     await expect(api<{ ok: boolean; name: string }>('/x')).resolves.toEqual({ ok: true, name: 'srv' })
+  })
+
+  it('带上 Accept-Language，让后端 error 兜底文案也用当前语言', async () => {
+    const fn = stubFetch(200, { ok: true })
+    await api('/x')
+    expect(headersOf(fn)['Accept-Language']).toBe('zh')
+
+    setLanguage('en')
+    const fn2 = stubFetch(200, { ok: true })
+    await api('/x')
+    expect(headersOf(fn2)['Accept-Language']).toBe('en')
+  })
+
+  it('有 body 时才带 Content-Type（无 body 的写请求不能被 415）', async () => {
+    const fn = stubFetch(200, { ok: true })
+    await api('/x', { method: 'DELETE' })
+    expect(headersOf(fn)['Content-Type']).toBeUndefined()
+
+    const fn2 = stubFetch(200, { ok: true })
+    await api('/x', { method: 'PUT', body: {} })
+    expect(headersOf(fn2)['Content-Type']).toBe('application/json')
   })
 })
 

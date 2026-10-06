@@ -1,5 +1,7 @@
 // 面板 REST API 客户端与类型定义
 
+import { getLanguage } from './i18n';
+
 export interface JavaInfo {
   installed: boolean;
   major?: number;
@@ -574,7 +576,12 @@ export async function api<T>(
 ): Promise<T> {
   const res = await fetch('/api' + path, {
     method: opts.method || 'GET',
-    headers: opts.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: {
+      ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      // 语言选择存在浏览器里，后端无从得知；带上它让 error 兜底文案也用当前语言。
+      // 认 code 的调用方不依赖它，只是过渡期的双保险。
+      'Accept-Language': getLanguage() === 'en' ? 'en' : 'zh',
+    },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
   let data: unknown = {};
