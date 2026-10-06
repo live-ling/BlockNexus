@@ -187,7 +187,10 @@ export type PropItem =
 export function parseProperties(content: string): { items: PropItem[]; eol: string } {
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
   const items: PropItem[] = content.split(/\r?\n/).map((line) => {
-    const m = /^\s*([A-Za-z0-9_.\-]+)\s*=\s*(.*)$/.exec(line);
+    // 等号右侧的空白必须用**惰性**量词：贪婪的 [ \t]* 会把值的前导空格也吃掉，
+    // 与「无损回写」的承诺冲突（写回后值被悄悄 trim 了一侧）。
+    // 也不能用 \s*：它连换行都匹配，脱离 split 场景时会越界。
+    const m = /^\s*([A-Za-z0-9_.\-]+)[ \t]*=[ \t]*?(.*)$/.exec(line);
     if (m && !line.trim().startsWith('#')) return { kind: 'pair', key: m[1], value: m[2] };
     return { kind: 'raw', text: line };
   });
