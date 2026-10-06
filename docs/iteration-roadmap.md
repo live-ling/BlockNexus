@@ -734,7 +734,39 @@ OPanel 用 `platform-modules.json` 作为**唯一模块事实源**，被三处�
 **结论：必须手动重装一次 Agent**（服务器设置页「重装 Agent」走 SSH 推送新脚本，或手动 `curl` 面板的 `/agent.js` 替换）。
 已确认无生产旧 Agent，所以实际上只需保证：**今后新装的 Agent 一律是 ≥ 0.3.6 的版本**。
 
-### 4.6 文档纪律
+### 4.6 协议不匹配的诊断（P0-a 设计，**2026-10-06 调查结论**）
+
+**问题**：更名迁移把 HKDF info 标签从 `mcpan/*` 改成 `blocknexus/*` 后，
+旧 Agent（`AGENT_VERSION < 0.3.6`）**连不上**面板，但面板只显示「离线」——
+和「真的离线」无法区分，用户不知道该重装。
+
+**调查结论（重要，改变了原计划）**：
+
+1. **无法区分「协议不匹配」与「token 不匹配」。**
+   `panel/agentlink.js:36-42` 的 `verifyProof` 在 proof 不符时**统一**抛
+   `对端未持有正确 token`。标签差异被吸收进 HMAC 密钥，因此两种原因**产生完全相同的错误**。
+   要区分就得让 Agent 在 proof 之前上报版本——而那会让未认证对端探测「token 是否正确」，
+   是**安全倒退**，不应为此引入。
+2. **握手失败当前只写日志**（`logDedup`，`:271` 与 `:187`），**从不进入 UI**。
+   连接未建立就不会 `attach`，前端只看到 `status: offline`。
+3. 所以「版本过旧，请重装」这个指示**需要新做**（不是改个文案），且**不能依赖版本号**——
+   我们恰恰拿不到对方的版本。
+
+**建议的最小实现**：
+
+- `AgentHub` 为每个 serverId 记录 `lastHandshakeError`（错误消息 + 时间），
+  在成功 `attach` 时清除；
+- 把该字段并入 `GET /servers` 与 `GET /servers/:id` 的返回（与既有 `status`/`latency` 同级）；
+- 前端在「离线 + 有握手错误」时显示**可操作的提示**：
+  「Agent 连接被拒——**token 不匹配或 Agent 版本过旧**。请先尝试重装 Agent。」
+  **不假装能分辨原因**，因为确实不能；
+- 新增错误码 `agent.handshake-failed`；
+- 用 `agent/test-panel-security.js` 的思路加一个回归用例（构造一次错误 token 的握手，
+  断言 `lastHandshakeError` 被记录、且成功后清除）。
+
+**成本**：约 0.5–1 天。**收益**：把一次静默失败变成有明确下一步动作的提示。
+
+### 4.7 文档纪律
 
 按 `AGENTS.md`：**README 是面向用户的主文档，新功能要在对应章节补一段并更新「API 一览」**。P0 的 `--trust-proxy`/`--secure-cookies` 就需要补。这条容易漏，建议并入每个工作项的验收标准。
 
