@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 
+import { $ } from '@/lib/i18n';
+
 export function MaskedText({
   value,
   /** 遮蔽时显示的字符数（按展示长度给个观感一致的点串） */
@@ -25,12 +27,12 @@ export function MaskedText({
         e.preventDefault();
         setShown((s) => !s);
       }}
-      title={shown ? '点击隐藏' : '点击显示'}
+      title={shown ? $('maskedText.tooltip.hide') : $('maskedText.tooltip.show')}
       className={`max-w-full rounded px-0.5 text-left break-all hover:bg-muted ${className}`}
     >
       {shown ? value : '•'.repeat(dots)}
       <span className="ml-1 align-middle text-[10px] text-muted-foreground">
-        {shown ? '隐藏' : '显示'}
+        {shown ? $('common.hide') : $('common.show')}
       </span>
       {title ? <span className="sr-only">{title}</span> : null}
     </button>

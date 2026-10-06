@@ -18,6 +18,7 @@ import {
 } from "react";
 import { SharedLayoutBg } from "@/components/motion/shared-layout-bg";
 import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@/lib/ease";
+import { $ } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type FileTreeItem = {
@@ -412,7 +413,7 @@ export function FileTree({
                   <span
                     role="checkbox"
                     aria-checked={checkedSet?.has(row.item.value) ?? false}
-                    aria-label={`选择 ${row.item.name}`}
+                    aria-label={$('fileTree.select.aria', row.item.name)}
                     onClick={(event) => {
                       event.stopPropagation();
                       event.preventDefault();

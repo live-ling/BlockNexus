@@ -9,6 +9,8 @@
 
 import { parseAllDocuments, parseDocument, visit } from 'yaml';
 
+import { $ } from '@/lib/i18n';
+
 export type ConfigFormat = 'yaml' | 'json' | 'toml';
 
 /** 按扩展名判断格式（未知扩展名返回 null，不参与表单化） */
@@ -19,7 +21,10 @@ export function detectFormat(name: string): ConfigFormat | null {
   return null;
 }
 
-export const TOML_REASON = 'TOML 序列化会丢失注释，仅提供原文编辑';
+// TOML 无法保留注释的说明文案已迁到 i18n 键 `pluginConfig.tomlReason`，
+// 由消费方 plugin-config-dialog.tsx 在**渲染期**取词。
+// 原先这里是模块顶层的中文常量——模块顶层的 `$()` 会把语言固化在加载时
+// （setLanguage 不刷新页面），所以必须由消费方取词，而不是在这里拼好字符串。
 
 // ---------- 表单树 ----------
 
@@ -85,10 +90,10 @@ function buildTree(value: unknown, path: string, key: string, comments: Map<stri
  */
 export function parseYamlConfig(content: string): ParseResult {
   if (parseAllDocuments(content).length > 1) {
-    return { error: '包含多个 YAML 文档，仅支持原文编辑' };
+    return { error: $('pluginConfig.error.multiDoc') };
   }
   const doc = parseDocument(content);
-  if (doc.errors.length) return { error: doc.errors[0].message ?? 'YAML 解析失败' };
+  if (doc.errors.length) return { error: doc.errors[0].message ?? $('pluginConfig.error.yamlParse') };
   if (doc.contents === undefined || doc.contents === null) {
     return { format: 'yaml', root: { kind: 'object', path: '', key: '', children: [] }, eol: eolOf(content), headerComment: '' };
   }
@@ -98,11 +103,11 @@ export function parseYamlConfig(content: string): ParseResult {
     const n = node as { anchor?: unknown; type?: unknown } | null;
     if (n && typeof n === 'object' && (n.type === 'ALIAS' || n.anchor)) hasAnchorOrAlias = true;
   });
-  if (hasAnchorOrAlias) return { error: '包含 YAML 锚点/别名，表单改值会失真，仅支持原文编辑' };
+  if (hasAnchorOrAlias) return { error: $('pluginConfig.error.anchor') };
 
   const pojo = doc.toJS() as unknown;
   if (!pojo || typeof pojo !== 'object' || Array.isArray(pojo)) {
-    return { error: '顶层不是映射，仅支持原文编辑' };
+    return { error: $('pluginConfig.error.notMapping') };
   }
 
   const { comments, header } = extractComments(content);
@@ -120,10 +125,10 @@ export function parseJsonConfig(content: string): ParseResult {
   try {
     pojo = JSON.parse(content);
   } catch (e) {
-    return { error: (e as Error).message || 'JSON 解析失败' };
+    return { error: (e as Error).message || $('pluginConfig.error.jsonParse') };
   }
   if (!pojo || typeof pojo !== 'object' || Array.isArray(pojo)) {
-    return { error: '顶层不是对象，仅支持原文编辑' };
+    return { error: $('pluginConfig.error.notObject') };
   }
   return { format: 'json', root: buildTree(pojo, '', '', new Map()) as ObjectNode, eol: eolOf(content), headerComment: '' };
 }
@@ -371,7 +376,7 @@ export function diffTree(a: ConfigNode, b: ConfigNode, path: string, out: Config
 export function applyYamlChanges(originalText: string, changed: ConfigChange[]): string {
   if (!changed.length) return originalText;
   const doc = parseDocument(originalText);
-  if (doc.errors.length) throw new Error(doc.errors[0].message ?? 'YAML 解析失败');
+  if (doc.errors.length) throw new Error(doc.errors[0].message ?? $('pluginConfig.error.yamlParse'));
   for (const { path, value } of changed) {
     doc.setIn(pathToSteps(path), value === undefined ? null : value);
   }

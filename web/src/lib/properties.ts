@@ -1,87 +1,108 @@
 // server.properties 键的中文映射（用于可视化配置）
 // type: text 文本 / textarea 长文本 / number 数值 / bool 开关 / select 下拉
 
+import type { TranslationKey } from '@/lib/i18n';
+
 export type PropType = 'text' | 'textarea' | 'number' | 'bool' | 'select';
 
+/** 组键（组名文案见 property.group.*，由消费方在渲染期取词） */
+export const PROP_GROUPS = ['basic', 'gameplay', 'world', 'performance', 'network', 'other'] as const;
+
+export type PropGroup = (typeof PROP_GROUPS)[number];
+
+/**
+ * ⚠ 这里存的是 i18n 键（property.<键>.label / .hint / .option.<值>），不是文案；
+ * 取词必须在渲染期调用 $() —— setLanguage() 不刷新页面，模块顶层的 $()
+ * 会把那一刻的语言永久固化。
+ */
 export interface PropDef {
-  label: string;
+  labelKey: TranslationKey;
   type: PropType;
-  group: string;
+  /** 组键（PROP_GROUPS 之一），组名用 $('property.group.<组键>') 取词 */
+  group: PropGroup;
   options?: string[];
-  /** select 选项的中文说明 */
-  optionLabels?: Record<string, string>;
+  /** select 选项的 i18n 键（property.<键>.option.<值>），取词在渲染期 */
+  optionLabelKeys?: Record<string, TranslationKey>;
   min?: number;
   max?: number;
-  hint?: string;
+  hintKey?: TranslationKey;
 }
-
-export const PROP_GROUPS = ['基础', '玩法', '世界', '性能', '网络', '其他'] as const;
 
 export const PROP_DEFS: Record<string, PropDef> = {
   // ---- 基础 ----
-  motd: { label: '服务器描述 (MOTD)', type: 'text', group: '基础', hint: '多人游戏列表里显示的服务器名' },
-  'server-port': { label: '服务器端口', type: 'number', group: '基础', min: 1024, max: 65535, hint: '改动会同步到面板的连接地址' },
-  'server-ip': { label: '监听地址', type: 'text', group: '基础', hint: '留空表示监听所有网卡' },
-  'max-players': { label: '最大玩家数', type: 'number', group: '基础', min: 1, max: 1000 },
-  'online-mode': { label: '正版验证', type: 'bool', group: '基础', hint: '关闭后未登录账号也能进入（离线服）' },
-  'white-list': { label: '启用白名单', type: 'bool', group: '基础' },
-  'enforce-whitelist': { label: '白名单强制踢出', type: 'bool', group: '基础' },
+  motd: { labelKey: 'property.motd.label', type: 'text', group: 'basic', hintKey: 'property.motd.hint' },
+  'server-port': { labelKey: 'property.server-port.label', type: 'number', group: 'basic', min: 1024, max: 65535, hintKey: 'property.server-port.hint' },
+  'server-ip': { labelKey: 'property.server-ip.label', type: 'text', group: 'basic', hintKey: 'property.server-ip.hint' },
+  'max-players': { labelKey: 'property.max-players.label', type: 'number', group: 'basic', min: 1, max: 1000 },
+  'online-mode': { labelKey: 'property.online-mode.label', type: 'bool', group: 'basic', hintKey: 'property.online-mode.hint' },
+  'white-list': { labelKey: 'property.white-list.label', type: 'bool', group: 'basic' },
+  'enforce-whitelist': { labelKey: 'property.enforce-whitelist.label', type: 'bool', group: 'basic' },
   'enforce-secure-profile': {
-    label: '强制安全档案',
+    labelKey: 'property.enforce-secure-profile.label',
     type: 'bool',
-    group: '基础',
-    hint: '要求客户端具备可验证的聊天签名（关闭后允许未验证签名的玩家进入）',
+    group: 'basic',
+    hintKey: 'property.enforce-secure-profile.hint',
   },
-  'enable-status': { label: '响应服务器列表查询', type: 'bool', group: '基础' },
-  'hide-online-players': { label: '隐藏在线玩家名单', type: 'bool', group: '基础' },
+  'enable-status': { labelKey: 'property.enable-status.label', type: 'bool', group: 'basic' },
+  'hide-online-players': { labelKey: 'property.hide-online-players.label', type: 'bool', group: 'basic' },
   difficulty: {
-    label: '游戏难度',
+    labelKey: 'property.difficulty.label',
     type: 'select',
-    group: '基础',
+    group: 'basic',
     options: ['peaceful', 'easy', 'normal', 'hard'],
-    optionLabels: { peaceful: '和平', easy: '简单', normal: '普通', hard: '困难' },
+    optionLabelKeys: {
+      peaceful: 'property.difficulty.option.peaceful',
+      easy: 'property.difficulty.option.easy',
+      normal: 'property.difficulty.option.normal',
+      hard: 'property.difficulty.option.hard',
+    },
   },
 
   // ---- 玩法 ----
   gamemode: {
-    label: '默认游戏模式',
+    labelKey: 'property.gamemode.label',
     type: 'select',
-    group: '玩法',
+    group: 'gameplay',
     options: ['survival', 'creative', 'adventure', 'spectator'],
-    optionLabels: { survival: '生存', creative: '创造', adventure: '冒险', spectator: '旁观' },
+    optionLabelKeys: {
+      survival: 'property.gamemode.option.survival',
+      creative: 'property.gamemode.option.creative',
+      adventure: 'property.gamemode.option.adventure',
+      spectator: 'property.gamemode.option.spectator',
+    },
   },
-  'force-gamemode': { label: '强制使用默认模式', type: 'bool', group: '玩法' },
-  hardcore: { label: '极限模式', type: 'bool', group: '玩法', hint: '死亡后自动变为旁观者' },
-  pvp: { label: '允许玩家互相伤害', type: 'bool', group: '玩法' },
-  'allow-flight': { label: '允许飞行', type: 'bool', group: '玩法' },
-  'spawn-protection': { label: '出生点保护半径', type: 'number', group: '玩法', min: 0, max: 1000 },
-  'player-idle-timeout': { label: '挂机踢出（分钟）', type: 'number', group: '玩法', min: 0, max: 1440, hint: '0 表示不踢' },
-  'enable-command-block': { label: '启用命令方块', type: 'bool', group: '玩法' },
-  'op-permission-level': { label: 'OP 权限等级', type: 'number', group: '玩法', min: 1, max: 4 },
-  'function-permission-level': { label: '函数权限等级', type: 'number', group: '玩法', min: 1, max: 4 },
-  'resource-pack': { label: '资源包地址', type: 'text', group: '玩法' },
-  'resource-pack-id': { label: '资源包 UUID', type: 'text', group: '玩法', hint: '服务端提供资源包时由 Vanilla 自动生成，通常留空' },
+  'force-gamemode': { labelKey: 'property.force-gamemode.label', type: 'bool', group: 'gameplay' },
+  hardcore: { labelKey: 'property.hardcore.label', type: 'bool', group: 'gameplay', hintKey: 'property.hardcore.hint' },
+  pvp: { labelKey: 'property.pvp.label', type: 'bool', group: 'gameplay' },
+  'allow-flight': { labelKey: 'property.allow-flight.label', type: 'bool', group: 'gameplay' },
+  'spawn-protection': { labelKey: 'property.spawn-protection.label', type: 'number', group: 'gameplay', min: 0, max: 1000 },
+  'player-idle-timeout': { labelKey: 'property.player-idle-timeout.label', type: 'number', group: 'gameplay', min: 0, max: 1440, hintKey: 'property.player-idle-timeout.hint' },
+  'enable-command-block': { labelKey: 'property.enable-command-block.label', type: 'bool', group: 'gameplay' },
+  'op-permission-level': { labelKey: 'property.op-permission-level.label', type: 'number', group: 'gameplay', min: 1, max: 4 },
+  'function-permission-level': { labelKey: 'property.function-permission-level.label', type: 'number', group: 'gameplay', min: 1, max: 4 },
+  'resource-pack': { labelKey: 'property.resource-pack.label', type: 'text', group: 'gameplay' },
+  'resource-pack-id': { labelKey: 'property.resource-pack-id.label', type: 'text', group: 'gameplay', hintKey: 'property.resource-pack-id.hint' },
   'resource-pack-sha1': {
-    label: '资源包 SHA-1',
+    labelKey: 'property.resource-pack-sha1.label',
     type: 'text',
-    group: '玩法',
-    hint: '用于校验下载到的资源包，留空表示不校验',
+    group: 'gameplay',
+    hintKey: 'property.resource-pack-sha1.hint',
   },
   'resource-pack-prompt': {
-    label: '资源包提示语',
+    labelKey: 'property.resource-pack-prompt.label',
     type: 'text',
-    group: '玩法',
-    hint: '客户端确认界面上显示的自定义文字',
+    group: 'gameplay',
+    hintKey: 'property.resource-pack-prompt.hint',
   },
-  'require-resource-pack': { label: '强制使用资源包', type: 'bool', group: '玩法' },
+  'require-resource-pack': { labelKey: 'property.require-resource-pack.label', type: 'bool', group: 'gameplay' },
 
   // ---- 世界 ----
-  'level-name': { label: '世界存档目录', type: 'text', group: '世界', hint: '改动会生成/读取另一个世界' },
-  'level-seed': { label: '世界种子', type: 'text', group: '世界' },
+  'level-name': { labelKey: 'property.level-name.label', type: 'text', group: 'world', hintKey: 'property.level-name.hint' },
+  'level-seed': { labelKey: 'property.level-seed.label', type: 'text', group: 'world' },
   'level-type': {
-    label: '世界类型',
+    labelKey: 'property.level-type.label',
     type: 'select',
-    group: '世界',
+    group: 'world',
     options: [
       'minecraft:normal',
       'minecraft:flat',
@@ -89,80 +110,84 @@ export const PROP_DEFS: Record<string, PropDef> = {
       'minecraft:amplified',
       'minecraft:single_biome_surface',
     ],
-    optionLabels: {
-      'minecraft:normal': '默认',
-      'minecraft:flat': '超平坦',
-      'minecraft:large_biomes': '巨型生物群系',
-      'minecraft:amplified': '放大化',
-      'minecraft:single_biome_surface': '单一生物群系',
+    optionLabelKeys: {
+      'minecraft:normal': 'property.level-type.option.minecraft:normal',
+      'minecraft:flat': 'property.level-type.option.minecraft:flat',
+      'minecraft:large_biomes': 'property.level-type.option.minecraft:large_biomes',
+      'minecraft:amplified': 'property.level-type.option.minecraft:amplified',
+      'minecraft:single_biome_surface': 'property.level-type.option.minecraft:single_biome_surface',
     },
   },
   'generator-settings': {
-    label: '超平坦/自定义世界参数',
+    labelKey: 'property.generator-settings.label',
     type: 'textarea',
-    group: '世界',
-    hint: 'JSON 格式，仅在世界类型为超平坦或单一生物群系时生效；默认 {}',
+    group: 'world',
+    hintKey: 'property.generator-settings.hint',
   },
-  'generate-structures': { label: '生成结构（村庄等）', type: 'bool', group: '世界' },
-  'spawn-monsters': { label: '生成怪物', type: 'bool', group: '世界' },
-  'spawn-animals': { label: '生成动物', type: 'bool', group: '世界' },
-  'spawn-npcs': { label: '生成村民', type: 'bool', group: '世界' },
-  'allow-nether': { label: '允许下界', type: 'bool', group: '世界' },
-  'max-world-size': { label: '世界边界半径', type: 'number', group: '世界', min: 1, max: 29999984 },
+  'generate-structures': { labelKey: 'property.generate-structures.label', type: 'bool', group: 'world' },
+  'spawn-monsters': { labelKey: 'property.spawn-monsters.label', type: 'bool', group: 'world' },
+  'spawn-animals': { labelKey: 'property.spawn-animals.label', type: 'bool', group: 'world' },
+  'spawn-npcs': { labelKey: 'property.spawn-npcs.label', type: 'bool', group: 'world' },
+  'allow-nether': { labelKey: 'property.allow-nether.label', type: 'bool', group: 'world' },
+  'max-world-size': { labelKey: 'property.max-world-size.label', type: 'number', group: 'world', min: 1, max: 29999984 },
 
   // ---- 性能 ----
-  'view-distance': { label: '视距（区块）', type: 'number', group: '性能', min: 3, max: 32, hint: '越大越吃带宽与服务端性能' },
-  'simulation-distance': { label: '模拟距离（区块）', type: 'number', group: '性能', min: 3, max: 32 },
-  'max-tick-time': { label: '单 tick 超时（毫秒）', type: 'number', group: '性能', hint: '-1 表示不因超时崩溃' },
-  'entity-broadcast-range-percentage': { label: '实体广播范围（%）', type: 'number', group: '性能', min: 10, max: 1000 },
-  'pause-when-empty-seconds': { label: '空服暂停（秒）', type: 'number', group: '性能', min: 0, max: 3600, hint: '0 表示不暂停' },
-  'sync-chunk-writes': { label: '同步写入区块', type: 'bool', group: '性能' },
-  'use-native-transport': { label: '使用原生传输优化', type: 'bool', group: '性能' },
+  'view-distance': { labelKey: 'property.view-distance.label', type: 'number', group: 'performance', min: 3, max: 32, hintKey: 'property.view-distance.hint' },
+  'simulation-distance': { labelKey: 'property.simulation-distance.label', type: 'number', group: 'performance', min: 3, max: 32 },
+  'max-tick-time': { labelKey: 'property.max-tick-time.label', type: 'number', group: 'performance', hintKey: 'property.max-tick-time.hint' },
+  'entity-broadcast-range-percentage': { labelKey: 'property.entity-broadcast-range-percentage.label', type: 'number', group: 'performance', min: 10, max: 1000 },
+  'pause-when-empty-seconds': { labelKey: 'property.pause-when-empty-seconds.label', type: 'number', group: 'performance', min: 0, max: 3600, hintKey: 'property.pause-when-empty-seconds.hint' },
+  'sync-chunk-writes': { labelKey: 'property.sync-chunk-writes.label', type: 'bool', group: 'performance' },
+  'use-native-transport': { labelKey: 'property.use-native-transport.label', type: 'bool', group: 'performance' },
   'region-file-compression': {
-    label: '区域文件压缩算法',
+    labelKey: 'property.region-file-compression.label',
     type: 'select',
-    group: '性能',
+    group: 'performance',
     options: ['deflate', 'lz4', 'none'],
-    optionLabels: { deflate: 'deflate（默认，压缩率高）', lz4: 'lz4（读写更快）', none: 'none（不压缩）' },
-    hint: '仅 1.20.2+ 支持',
+    optionLabelKeys: {
+      deflate: 'property.region-file-compression.option.deflate',
+      lz4: 'property.region-file-compression.option.lz4',
+      none: 'property.region-file-compression.option.none',
+    },
+    hintKey: 'property.region-file-compression.hint',
   },
   'enable-jmx-monitoring': {
-    label: '启用 JMX 监控',
+    labelKey: 'property.enable-jmx-monitoring.label',
     type: 'bool',
-    group: '性能',
-    hint: '允许外部用 JConsole 采样 JVM',
+    group: 'performance',
+    hintKey: 'property.enable-jmx-monitoring.hint',
   },
 
   // ---- 网络 ----
-  'network-compression-threshold': { label: '网络压缩阈值（字节）', type: 'number', group: '网络', hint: '-1 关闭压缩' },
-  'rate-limit': { label: '限速（包/秒）', type: 'number', group: '网络', min: 0 },
-  'prevent-proxy-connections': { label: '阻止代理连接', type: 'bool', group: '网络' },
-  'enable-rcon': { label: '启用 RCON', type: 'bool', group: '网络' },
-  'rcon.port': { label: 'RCON 端口', type: 'number', group: '网络', min: 1024, max: 65535 },
-  'rcon.password': { label: 'RCON 密码', type: 'text', group: '网络' },
-  'enable-query': { label: '启用 Query 协议', type: 'bool', group: '网络' },
-  'query.port': { label: 'Query 端口', type: 'number', group: '网络', min: 1024, max: 65535 },
+  'network-compression-threshold': { labelKey: 'property.network-compression-threshold.label', type: 'number', group: 'network', hintKey: 'property.network-compression-threshold.hint' },
+  'rate-limit': { labelKey: 'property.rate-limit.label', type: 'number', group: 'network', min: 0 },
+  'prevent-proxy-connections': { labelKey: 'property.prevent-proxy-connections.label', type: 'bool', group: 'network' },
+  'enable-rcon': { labelKey: 'property.enable-rcon.label', type: 'bool', group: 'network' },
+  'rcon.port': { labelKey: 'property.rcon.port.label', type: 'number', group: 'network', min: 1024, max: 65535 },
+  'rcon.password': { labelKey: 'property.rcon.password.label', type: 'text', group: 'network' },
+  'enable-query': { labelKey: 'property.enable-query.label', type: 'bool', group: 'network' },
+  'query.port': { labelKey: 'property.query.port.label', type: 'number', group: 'network', min: 1024, max: 65535 },
   'accepts-transfers': {
-    label: '接受服务器转移',
+    labelKey: 'property.accepts-transfers.label',
     type: 'bool',
-    group: '网络',
-    hint: '允许玩家从其他服务器无缝转移进来（1.20.2+）',
+    group: 'network',
+    hintKey: 'property.accepts-transfers.hint',
   },
 
   // ---- 其他 ----
-  'max-chained-neighbor-updates': { label: '连锁邻接更新上限', type: 'number', group: '其他' },
-  'log-ips': { label: '日志记录玩家 IP', type: 'bool', group: '其他' },
-  'text-filtering-config': { label: '文本过滤配置', type: 'text', group: '其他' },
-  'initial-enabled-packs': { label: '初始启用数据包', type: 'text', group: '其他' },
-  'initial-disabled-packs': { label: '初始禁用数据包', type: 'text', group: '其他' },
+  'max-chained-neighbor-updates': { labelKey: 'property.max-chained-neighbor-updates.label', type: 'number', group: 'other' },
+  'log-ips': { labelKey: 'property.log-ips.label', type: 'bool', group: 'other' },
+  'text-filtering-config': { labelKey: 'property.text-filtering-config.label', type: 'text', group: 'other' },
+  'initial-enabled-packs': { labelKey: 'property.initial-enabled-packs.label', type: 'text', group: 'other' },
+  'initial-disabled-packs': { labelKey: 'property.initial-disabled-packs.label', type: 'text', group: 'other' },
   'bug-report-link': {
-    label: '漏洞报告链接',
+    labelKey: 'property.bug-report-link.label',
     type: 'text',
-    group: '其他',
-    hint: '客户端崩溃界面里显示的报告地址，留空表示不显示',
+    group: 'other',
+    hintKey: 'property.bug-report-link.hint',
   },
-  'broadcast-console-to-ops': { label: '向 OP 广播控制台输出', type: 'bool', group: '其他' },
-  'broadcast-rcon-to-ops': { label: '向 OP 广播 RCON 输出', type: 'bool', group: '其他' },
+  'broadcast-console-to-ops': { labelKey: 'property.broadcast-console-to-ops.label', type: 'bool', group: 'other' },
+  'broadcast-rcon-to-ops': { labelKey: 'property.broadcast-rcon-to-ops.label', type: 'bool', group: 'other' },
 };
 
 export const BOOL_OPTIONS = ['true', 'false'];

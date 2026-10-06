@@ -15,22 +15,32 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { api, errText, type Instance, type ServerSummary, type WatchdogConfig, type WatchdogSchedule } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
-const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+// 星期文案存键名：模块顶层不能调用 $()（会把加载那一刻的语言固化）
+const WEEKDAYS = [
+  'autoRestart.weekday.sun',
+  'autoRestart.weekday.mon',
+  'autoRestart.weekday.tue',
+  'autoRestart.weekday.wed',
+  'autoRestart.weekday.thu',
+  'autoRestart.weekday.fri',
+  'autoRestart.weekday.sat',
+] as const;
 
 /** 间隔预设（分钟）：5/15/30 → 每周 */
 const INTERVAL_PRESETS = [5, 15, 30, 60, 180, 360, 720, 1440, 10080];
 
 function intervalLabel(minutes: number): string {
-  if (minutes % 1440 === 0) return `每 ${minutes / 1440} 天`;
-  if (minutes % 60 === 0) return `每 ${minutes / 60} 小时`;
-  return `每 ${minutes} 分钟`;
+  if (minutes % 1440 === 0) return $('autoRestart.interval.days', minutes / 1440);
+  if (minutes % 60 === 0) return $('autoRestart.interval.hours', minutes / 60);
+  return $('autoRestart.interval.minutes', minutes);
 }
 
 export function scheduleLabel(s: WatchdogSchedule): string {
   if (s.type === 'daily') {
-    const days = s.days.length ? s.days.map((d) => WEEK[d]).join('/') : '每天';
+    const days = s.days.length ? s.days.map((d) => $(WEEKDAYS[d])).join('/') : $('autoRestart.everyDay');
     return `${days} ${s.time}`;
   }
   return intervalLabel(s.intervalMinutes);
@@ -89,10 +99,10 @@ export function AutoRestartDialog({
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
-            <RotateCw className="h-4 w-4" /> 自动重启 · {instance.name}
+            <RotateCw className="h-4 w-4" /> {$('autoRestart.title', instance.name)}
           </DialogTitle>
           <DialogDescription>
-            崩溃后自动拉起、按计划定时重启。仅在 Agent 在线时生效；手动停止（或控制台 stop）不会被自动重启。
+            {$('autoRestart.description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -102,9 +112,9 @@ export function AutoRestartDialog({
           {/* 崩溃自动重启 */}
           <label className="flex items-center justify-between gap-4 rounded-lg border p-3">
             <span className="grid gap-0.5">
-              <span className="text-sm font-medium">崩溃后自动重启</span>
+              <span className="text-sm font-medium">{$('autoRestart.autoRestart.label')}</span>
               <span className="text-xs text-muted-foreground">
-                进程异常退出（非手动停止、退出码非 0）时自动拉起
+                {$('autoRestart.autoRestart.desc')}
               </span>
             </span>
             <Switch
@@ -115,7 +125,7 @@ export function AutoRestartDialog({
           {cfg.autoRestart && (
             <div className="grid grid-cols-[1fr_100px] items-center gap-3 pl-1">
               <span className="text-xs text-muted-foreground">
-                重启前延迟（秒）· 连续崩溃会自动退避，最长 60 秒
+                {$('autoRestart.delay.hint')}
               </span>
               <Input
                 inputMode="numeric"
@@ -134,14 +144,14 @@ export function AutoRestartDialog({
           <div className="grid gap-2">
             <div className="flex items-center gap-2">
               <Timer className="h-3.5 w-3.5 text-muted-foreground" />
-              <b className="text-sm">定时重启任务</b>
+              <b className="text-sm">{$('autoRestart.list.title')}</b>
               <Button variant="outline" size="sm" className="ml-auto" onClick={addSchedule}>
-                <Plus className="h-3.5 w-3.5" /> 添加
+                <Plus className="h-3.5 w-3.5" /> {$('autoRestart.add')}
               </Button>
             </div>
             {cfg.schedules.length === 0 ? (
               <p className="rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
-                还没有定时任务（例如每天凌晨 4 点自动重启，缓解内存碎片与卡顿）
+                {$('autoRestart.empty')}
               </p>
             ) : (
               <div className="grid gap-2">
@@ -156,8 +166,8 @@ export function AutoRestartDialog({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="daily">每日定时</SelectItem>
-                          <SelectItem value="interval">固定间隔</SelectItem>
+                          <SelectItem value="daily">{$('autoRestart.type.daily')}</SelectItem>
+                          <SelectItem value="interval">{$('autoRestart.type.interval')}</SelectItem>
                         </SelectContent>
                       </Select>
                       {s.type === 'daily' ? (
@@ -198,7 +208,7 @@ export function AutoRestartDialog({
                           variant="ghost"
                           size="icon-sm"
                           className="text-destructive hover:text-destructive"
-                          aria-label="删除任务"
+                          aria-label={$('autoRestart.deleteAria')}
                           onClick={() =>
                             setCfg((c) => ({ ...c, schedules: c.schedules.filter((x) => x.id !== s.id) }))
                           }
@@ -209,7 +219,7 @@ export function AutoRestartDialog({
                     </div>
                     {s.type === 'daily' && (
                       <div className="flex flex-wrap gap-1.5">
-                        {WEEK.map((w, i) => {
+                        {WEEKDAYS.map((w, i) => {
                           const on = s.days.includes(i);
                           return (
                             <button
@@ -226,12 +236,12 @@ export function AutoRestartDialog({
                                   : 'text-muted-foreground hover:bg-muted'
                               }`}
                             >
-                              {w}
+                              {$(w)}
                             </button>
                           );
                         })}
                         <span className="self-center text-[11px] text-muted-foreground">
-                          {s.days.length ? '仅选中的星期' : '每天'}
+                          {s.days.length ? $('autoRestart.selectedDaysOnly') : $('autoRestart.everyDay')}
                         </span>
                       </div>
                     )}
@@ -245,7 +255,7 @@ export function AutoRestartDialog({
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button
             disabled={busy}
@@ -256,17 +266,17 @@ export function AutoRestartDialog({
                   method: 'PUT',
                   body: cfg,
                 });
-                success('自动重启设置已保存');
+                success($('autoRestart.toast.saved'));
                 onOpenChange(false);
                 onSaved();
               } catch (e) {
-                error('保存失败', errText(e));
+                error($('panelSettings.error.save'), errText(e));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            保存
+            {$('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

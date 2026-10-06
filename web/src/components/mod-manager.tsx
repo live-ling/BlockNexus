@@ -15,6 +15,7 @@ import {
   type ModsList,
 } from '@/lib/api';
 import { uploadFile } from '@/lib/upload';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 function fmtSize(bytes: number): string {
@@ -46,7 +47,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
   const reload = useCallback(() => {
     listMods(serverId, instance)
       .then(setList)
-      .catch((e) => error('Mod 列表加载失败', errText(e)));
+      .catch((e) => error($('modManager.error.load'), errText(e)));
   }, [serverId, instance, error]);
 
   useEffect(() => {
@@ -65,11 +66,14 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
     setBusyFile(file);
     try {
       await toggleMod(serverId, instance, file, disable);
-      success(disable ? `已禁用 ${label}` : `已启用 ${label}`, '下次启动生效');
+      success(
+        disable ? $('modManager.toast.disabled', label) : $('modManager.toast.enabled', label),
+        $('modManager.toast.toggleDetail'),
+      );
       reload();
       onChanged?.();
     } catch (e) {
-      error('操作失败', errText(e));
+      error($('modManager.error.action'), errText(e));
     } finally {
       setBusyFile(null);
     }
@@ -79,12 +83,12 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
     setBusyFile(file);
     try {
       await deleteMod(serverId, instance, file);
-      success('已删除', file);
+      success($('fileManager.toast.deleted'), file);
       setDeleting(null);
       reload();
       onChanged?.();
     } catch (e) {
-      error('删除失败', errText(e));
+      error($('modManager.error.delete'), errText(e));
     } finally {
       setBusyFile(null);
     }
@@ -96,7 +100,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
     // Mod 只认 .jar（.jar.disabled 也接受，按禁用态放入）；混入的其他文件不静默丢弃
     const jars = arr.filter((f) => /\.jar(\.disabled)?$/i.test(f.name));
     const skipped = arr.length - jars.length;
-    if (skipped > 0) error(`已跳过 ${skipped} 个非 .jar 文件`, 'Mod 管理只接受 .jar');
+    if (skipped > 0) error($('modManager.toast.skippedNonJar', skipped), $('modManager.toast.onlyJar'));
     if (!jars.length) return;
     for (const f of jars) {
       setUploading((cur) => [...cur, { name: f.name, pct: 0 }]);
@@ -105,11 +109,11 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
           setUploading((cur) => cur.map((u) => (u.name === f.name ? { ...u, pct } : u))),
         );
       } catch (e) {
-        error(`上传失败：${f.name}`, errText(e));
+        error($('modManager.toast.uploadFailed', f.name), errText(e));
       }
     }
     setUploading([]);
-    success('上传完成', '新 Mod 默认为启用状态，重启后加载');
+    success($('modManager.toast.uploadDone'), $('modManager.toast.uploadDoneDetail'));
     reload();
     onChanged?.();
   };
@@ -148,21 +152,23 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
             <div className="pointer-events-none absolute inset-0 z-50 grid place-items-center rounded-lg border-2 border-dashed border-primary bg-background/85">
               <div className="flex flex-col items-center gap-2 text-primary">
                 <Upload className="h-8 w-8" />
-                <p className="text-sm font-medium">松开上传 Mod</p>
-                <p className="text-xs text-muted-foreground">支持多个 .jar 文件</p>
+                <p className="text-sm font-medium">{$('modManager.drop.title')}</p>
+                <p className="text-xs text-muted-foreground">{$('modManager.drop.hint')}</p>
               </div>
             </div>
           )}
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Puzzle className="h-4 w-4 text-primary" /> Mod 管理
+              <Puzzle className="h-4 w-4 text-primary" /> {$('instanceDetail.mods')}
               <span className="font-mono text-xs font-normal text-muted-foreground">{instance}</span>
             </DialogTitle>
           </DialogHeader>
 
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>
-              {list ? `已启用 ${enabled} · 已禁用 ${(list.mods.length ?? 0) - enabled}` : '加载中…'}
+              {list
+                ? $('modManager.stats', enabled, (list.mods.length ?? 0) - enabled)
+                : $('common.loading')}
             </span>
             <span className="ml-auto flex items-center gap-1.5">
               <input
@@ -177,17 +183,17 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
                 }}
               />
               <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-                <Upload className="h-3.5 w-3.5" /> 上传
+                <Upload className="h-3.5 w-3.5" /> {$('fileManager.action.upload')}
               </Button>
               <Button variant="ghost" size="sm" onClick={reload}>
-                <RefreshCw className="h-3.5 w-3.5" /> 刷新
+                <RefreshCw className="h-3.5 w-3.5" /> {$('modManager.refresh')}
               </Button>
             </span>
           </div>
 
           {list && !list.exists && (
             <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
-              未发现 mods 目录——该实例可能不是 Forge/Fabric 服务端；上传第一个 Mod 时会自动创建目录。
+              {$('modManager.noModsDir')}
             </p>
           )}
 
@@ -209,7 +215,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
                   </p>
                   <p className="text-[11px] text-muted-foreground">
                     {fmtSize(m.size)} · {timeago(m.mtime)}
-                    {m.disabled ? ' · 已禁用' : ''}
+                    {m.disabled ? $('modManager.disabledSuffix') : ''}
                   </p>
                 </div>
                 <Button
@@ -217,7 +223,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
                   size="icon"
                   className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
                   disabled={busyFile === m.file}
-                  title={m.disabled ? '启用（重启后加载）' : '禁用（重启后卸载）'}
+                  title={m.disabled ? $('modManager.enableTitle') : $('modManager.disableTitle')}
                   onClick={() => void doToggle(m.file, !m.disabled, m.name)}
                 >
                   {m.disabled ? <Power className="h-3.5 w-3.5" /> : <PowerOff className="h-3.5 w-3.5" />}
@@ -227,7 +233,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
                   size="icon"
                   className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
                   disabled={busyFile === m.file}
-                  title="删除 Mod"
+                  title={$('modManager.deleteTitle')}
                   onClick={() => setDeleting(m.file)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -236,7 +242,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
             ))}
             {list?.exists && !list.mods.length && (
               <p className="px-1 py-3 text-center text-xs text-muted-foreground">
-                mods 目录是空的——上传 .jar 或在文件管理器中拖入。
+                {$('modManager.empty')}
               </p>
             )}
             {uploading.map((u) => (
@@ -250,15 +256,15 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange, onCha
           </div>
 
           <p className="text-[11px] leading-snug text-muted-foreground">
-            禁用 = 改名为 .disabled（不删除文件），启动与重启后生效；改动即刻写盘，无需确认保存。
+            {$('modManager.hint')}
           </p>
         </DialogContent>
       </Dialog>
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(v) => !v && setDeleting(null)}
-        title={`删除 ${deleting ?? ''}？`}
-        description="文件将从 mods 目录永久删除（不可恢复）；运行中的实例需重启后生效。"
+        title={$('modManager.deleteConfirmTitle', deleting ?? '')}
+        description={$('modManager.deleteConfirmDesc')}
         onConfirm={async () => {
           if (deleting) await doDelete(deleting);
         }}

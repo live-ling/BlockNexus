@@ -5,46 +5,59 @@ import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Info } from 'lucide-re
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { api, type Me } from '@/lib/api';
+import { $, type TranslationKey } from '@/lib/i18n';
 
-/** 引用服务：镜像与官方 API（MSL 条款要求在页面注明来源） */
-const SERVICES: { name: string; url: string; desc: string }[] = [
+/**
+ * 引用条目的形状：`desc` 一律走 i18n 键；`name` 二选一——
+ * 要么是**品牌名/专有名词**（BMCLAPI、ssh2 等，不该翻译，直接写字面量），
+ * 要么是 i18n 键。用**可辨识联合**而不是两个可选字段：
+ * 后者会让 `item.name` 变成 `string | undefined`，取词处就得靠 `!` 或 `?? ''`
+ * 掩盖问题，而 `?? ''` 一旦漏写就是渲染出一个空名字且不报错。
+ */
+type RefItem = { url: string; descKey: TranslationKey } & ({ name: string } | { nameKey: TranslationKey });
+
+/** 取显示名：有字面量就用字面量（品牌名不翻），否则取 i18n 键 */
+const refName = (item: RefItem): string => ('name' in item ? item.name : $(item.nameKey));
+
+/** 引用服务：镜像与官方 API（MSL 条款要求在页面注明来源）；数据只存键名，渲染期取词 */
+const SERVICES: RefItem[] = [
   {
-    name: 'MSL 开服器',
+    nameKey: 'about.service.msl.name',
     url: 'https://www.mslmc.cn',
-    desc: '服务端镜像下载（vanilla/paper/purpur/folia/forge/neoforge/fabric），官方源不可用时的兜底解析链',
+    descKey: 'about.service.msl.desc',
   },
   {
     name: 'BMCLAPI',
     url: 'https://bmclapi2.bangbang93.com',
-    desc: 'Mojang 版本清单与文件的国内镜像',
+    descKey: 'about.service.bmclapi.desc',
   },
   {
-    name: 'Mojang 官方 API',
+    nameKey: 'about.service.mojang.name',
     url: 'https://www.minecraft.net',
-    desc: '原版版本清单与服务端下载（piston-meta / piston-data）',
+    descKey: 'about.service.mojang.desc',
   },
   {
     name: 'Adoptium Temurin',
     url: 'https://adoptium.net',
-    desc: 'Java 运行时自动安装（清华 TUNA 镜像优先）',
+    descKey: 'about.service.adoptium.desc',
   },
   {
     name: 'PaperMC / PurpurMC / FabricMC / Forge / NeoForge',
     url: 'https://papermc.io',
-    desc: '各核心的官方版本 API 与安装器',
+    descKey: 'about.service.cores.desc',
   },
 ];
 
 /** 开源依赖：面板与前端构建在其上 */
-const DEPS: { name: string; url: string; desc: string }[] = [
-  { name: 'React + Vite + TypeScript', url: 'https://react.dev', desc: '前端框架与构建工具链' },
-  { name: 'Tailwind CSS 4 + shadcn/ui (Radix)', url: 'https://tailwindcss.com', desc: '样式系统与无障碍组件底座' },
-  { name: 'beUI', url: 'https://beui.dev', desc: '动效组件（FileTree / FileUpload / TiltCard 等）' },
-  { name: 'Express + ws', url: 'https://expressjs.com', desc: '面板 HTTP 服务与加密通道 WebSocket' },
-  { name: 'ssh2', url: 'https://github.com/mscdex/ssh2.js', desc: 'Agent 远程安装（SSH/SFTP）' },
-  { name: 'nodemailer', url: 'https://nodemailer.com', desc: 'SMTP 离线通知与找回密码邮件' },
-  { name: 'WebView2', url: 'https://developer.microsoft.com/microsoft-edge/webview2', desc: 'Windows 桌面外壳渲染' },
-  { name: 'Node.js 标准库', url: 'https://nodejs.org', desc: 'Agent 为零依赖单文件，全部能力基于标准库' },
+const DEPS: RefItem[] = [
+  { name: 'React + Vite + TypeScript', url: 'https://react.dev', descKey: 'about.dep.react.desc' },
+  { name: 'Tailwind CSS 4 + shadcn/ui (Radix)', url: 'https://tailwindcss.com', descKey: 'about.dep.tailwind.desc' },
+  { name: 'beUI', url: 'https://beui.dev', descKey: 'about.dep.beui.desc' },
+  { name: 'Express + ws', url: 'https://expressjs.com', descKey: 'about.dep.express.desc' },
+  { name: 'ssh2', url: 'https://github.com/mscdex/ssh2.js', descKey: 'about.dep.ssh2.desc' },
+  { name: 'nodemailer', url: 'https://nodemailer.com', descKey: 'about.dep.nodemailer.desc' },
+  { name: 'WebView2', url: 'https://developer.microsoft.com/microsoft-edge/webview2', descKey: 'about.dep.webview2.desc' },
+  { nameKey: 'about.dep.node.name', url: 'https://nodejs.org', descKey: 'about.dep.node.desc' },
 ];
 
 function RefRow({ name, url, desc }: { name: string; url: string; desc: string }) {
@@ -60,7 +73,7 @@ function RefRow({ name, url, desc }: { name: string; url: string; desc: string }
         rel="noreferrer"
         className="mt-0.5 flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
-        链接 <ExternalLink className="h-3 w-3" />
+        {$('about.link')} <ExternalLink className="h-3 w-3" />
       </a>
     </div>
   );
@@ -85,7 +98,7 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
       if (next && licText === null) {
         api<{ text: string }>('/license')
           .then((r) => setLicText(r.text))
-          .catch(() => setLicText('（LICENSE 读取失败——未随面板部署？）'));
+          .catch(() => setLicText($('about.license.loadFailed')));
       }
       return next;
     });
@@ -94,12 +107,12 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 pb-24 pt-7">
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}>
+        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <h2 className="text-xl font-semibold">关于</h2>
+        <h2 className="text-xl font-semibold">{$('about.title')}</h2>
       </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">面板信息、开源依赖与引用说明。</p>
+      <p className="mt-1.5 text-xs text-muted-foreground">{$('about.subtitle')}</p>
 
       {/* 宽屏双列铺满，窄屏自动堆叠为单列 */}
       <div className="mt-5 grid items-start gap-4 xl:grid-cols-2">
@@ -119,9 +132,7 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                     v{me?.version ?? '…'}
                   </span>
                 </div>
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                  一站式 Minecraft 服务器管理平台，帮助你轻松创建和管理多个服务器实例。从启动、停止、重启到实时控制台与指令执行，从在线玩家踢出、封禁、管理员设置，到配置文件编辑、存档上传、备份恢复，全部集中完成。支持自动重启与定时重启、多服务器集中管理、各版本/各核心服务端自动下载，并在服务器离线时通过邮件通知你。内置 AI 日志分析，帮你快速定位异常与崩溃原因。无论个人开服还是多服运营，都能显著降低运维成本。
-                </p>
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{$('about.description')}</p>
               </div>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -131,7 +142,7 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                 rel="noreferrer"
                 className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3.5 py-2.5 transition-colors hover:border-foreground/20 hover:bg-muted/70"
               >
-                <span className="shrink-0 text-xs text-muted-foreground">开源地址</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{$('about.repo')}</span>
                 <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
                   <span className="truncate">github.com/live-ling/BlockNexus</span>
                   <ExternalLink className="h-3 w-3 shrink-0 opacity-50 transition-opacity group-hover:opacity-100" />
@@ -142,7 +153,7 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                 onClick={toggleLicense}
                 className="flex items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3.5 py-2.5 text-left transition-colors hover:border-foreground/20 hover:bg-muted/70"
               >
-                <span className="text-xs text-muted-foreground">许可证</span>
+                <span className="text-xs text-muted-foreground">{$('about.license')}</span>
                 <span className="flex items-center gap-1.5 text-xs">
                   MIT
                   {licOpen ? <ChevronUp className="h-3.5 w-3.5 opacity-50" /> : <ChevronDown className="h-3.5 w-3.5 opacity-50" />}
@@ -151,7 +162,7 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
             </div>
             {licOpen && (
               <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                {licText ?? '加载中…'}
+                {licText ?? $('common.loading')}
               </pre>
             )}
           </CardContent>
@@ -162,14 +173,12 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
           <CardContent className="p-5">
             <div className="flex items-center gap-2">
               <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">引用服务</h3>
+              <h3 className="text-sm font-semibold">{$('about.services')}</h3>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              版本目录与下载链路的镜像与官方来源（排名不分先后）：
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{$('about.services.desc')}</p>
             <div className="mt-3 grid gap-0.5">
               {SERVICES.map((s) => (
-                <RefRow key={s.name} {...s} />
+                <RefRow key={s.url} name={refName(s)} url={s.url} desc={$(s.descKey)} />
               ))}
             </div>
           </CardContent>
@@ -180,14 +189,12 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
           <CardContent className="p-5">
             <div className="flex items-center gap-2">
               <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">开源依赖</h3>
+              <h3 className="text-sm font-semibold">{$('about.deps')}</h3>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              面板与前端构建在这些项目之上：
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{$('about.deps.desc')}</p>
             <div className="mt-3 grid gap-0.5">
               {DEPS.map((d) => (
-                <RefRow key={d.name} {...d} />
+                <RefRow key={d.url} name={refName(d)} url={d.url} desc={$(d.descKey)} />
               ))}
             </div>
           </CardContent>
@@ -198,12 +205,12 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
           <CardContent className="p-5">
             <div className="flex items-center gap-2">
               <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">声明</h3>
+              <h3 className="text-sm font-semibold">{$('about.disclaimer.title')}</h3>
             </div>
             <ul className="mt-2 grid gap-1.5 text-xs leading-relaxed text-muted-foreground">
-              <li>本工具与 Mojang Studios / Microsoft 无关；Minecraft 为 Mojang Synergies AB 的商标。</li>
+              <li>{$('about.disclaimer.mojang')}</li>
               <li>
-                运行服务端前请阅读并同意{' '}
+                {$('about.disclaimer.eula.pre')}
                 <a
                   className="underline underline-offset-2 hover:text-foreground"
                   href="https://aka.ms/MinecraftEULA"
@@ -212,9 +219,9 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
                 >
                   Minecraft EULA
                 </a>
-                。
+                {$('about.disclaimer.eula.post')}
               </li>
-              <li>仅供学习交流与个人服务器管理使用；请遵守所在地法律法规与各镜像服务的使用条款。</li>
+              <li>{$('about.disclaimer.personal')}</li>
             </ul>
           </CardContent>
         </Card>

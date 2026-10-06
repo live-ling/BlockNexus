@@ -6,6 +6,7 @@ import { Activity, ExternalLink, HeartPulse, Puzzle, RefreshCw, Square } from 'l
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api, errText, timeago } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 export interface SparkStats {
@@ -167,14 +168,14 @@ export function SparkPanel({
         { method: 'POST', body: { action: 'start', timeoutSec: Number(dur) } },
       );
       if (!r.started) {
-        error(r.error || '启动失败');
+        error(r.error || $('sparkPanel.error.start'));
         return;
       }
       setProfEndsAt(Date.now() + (r.timeoutSec ?? Number(dur)) * 1000);
       setNow(Date.now());
-      success('分析已开始', `约 ${r.timeoutSec ?? dur} 秒后自动生成报告，稍后出现在下方列表`);
+      success($('sparkPanel.toast.started'), $('sparkPanel.toast.startedDetail', r.timeoutSec ?? dur));
     } catch (e) {
-      error('启动失败', errText(e));
+      error($('sparkPanel.error.start'), errText(e));
     }
   };
 
@@ -185,14 +186,17 @@ export function SparkPanel({
         { method: 'POST', body: { action: 'stop' } },
       );
       if (!r.stopped) {
-        error(r.error || '停止失败');
+        error(r.error || $('sparkPanel.error.stop'));
         return;
       }
       setProfEndsAt(null);
-      success(r.code ? '分析已停止' : '已发送停止指令', r.code ? '报告已生成' : '报告生成中，稍后出现在下方列表');
+      success(
+        r.code ? $('sparkPanel.toast.stopped') : $('sparkPanel.toast.stopSent'),
+        r.code ? $('sparkPanel.toast.reportReady') : $('sparkPanel.toast.reportPending'),
+      );
       setTimeout(load, 2500);
     } catch (e) {
-      error('停止失败', errText(e));
+      error($('sparkPanel.error.stop'), errText(e));
     }
   };
 
@@ -203,9 +207,9 @@ export function SparkPanel({
         `/servers/${serverId}/instances/${encodeURIComponent(instance)}/spark/health`,
       );
       setHealthLines(r.lines);
-      if (!r.lines.length) error('未收到 spark 输出', '请确认 spark 已正确加载');
+      if (!r.lines.length) error($('sparkPanel.error.noOutput'), $('sparkPanel.error.noOutputHint'));
     } catch (e) {
-      error('健康摘要获取失败', errText(e));
+      error($('sparkPanel.error.health'), errText(e));
     } finally {
       setHealthBusy(false);
     }
@@ -219,7 +223,7 @@ export function SparkPanel({
       {/* 头部 */}
       <div className="flex items-center gap-2">
         <Activity className="h-4 w-4 text-muted-foreground" />
-        <b className="text-sm">spark 性能</b>
+        <b className="text-sm">{$('sparkPanel.title')}</b>
         {data?.installed && data.version && (
           <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
             v{data.version}
@@ -231,8 +235,8 @@ export function SparkPanel({
           className="ml-auto h-7 w-7 text-muted-foreground hover:text-foreground"
           disabled={loading}
           onClick={load}
-          aria-label="刷新"
-          title="刷新"
+          aria-label={$('sparkPanel.refresh')}
+          title={$('sparkPanel.refresh')}
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         </Button>
@@ -241,41 +245,38 @@ export function SparkPanel({
       {/* 未安装 / 已禁用 / 加载失败 */}
       {failed ? (
         <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
-          数据获取失败：{failed}
+          {$('sparkPanel.error.load', failed)}
         </div>
       ) : !data ? (
-        <p className="mt-6 text-center text-xs text-muted-foreground">加载中…</p>
+        <p className="mt-6 text-center text-xs text-muted-foreground">{$('common.loading')}</p>
       ) : !data.installed ? (
         <div className="mt-3 grid gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
-          <p className="text-xs leading-relaxed text-foreground">
-            未检测到 spark。spark 是 MC 性能分析模组，安装后这里会显示 TPS / CPU 实时数据，
-            并支持一键生成性能报告（可在 spark.lucko.me 查看调用栈）。
-          </p>
+          <p className="text-xs leading-relaxed text-foreground">{$('sparkPanel.notInstalled.desc')}</p>
           <div className="flex gap-1.5">
             <Button size="sm" variant="secondary" onClick={onOpenMods}>
-              <Puzzle className="h-3.5 w-3.5" /> 打开 Mod 管理
+              <Puzzle className="h-3.5 w-3.5" /> {$('sparkPanel.notInstalled.openMods')}
             </Button>
             <Button size="sm" variant="outline" asChild>
               <a href="https://spark.lucko.me/download" target="_blank" rel="noreferrer">
-                下载页 <ExternalLink className="h-3 w-3" />
+                {$('sparkPanel.notInstalled.download')} <ExternalLink className="h-3 w-3" />
               </a>
             </Button>
           </div>
         </div>
       ) : data.disabled ? (
         <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-foreground">
-          spark 已被禁用（<span className="font-mono">{data.jar}</span>），可在 Mod 管理里重新启用，重启实例后生效。
+          {$('sparkPanel.disabled.pre')}
+          <span className="font-mono">{data.jar}</span>
+          {$('sparkPanel.disabled.post')}
         </div>
       ) : !running ? (
-        <p className="mt-6 text-center text-xs text-muted-foreground">
-          实例未运行，启动后自动采集数据
-        </p>
+        <p className="mt-6 text-center text-xs text-muted-foreground">{$('sparkPanel.notRunning')}</p>
       ) : (
         <>
           {/* 实时指标 */}
           <div className="mt-3 grid grid-cols-[auto_auto_1fr] items-end gap-x-5 gap-y-2">
             <div>
-              <p className="text-[11px] text-muted-foreground">TPS（1 分钟）</p>
+              <p className="text-[11px] text-muted-foreground">{$('sparkPanel.tps1m')}</p>
               <p className={`font-mono text-3xl leading-tight ${stats?.tps ? TONE_CLS[tpsTone(stats.tps[0])] : 'text-muted-foreground'}`}>
                 {stats?.tps ? stats.tps[0].toFixed(1) : '—'}
               </p>
@@ -287,7 +288,7 @@ export function SparkPanel({
               </p>
             </div>
             <div className="justify-self-end text-right">
-              <p className="text-[11px] text-muted-foreground">CPU（进程 1m）</p>
+              <p className="text-[11px] text-muted-foreground">{$('sparkPanel.cpu')}</p>
               <p className="font-mono text-lg leading-tight text-foreground">
                 {stats?.cpu?.length ? `${stats.cpu[1] ?? stats.cpu[0]}%` : '—'}
               </p>
@@ -299,16 +300,14 @@ export function SparkPanel({
             </div>
           </div>
           {stats?.stale && (
-            <p className="mt-1 text-[11px] text-muted-foreground">等待 spark 响应…</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{$('sparkPanel.stale')}</p>
           )}
 
           {/* 趋势（会话内积累，最多 60 个点） */}
           <div className="mt-2 grid gap-1 text-muted-foreground">
             <Sparkline points={tpsHist} max={20} className="h-8 w-full text-emerald-500/70" />
             <Sparkline points={cpuHist} max={100} className="h-6 w-full text-sky-500/60" />
-            <p className="text-[10px] leading-none">
-              上：TPS（0–20） · 下：CPU%（0–100） · 每 15 秒采样一次
-            </p>
+            <p className="text-[10px] leading-none">{$('sparkPanel.legend')}</p>
           </div>
 
           {/* profiler */}
@@ -317,10 +316,10 @@ export function SparkPanel({
               {profEndsAt ? (
                 <>
                   <span className="font-mono text-xs text-amber-600 dark:text-amber-400">
-                    分析中…剩 {profLeftSec}s
+                    {$('sparkPanel.profilingLeft', profLeftSec)}
                   </span>
                   <Button size="sm" variant="outline" className="ml-auto" onClick={stopProfiler}>
-                    <Square className="h-3 w-3" /> 停止
+                    <Square className="h-3 w-3" /> {$('instanceDetail.op.stop')}
                   </Button>
                 </>
               ) : (
@@ -330,12 +329,12 @@ export function SparkPanel({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="60">1 分钟</SelectItem>
-                      <SelectItem value="300">5 分钟</SelectItem>
+                      <SelectItem value="60">{$('sparkPanel.dur1m')}</SelectItem>
+                      <SelectItem value="300">{$('sparkPanel.dur5m')}</SelectItem>
                     </SelectContent>
                   </Select>
                   <Button size="sm" variant="secondary" className="ml-auto" onClick={startProfiler}>
-                    <Activity className="h-3.5 w-3.5" /> 开始分析
+                    <Activity className="h-3.5 w-3.5" /> {$('sparkPanel.start')}
                   </Button>
                 </>
               )}
@@ -344,9 +343,9 @@ export function SparkPanel({
                 variant="ghost"
                 disabled={healthBusy}
                 onClick={loadHealth}
-                title="输出内存 / GC / 硬件健康摘要"
+                title={$('sparkPanel.healthTooltip')}
               >
-                <HeartPulse className={`h-3.5 w-3.5 ${healthBusy ? 'animate-pulse' : ''}`} /> 健康摘要
+                <HeartPulse className={`h-3.5 w-3.5 ${healthBusy ? 'animate-pulse' : ''}`} /> {$('sparkPanel.health')}
               </Button>
             </div>
             {healthLines && (
@@ -358,7 +357,7 @@ export function SparkPanel({
 
           {/* 报告列表 */}
           <div className="mt-3">
-            <p className="text-[11px] text-muted-foreground">性能报告（点击在 spark.lucko.me 查看）</p>
+            <p className="text-[11px] text-muted-foreground">{$('sparkPanel.reports')}</p>
             {data.reports.length ? (
               <ul className="mt-1 grid gap-1">
                 {data.reports.map((r) => (
@@ -377,7 +376,7 @@ export function SparkPanel({
                 ))}
               </ul>
             ) : (
-              <p className="mt-1 text-xs text-muted-foreground">暂无报告</p>
+              <p className="mt-1 text-xs text-muted-foreground">{$('sparkPanel.noReports')}</p>
             )}
           </div>
         </>

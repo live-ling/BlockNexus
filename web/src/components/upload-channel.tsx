@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { ServerSummary } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 
 export type UploadChannel = 'channel' | 'sftp';
 
@@ -27,7 +28,7 @@ export function UploadChannelSelect({
   const ready = sftpAvailable(server);
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <Label className="text-xs text-muted-foreground">传输通道</Label>
+      <Label className="text-xs text-muted-foreground">{$('uploadChannel.label')}</Label>
       <Select
         value={value}
         onValueChange={(v) => onChange(v as UploadChannel)}
@@ -36,16 +37,15 @@ export function UploadChannelSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="channel">加密通道（分块上传）</SelectItem>
+          <SelectItem value="channel">{$('uploadChannel.channel')}</SelectItem>
           <SelectItem value="sftp" disabled={!ready}>
-            SFTP 直传{ready ? '' : '（未配置 SSH 凭据）'}
+            {/* 相邻两个表达式之间 JSX 不留空白：边界空格写在 uploadChannel.sftp.noCreds 的键值里 */}
+            {$('uploadChannel.sftp')}{ready ? '' : $('uploadChannel.sftp.noCreds')}
           </SelectItem>
         </SelectContent>
       </Select>
       <span className="text-muted-foreground">
-        {value === 'sftp'
-          ? '用服务器 SSH 凭据直传到实例目录，无 200MB 上限'
-          : '经面板加密通道分块传输，单文件上限 200MB'}
+        {value === 'sftp' ? $('uploadChannel.sftp.hint') : $('uploadChannel.channel.hint')}
       </span>
     </div>
   );

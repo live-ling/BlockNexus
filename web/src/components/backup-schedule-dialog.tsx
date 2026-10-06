@@ -24,17 +24,27 @@ import {
   type Instance,
   type ServerSummary,
 } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
-const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+// 星期文案存键名：模块顶层不能调用 $()（会把加载那一刻的语言固化）
+const WEEKDAYS = [
+  'backupSchedule.weekday.sun',
+  'backupSchedule.weekday.mon',
+  'backupSchedule.weekday.tue',
+  'backupSchedule.weekday.wed',
+  'backupSchedule.weekday.thu',
+  'backupSchedule.weekday.fri',
+  'backupSchedule.weekday.sat',
+] as const;
 
 /** 间隔预设（分钟）：5/15/30 → 每周 */
 const INTERVAL_PRESETS = [5, 15, 30, 60, 180, 360, 720, 1440, 10080];
 
 function intervalLabel(minutes: number): string {
-  if (minutes % 1440 === 0) return `每 ${minutes / 1440} 天`;
-  if (minutes % 60 === 0) return `每 ${minutes / 60} 小时`;
-  return `每 ${minutes} 分钟`;
+  if (minutes % 1440 === 0) return $('backupSchedule.interval.days', minutes / 1440);
+  if (minutes % 60 === 0) return $('backupSchedule.interval.hours', minutes / 60);
+  return $('backupSchedule.interval.minutes', minutes);
 }
 
 export function BackupScheduleDialog({
@@ -91,11 +101,10 @@ export function BackupScheduleDialog({
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
-            <Archive className="h-4 w-4" /> 定时备份 · {instance.name}
+            <Archive className="h-4 w-4" /> {$('backupSchedule.title', instance.name)}
           </DialogTitle>
           <DialogDescription>
-            到点自动把整个实例目录打包为 tar.gz 快照（实例未运行也会照常备份；运行中会先
-            save-off/save-all 落盘再打包）。计划在 Agent 上执行，面板关闭也生效。
+            {$('backupSchedule.description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -105,9 +114,9 @@ export function BackupScheduleDialog({
           {/* 总开关 */}
           <label className="flex items-center justify-between gap-4 rounded-lg border p-3">
             <span className="grid gap-0.5">
-              <span className="text-sm font-medium">启用定时备份</span>
+              <span className="text-sm font-medium">{$('backupSchedule.enable.label')}</span>
               <span className="text-xs text-muted-foreground">
-                关闭后不再自动备份，已有备份与手动备份不受影响
+                {$('backupSchedule.enable.desc')}
               </span>
             </span>
             <Switch
@@ -118,7 +127,7 @@ export function BackupScheduleDialog({
           {cfg.enabled && (
             <div className="grid grid-cols-[1fr_100px] items-center gap-3 pl-1">
               <span className="text-xs text-muted-foreground">
-                保留份数 · 备份成功后自动清理最旧的（0 = 不限制，手动和自动一起计数）
+                {$('backupSchedule.keepCount.hint')}
               </span>
               <Input
                 inputMode="numeric"
@@ -137,14 +146,14 @@ export function BackupScheduleDialog({
           <div className="grid gap-2">
             <div className="flex items-center gap-2">
               <Timer className="h-3.5 w-3.5 text-muted-foreground" />
-              <b className="text-sm">备份计划</b>
+              <b className="text-sm">{$('backupSchedule.list.title')}</b>
               <Button variant="outline" size="sm" className="ml-auto" onClick={addSchedule}>
-                <Plus className="h-3.5 w-3.5" /> 添加
+                <Plus className="h-3.5 w-3.5" /> {$('backupSchedule.add')}
               </Button>
             </div>
             {cfg.schedules.length === 0 ? (
               <p className="rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
-                还没有备份计划（例如每天凌晨 4 点自动备份一次存档）
+                {$('backupSchedule.empty')}
               </p>
             ) : (
               <div className="grid gap-2">
@@ -159,8 +168,8 @@ export function BackupScheduleDialog({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="daily">每日定时</SelectItem>
-                          <SelectItem value="interval">固定间隔</SelectItem>
+                          <SelectItem value="daily">{$('backupSchedule.type.daily')}</SelectItem>
+                          <SelectItem value="interval">{$('backupSchedule.type.interval')}</SelectItem>
                         </SelectContent>
                       </Select>
                       {s.type === 'daily' ? (
@@ -201,7 +210,7 @@ export function BackupScheduleDialog({
                           variant="ghost"
                           size="icon-sm"
                           className="text-destructive hover:text-destructive"
-                          aria-label="删除计划"
+                          aria-label={$('backupSchedule.deleteAria')}
                           onClick={() =>
                             setCfg((c) => ({ ...c, schedules: c.schedules.filter((x) => x.id !== s.id) }))
                           }
@@ -212,7 +221,7 @@ export function BackupScheduleDialog({
                     </div>
                     {s.type === 'daily' && (
                       <div className="flex flex-wrap gap-1.5">
-                        {WEEK.map((w, i) => {
+                        {WEEKDAYS.map((w, i) => {
                           const on = s.days.includes(i);
                           return (
                             <button
@@ -229,17 +238,19 @@ export function BackupScheduleDialog({
                                   : 'text-muted-foreground hover:bg-muted'
                               }`}
                             >
-                              {w}
+                              {$(w)}
                             </button>
                           );
                         })}
                         <span className="self-center text-[11px] text-muted-foreground">
-                          {s.days.length ? '仅选中的星期' : '每天'}
+                          {s.days.length ? $('backupSchedule.selectedDaysOnly') : $('backupSchedule.everyDay')}
                         </span>
                       </div>
                     )}
                     <span className="text-[11px] text-muted-foreground">
-                      {s.lastFiredAt ? `上次触发：${timeago(s.lastFiredAt)}` : '尚未触发过'}
+                      {s.lastFiredAt
+                        ? $('backupSchedule.lastFired', timeago(s.lastFiredAt))
+                        : $('backupSchedule.neverFired')}
                     </span>
                   </div>
                 ))}
@@ -251,7 +262,7 @@ export function BackupScheduleDialog({
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button
             disabled={busy}
@@ -259,17 +270,17 @@ export function BackupScheduleDialog({
               setBusy(true);
               try {
                 await saveBackupSchedule(server.id, instance.name, cfg);
-                success('定时备份设置已保存');
+                success($('backupSchedule.toast.saved'));
                 onOpenChange(false);
                 onSaved();
               } catch (e) {
-                error('保存失败', errText(e));
+                error($('panelSettings.error.save'), errText(e));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            保存
+            {$('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -32,8 +32,8 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errText, type Instance, type ServerSummary } from '@/lib/api';
+import { $, type TranslationKey } from '@/lib/i18n';
 import {
-  TOML_REASON,
   applyJsonChanges,
   applyYamlChanges,
   assignPaths,
@@ -65,10 +65,11 @@ interface ConfigFile {
 }
 
 const GROUP_ORDER: ConfigFile['group'][] = ['plugins', 'config', 'root'];
-const GROUP_LABELS: Record<ConfigFile['group'], string> = {
-  plugins: '插件目录 plugins/',
-  config: '数据目录 config/',
-  root: '根目录配置',
+/** 模块顶层只存键名（$() 在渲染期取词，避免被语言切换冻结） */
+const GROUP_LABEL_KEYS: Record<ConfigFile['group'], TranslationKey> = {
+  plugins: 'pluginConfig.group.plugins',
+  config: 'pluginConfig.group.config',
+  root: 'pluginConfig.group.root',
 };
 
 /** 根目录参与发现的常见配置（server.properties 走专用编辑器，排除） */
@@ -147,7 +148,7 @@ export function PluginConfigDialog({
       );
       setFiles(found);
       if (found.length) setSelected(found[0]);
-      else setDiscoverErr('没有发现配置文件（plugins/、config/ 目录或根目录的常见配置）');
+      else setDiscoverErr($('pluginConfig.discover.none'));
     } catch (e) {
       setDiscoverErr(errText(e));
     } finally {
@@ -186,11 +187,11 @@ export function PluginConfigDialog({
       <DialogContent className="flex max-h-[88vh] flex-col gap-3 sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <SlidersHorizontal className="h-4 w-4" /> 插件配置 · {instance.name}
+            <SlidersHorizontal className="h-4 w-4" /> {$('pluginConfig.title', instance.name)}
           </DialogTitle>
           <DialogDescription>
-            YAML/JSON 配置的结构化编辑，注释与键序原样保留。
-            {running && <span className="text-amber-600 dark:text-amber-400"> 实例正在运行，改动需重启后生效。</span>}
+            {$('pluginConfig.description')}
+            {running && <span className="text-amber-600 dark:text-amber-400">{$('pluginConfig.runningNotice')}</span>}
           </DialogDescription>
         </DialogHeader>
 
@@ -203,7 +204,7 @@ export function PluginConfigDialog({
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索文件…"
+                  placeholder={$('pluginConfig.searchPlaceholder')}
                   className="h-8 pl-7 text-xs"
                 />
               </div>
@@ -211,7 +212,7 @@ export function PluginConfigDialog({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 shrink-0"
-                title="重新扫描"
+                title={$('pluginConfig.rescan')}
                 onClick={discover}
                 disabled={discovering}
               >
@@ -227,7 +228,7 @@ export function PluginConfigDialog({
                     <div key={group} className="grid gap-0.5">
                       <div className="flex items-center gap-1 px-1 py-0.5 text-[11px] font-medium text-muted-foreground">
                         <FolderOpen className="h-3 w-3" />
-                        {GROUP_LABELS[group]}
+                        {$(GROUP_LABEL_KEYS[group])}
                         <span className="ml-auto tabular-nums">{list.length}</span>
                       </div>
                       {list.map((f) => (
@@ -266,7 +267,7 @@ export function PluginConfigDialog({
               />
             ) : (
               <div className="grid h-full place-items-center rounded-md border border-dashed text-xs text-muted-foreground">
-                {discovering ? '正在扫描配置文件…' : '从左侧选择一个配置文件开始编辑'}
+                {discovering ? $('pluginConfig.scanning') : $('pluginConfig.pickFile')}
               </div>
             )}
           </div>
@@ -274,7 +275,7 @@ export function PluginConfigDialog({
 
         <DialogFooter className="!justify-end border-t pt-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            关闭
+            {$('common.close')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -333,7 +334,7 @@ function ConfigEditor({
       let result: ParseResult;
       if (file.format === 'yaml') result = parseYamlConfig(data.content);
       else if (file.format === 'json') result = parseJsonConfig(data.content);
-      else result = { error: TOML_REASON };
+      else result = { error: $('pluginConfig.tomlReason') };
       if ('error' in result) {
         setParsed(result);
         setWorking(null);
@@ -416,22 +417,22 @@ function ConfigEditor({
       if (restartAfter) {
         onSavedAndRestart();
       } else {
-        success('已保存', file.path);
+        success($('common.saved'), file.path);
         await load();
       }
     } catch (e) {
-      error('保存失败', errText(e));
+      error($('pluginConfig.error.save'), errText(e));
     } finally {
       setBusy(false);
     }
   };
 
-  if (loading) return <div className="grid h-full place-items-center text-xs text-muted-foreground">读取 {file.path} …</div>;
+  if (loading) return <div className="grid h-full place-items-center text-xs text-muted-foreground">{$('pluginConfig.loading', file.path)}</div>;
   if (loadError)
     return (
       <div className="grid h-full place-items-center gap-2 p-4 text-center text-xs text-muted-foreground">
         <AlertTriangle className="h-4 w-4 text-amber-500" />
-        读取失败：{loadError}
+        {$('pluginConfig.error.load', loadError)}
       </div>
     );
 
@@ -446,7 +447,7 @@ function ConfigEditor({
         <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{file.path}</code>
         {canForm && (
           <Button variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-xs" onClick={() => setShowRaw((v) => !v)}>
-            {showRaw ? '返回表单视图' : '原始文本'}
+            {showRaw ? $('pluginConfig.backToForm') : $('pluginConfig.rawText')}
           </Button>
         )}
       </div>
@@ -454,7 +455,7 @@ function ConfigEditor({
       {(file.format === 'toml' || parseError) && (
         <p className="flex items-start gap-1.5 rounded bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-          {parseError || TOML_REASON}
+          {parseError || $('pluginConfig.tomlReason')}
         </p>
       )}
 
@@ -476,7 +477,7 @@ function ConfigEditor({
                 <NodeView key={child.path} node={child} depth={0} onChange={setLeaf} ops={ops} />
               ))}
             {working!.kind === 'object' && !working!.children.length && (
-              <p className="py-6 text-center text-xs text-muted-foreground">文件为空配置</p>
+              <p className="py-6 text-center text-xs text-muted-foreground">{$('pluginConfig.emptyFile')}</p>
             )}
           </div>
         </div>
@@ -485,20 +486,21 @@ function ConfigEditor({
       <div className="flex items-center gap-2 border-t pt-2">
         {running && (
           <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="h-3 w-3" /> 需重启生效
+            <AlertTriangle className="h-3 w-3" /> {$('pluginConfig.needRestart')}
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
           <Button variant="outline" size="sm" disabled={busy || !saveDirty} onClick={load}>
-            放弃修改
+            {$('pluginConfig.discard')}
           </Button>
           {running ? (
             <Button size="sm" disabled={busy || !saveDirty} onClick={() => save(true)}>
-              <RotateCw className="h-3.5 w-3.5" /> 保存并重启
+              <RotateCw className="h-3.5 w-3.5" /> {$('pluginConfig.saveRestart')}
             </Button>
           ) : (
             <Button size="sm" disabled={busy || !saveDirty} onClick={() => save(false)}>
-              <Save className="h-3.5 w-3.5" /> 保存{!showRaw && canForm && dirty ? `（${changes.length} 项改动）` : ''}
+              <Save className="h-3.5 w-3.5" /> {$('pluginConfig.save')}
+              {!showRaw && canForm && dirty ? $('pluginConfig.saveChanges', changes.length) : ''}
             </Button>
           )}
         </div>
@@ -542,7 +544,7 @@ function NodeView({
             {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
             {node.key && <span className="shrink-0 font-mono text-[11px] font-medium">{node.key}</span>}
             {node.comment && <span className="min-w-0 truncate text-[11px] text-muted-foreground">{node.comment}</span>}
-            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{node.children.length} 项</span>
+            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{$('pluginConfig.itemsCount', node.children.length)}</span>
           </button>
         )}
         {(depth === 0 || open) &&
@@ -568,13 +570,13 @@ function NodeView({
             {node.key && <span className="shrink-0 font-mono text-[11px] font-medium">{node.key}</span>}
             {node.comment && <span className="min-w-0 truncate text-[11px] text-muted-foreground">{node.comment}</span>}
             <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-              {node.items.length} 项
+              {$('pluginConfig.itemsCount', node.items.length)}
               {scalarItems && !tooMany && (
                 <span
                   role="button"
                   tabIndex={0}
                   className="rounded p-0.5 hover:bg-accent hover:text-foreground"
-                  title="在末尾添加一项"
+                  title={$('pluginConfig.append')}
                   onClick={(e) => {
                     e.stopPropagation();
                     ops.append(node.path);
@@ -596,7 +598,7 @@ function NodeView({
         )}
         {(depth === 0 || open) &&
           (tooMany ? (
-            <p className="py-1 text-[11px] text-muted-foreground">数组过大（{node.items.length} 项），请用「原始文本」编辑。</p>
+            <p className="py-1 text-[11px] text-muted-foreground">{$('pluginConfig.arrayTooLarge', node.items.length)}</p>
           ) : (
             node.items.map((it, i) => (
               <div key={it.path} className="flex items-start gap-1">
@@ -608,7 +610,7 @@ function NodeView({
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-                  title="移除该项"
+                  title={$('pluginConfig.remove')}
                   onClick={() => ops.remove(node.path, i)}
                 >
                   <X className="h-3 w-3" />
@@ -639,7 +641,7 @@ function LeafRow({
       return (
         <label className="flex items-center gap-2 text-xs">
           <Switch checked={node.value} onCheckedChange={(v) => onChange(node.path, v)} />
-          <span className="text-[11px] text-muted-foreground">{node.value ? '开启' : '关闭'}</span>
+          <span className="text-[11px] text-muted-foreground">{node.value ? $('pluginConfig.on') : $('pluginConfig.off')}</span>
         </label>
       );
     }
@@ -663,7 +665,7 @@ function LeafRow({
     return (
       <Input
         value={typeof node.value === 'string' ? node.value : ''}
-        placeholder="空值（输入内容即改为字符串）"
+        placeholder={$('pluginConfig.nullPlaceholder')}
         onChange={(e) => onChange(node.path, e.target.value)}
         className="h-7 text-xs"
       />
