@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/select';
 import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary, type SshCheckResult } from '@/lib/api';
 import { uploadFile, uploadFileViaSftp } from '@/lib/upload';
-import { $ } from '@/lib/i18n';
+import { $, type TranslationKey } from '@/lib/i18n';
 import { UploadChannelSelect, type UploadChannel } from '@/components/upload-channel';
 import { useToastHelpers } from '@/lib/toast';
 import { FileUpload, type FileUploadItem } from '@/components/motion/file-upload';
@@ -52,17 +52,28 @@ const FALLBACK_KINDS = [
   { id: 'upload', label: CORE_LABEL.upload, api: false },
 ];
 
-const CORE_HINT: Record<string, string> = {
-  vanilla: 'Mojang 官方服务端，最稳但没优化',
-  paper: '高性能、插件生态最好，最常用',
-  purpur: 'Paper 的增强分支，可调项更多',
-  folia: '多线程区域化，适合大量玩家',
-  fabric: '轻量模组端，需跑安装器（约 1-3 分钟）',
-  forge: '经典模组端，需跑安装器（约 3-8 分钟）',
-  neoforge: 'Forge 的新分支，1.20.2+ 推荐',
-  url: '填入任意 .jar 直链',
-  upload: '创建后上传本地 .jar',
+/**
+ * 核心类型 → i18n 键。
+ * ⚠ 存**键**而不是翻译后的文案：`$()` 在调用时按当前语言取词，
+ * 若在这里就求值，模块加载时的语言会被永久固化（切语言后不生效）。
+ */
+const CORE_HINT_KEY: Record<string, TranslationKey> = {
+  vanilla: 'core.hint.vanilla',
+  paper: 'core.hint.paper',
+  purpur: 'core.hint.purpur',
+  folia: 'core.hint.folia',
+  fabric: 'core.hint.fabric',
+  forge: 'core.hint.forge',
+  neoforge: 'core.hint.neoforge',
+  url: 'core.hint.url',
+  upload: 'core.hint.upload',
 };
+
+/** 取核心类型说明（渲染时调用，跟随当前语言）；未知类型返回空串 */
+function coreHint(source: string): string {
+  const key = CORE_HINT_KEY[source];
+  return key ? $(key) : '';
+}
 
 // ---------- 添加服务器 ----------
 
@@ -693,7 +704,7 @@ export function CreateInstanceDialog({
       if (!uploadInst) return;
       if (!/\.jar$/i.test(file.name)) {
         setUploadItems((cur) =>
-          cur.map((u) => (u.id === item.id ? { ...u, status: 'error', error: '请上传 .jar 文件' } : u)),
+          cur.map((u) => (u.id === item.id ? { ...u, status: 'error', error: $('createInstance.upload.needJar') } : u)),
         );
         return;
       }
@@ -716,7 +727,7 @@ export function CreateInstanceDialog({
           body: { filename: file.name },
         });
         setUploadItems((cur) => cur.map((u) => (u.id === item.id ? { ...u, status: 'success', progress: 100 } : u)));
-        success('核心已就绪', `${file.name} → server.jar`);
+        success($('createInstance.upload.ready'), $('createInstance.upload.readyDetail', file.name));
         onOpenChange(false);
         onCreated();
       } catch (e) {
@@ -724,7 +735,7 @@ export function CreateInstanceDialog({
         setUploadItems((cur) =>
           cur.map((u) => (u.id === item.id ? { ...u, status: 'error', error: errText(e) } : u)),
         );
-        error('上传失败', errText(e));
+        error($('createInstance.upload.failed'), errText(e));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -739,10 +750,9 @@ export function CreateInstanceDialog({
         {!step2 ? (
           <>
             <DialogHeader className="shrink-0">
-              <DialogTitle>新建 MC 实例</DialogTitle>
+              <DialogTitle>{$('createInstance.title')}</DialogTitle>
               <DialogDescription>
-                选一个服务端核心，面板会自动下载安装（Fabric/Forge/NeoForge 会跑官方安装器，耗时稍长）；
-                也可以填直链或上传本地 .jar。
+                {$('createInstance.description')}
               </DialogDescription>
               <MslCredit />
             </DialogHeader>
@@ -753,17 +763,17 @@ export function CreateInstanceDialog({
               {/* 名称占满剩余宽度，端口按内容收敛为固定窄列 */}
               <div className="flex items-end gap-3 sm:col-span-2">
                 <div className="grid min-w-0 flex-1 gap-1.5">
-                  <Label htmlFor="c-name">实例名称</Label>
+                  <Label htmlFor="c-name">{$('createInstance.name')}</Label>
                   <Input id="c-name" placeholder="survival" />
                 </div>
                 <div className="grid w-[104px] shrink-0 gap-1.5">
-                  <Label htmlFor="c-port">端口</Label>
+                  <Label htmlFor="c-port">{$('createInstance.port')}</Label>
                   <Input id="c-port" defaultValue="25565" />
                 </div>
               </div>
 
               <div className="grid gap-1.5">
-                <Label>核心类型</Label>
+                <Label>{$('createInstance.coreType')}</Label>
                 <Select value={source} onValueChange={onSourceChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -776,21 +786,21 @@ export function CreateInstanceDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-[11px] leading-snug text-muted-foreground">{CORE_HINT[source] ?? ''}</p>
+                <p className="text-[11px] leading-snug text-muted-foreground">{coreHint(source)}</p>
               </div>
               {source === 'url' ? (
                 <div className="grid gap-1.5">
-                  <Label htmlFor="c-url">核心下载 URL</Label>
+                  <Label htmlFor="c-url">{$('createInstance.url')}</Label>
                   <Input
                     id="c-url"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://... 直链 .jar"
+                    placeholder={$('createInstance.url.placeholder')}
                   />
                 </div>
               ) : source === 'upload' ? (
                 <div className="grid gap-1.5">
-                  <Label htmlFor="c-vlabel2">版本名称（显示用，可留空）</Label>
+                  <Label htmlFor="c-vlabel2">{$('createInstance.versionLabel')}</Label>
                   <Input
                     id="c-vlabel2"
                     value={versionLabel}
@@ -798,37 +808,37 @@ export function CreateInstanceDialog({
                     placeholder="paper-1.21"
                   />
                   <p className="text-[11px] leading-snug text-muted-foreground">
-                    创建后会进入上传步骤，选择本地 .jar 即可。
+                    {$('createInstance.uploadHint')}
                   </p>
                 </div>
               ) : (
                 <div className="grid gap-1.5">
-                  <Label>MC 版本</Label>
+                  <Label>{$('createInstance.mcVersion')}</Label>
                   {loadErr ? (
-                    <p className="text-xs text-destructive">核心目录加载失败：{loadErr}</p>
+                    <p className="text-xs text-destructive">{$('createInstance.catalogLoadFailed', loadErr)}</p>
                   ) : !catalog ? (
                     <div className="h-9 animate-pulse rounded-md bg-muted" />
                   ) : !catalog.ok ? (
                     <p className="text-xs text-destructive">
-                      {catalog.error || '该核心的版本目录不可用'}
-                      ，可改用「自定义 URL」或「上传本地核心」。
+                      {catalog.error || $('createInstance.catalogUnavailable')}
+                      {$('createInstance.catalogUnavailable.suffix')}
                     </p>
                   ) : (
                     <>
                       {catalog.stale && (
                         <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-400">
-                          当前为缓存的目录（在线清单获取失败）；安装时若同样受限，建议改用自定义 URL 或上传本地核心。
+                          {$('createInstance.catalogCached')}
                         </p>
                       )}
                       <Select value={version} onValueChange={setVersion}>
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="选择版本" />
+                          <SelectValue placeholder={$('createInstance.version.placeholder')} />
                         </SelectTrigger>
                         <SelectContent className="max-h-72">
                           {catalog.versions.map((v) => (
                             <SelectItem key={v.id} value={v.id}>
                               {v.id}
-                              {v.id === catalog.latest ? '（最新）' : ''}
+                              {v.id === catalog.latest ? $('createInstance.version.latest') : ''}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -839,7 +849,7 @@ export function CreateInstanceDialog({
               )}
               {source === 'url' && (
                 <div className="grid gap-1.5 sm:col-span-2">
-                  <Label htmlFor="c-vlabel">版本名称（显示用，可留空）</Label>
+                  <Label htmlFor="c-vlabel">{$('createInstance.versionLabel')}</Label>
                   <Input
                     id="c-vlabel"
                     value={versionLabel}
@@ -850,14 +860,14 @@ export function CreateInstanceDialog({
               )}
 
               <div className="grid gap-1.5">
-                <Label>最大内存</Label>
+                <Label>{$('createInstance.memory')}</Label>
                 <Select value={memory} onValueChange={setMemory}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {recommended && (
-                      <SelectItem value={String(recommended)}>{fmtMB(recommended)}（推荐）</SelectItem>
+                      <SelectItem value={String(recommended)}>{$('createInstance.memory.recommended', fmtMB(recommended))}</SelectItem>
                     )}
                     <SelectItem value="512">512 MB</SelectItem>
                     <SelectItem value="1024">1 GB</SelectItem>
@@ -865,7 +875,7 @@ export function CreateInstanceDialog({
                     <SelectItem value="4096">4 GB</SelectItem>
                     <SelectItem value="8192">8 GB</SelectItem>
                     <SelectItem value="16384">16 GB</SelectItem>
-                    <SelectItem value="custom">自定义…</SelectItem>
+                    <SelectItem value="custom">{$('createInstance.memory.custom')}</SelectItem>
                   </SelectContent>
                 </Select>
                 {memory === 'custom' && (
@@ -873,19 +883,19 @@ export function CreateInstanceDialog({
                     inputMode="numeric"
                     value={customMem}
                     onChange={(e) => setCustomMem(e.target.value.replace(/[^\d]/g, ''))}
-                    placeholder="输入确切内存（MB），如 1536"
+                    placeholder={$('createInstance.memory.customPlaceholder')}
                   />
                 )}
               </div>
               <div className="grid gap-1.5">
-                <Label>正版验证 (online-mode)</Label>
+                <Label>{$('createInstance.onlineMode')}</Label>
                 <Select value={onlineMode} onValueChange={setOnlineMode}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="true">开启</SelectItem>
-                    <SelectItem value="false">关闭（离线模式）</SelectItem>
+                    <SelectItem value="true">{$('createInstance.onlineMode.on')}</SelectItem>
+                    <SelectItem value="false">{$('createInstance.onlineMode.off')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -899,7 +909,7 @@ export function CreateInstanceDialog({
             <label className="flex shrink-0 items-center gap-2 text-sm">
               <Checkbox checked={eula} onCheckedChange={(v) => setEula(v === true)} />
               <span>
-                我已阅读并同意{' '}
+                {$('createInstance.eula.pre')}
                 <a
                   href="https://aka.ms/MinecraftEULA"
                   target="_blank"
@@ -912,18 +922,18 @@ export function CreateInstanceDialog({
             </label>
             <DialogFooter className="shrink-0">
               <Button variant="outline" onClick={() => onOpenChange(false)}>
-                取消
+                {$('common.cancel')}
               </Button>
               <Button
                 disabled={busy}
                 onClick={async () => {
                   if (!eula) {
-                    error('需要先同意 EULA');
+                    error($('createInstance.error.eula'));
                     return;
                   }
                   const memMB = resolveMemoryMB();
                   if (!memMB || memMB < 512 || memMB > 32768) {
-                    error('内存需在 512 - 32768 MB 之间');
+                    error($('createInstance.error.memoryRange'));
                     return;
                   }
                   setBusy(true);
@@ -940,7 +950,7 @@ export function CreateInstanceDialog({
                     };
                     if (source === 'url') {
                       if (!url.trim()) {
-                        error('请填写核心下载 URL');
+                        error($('createInstance.error.urlRequired'));
                         setBusy(false);
                         return;
                       }
@@ -950,7 +960,7 @@ export function CreateInstanceDialog({
                       body.version = versionLabel.trim();
                     } else {
                       if (!version) {
-                        error('请选择 MC 版本');
+                        error($('createInstance.error.versionRequired'));
                         setBusy(false);
                         return;
                       }
@@ -963,28 +973,30 @@ export function CreateInstanceDialog({
                     await api(`/servers/${server.id}/instances`, { method: 'POST', body });
                     if (source === 'upload') {
                       setUploadInst(name);
-                      success('实例已创建', '上传你的服务端核心（.jar）');
+                      success($('createInstance.toast.created'), $('createInstance.toast.createdDetail'));
                     } else {
                       onOpenChange(false);
-                      success('创建中', INSTALLER_SOURCES.has(source) ? '正在下载并运行安装器，请留意控制台' : 'server.jar 开始下载');
+                      success($('createInstance.toast.creating'), INSTALLER_SOURCES.has(source)
+                        ? $('createInstance.toast.installer')
+                        : $('createInstance.toast.downloading'));
                       onCreated();
                     }
                   } catch (e) {
-                    error('创建失败', errText(e));
+                    error($('createInstance.error.failed'), errText(e));
                   } finally {
                     setBusy(false);
                   }
                 }}
               >
-                {source === 'upload' ? '创建并上传' : '创建'}
+                {source === 'upload' ? $('createInstance.createAndUpload') : $('createInstance.create')}
               </Button>
             </DialogFooter>
           </>
         ) : (
           <>
             <DialogHeader className="shrink-0">
-              <DialogTitle>上传服务端核心 · {uploadInst}</DialogTitle>
-              <DialogDescription>上传完成后自动重命名为 server.jar；也可以稍后在「文件管理」中上传。</DialogDescription>
+              <DialogTitle>{$('createInstance.upload.title', uploadInst ?? '')}</DialogTitle>
+              <DialogDescription>{$('createInstance.upload.description')}</DialogDescription>
             </DialogHeader>
             <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
             <UploadChannelSelect server={server} value={channel} onChange={setChannel} />
@@ -995,11 +1007,11 @@ export function CreateInstanceDialog({
               onRetry={(item) => item.file && uploadCore(item, item.file)}
               accept=".jar"
               maxFiles={1}
-              title="拖拽 .jar 到此处，或点击选择"
+              title={$('createInstance.upload.dropzone')}
               description={
-                channel === 'sftp' ? 'SFTP 直传到实例根目录，无大小限制' : '服务端核心（server.jar）'
+                channel === 'sftp' ? $('createInstance.upload.sftp') : $('createInstance.upload.jar')
               }
-              browseLabel="选择文件"
+              browseLabel={$('createInstance.upload.browse')}
             />
             </div>
             <DialogFooter className="shrink-0">
@@ -1010,7 +1022,7 @@ export function CreateInstanceDialog({
                   onCreated();
                 }}
               >
-                稍后上传，先关闭
+                {$('createInstance.upload.later')}
               </Button>
             </DialogFooter>
           </>
@@ -1055,9 +1067,9 @@ export function EditInstanceDialog({
       setIconMissing(false);
       setIconV(Date.now());
       setCropSrc(null);
-      success('服务器图标已更新', '游戏内服务器列表重启后生效');
+      success($('editInstance.toast.iconUpdated'), $('editInstance.toast.iconUpdatedDetail'));
     } catch (e) {
-      error('图标上传失败', errText(e));
+      error($('editInstance.error.iconUpload'), errText(e));
     } finally {
       setIconBusy(false);
     }
@@ -1097,8 +1109,8 @@ export function EditInstanceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-md">
         <DialogHeader className="shrink-0">
-          <DialogTitle>编辑实例 · {instance.name}</DialogTitle>
-          <DialogDescription>备注与连接地址只影响面板展示，不改变服务端配置。</DialogDescription>
+          <DialogTitle>{$('editInstance.title', instance.name)}</DialogTitle>
+          <DialogDescription>{$('editInstance.description')}</DialogDescription>
         </DialogHeader>
         <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1 grid content-start gap-4">
           <div className="flex items-center gap-3">
@@ -1117,9 +1129,9 @@ export function EditInstanceDialog({
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium">服务器图标</p>
+              <p className="text-xs font-medium">{$('editInstance.icon')}</p>
               <p className="text-[11px] leading-snug text-muted-foreground">
-                本地裁切并自动压缩到 64×64 PNG；游戏内服务器列表重启后生效。
+                {$('editInstance.icon.hint')}
               </p>
               <input
                 ref={iconFileRef}
@@ -1140,41 +1152,41 @@ export function EditInstanceDialog({
                 onClick={() => iconFileRef.current?.click()}
               >
                 <ImagePlus className="h-3.5 w-3.5" />
-                {iconBusy ? '上传中…' : '更换图标'}
+                {iconBusy ? $('editInstance.icon.uploading') : $('editInstance.icon.change')}
               </Button>
             </div>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="ei-note">备注</Label>
+            <Label htmlFor="ei-note">{$('editInstance.note')}</Label>
             <Textarea
               id="ei-note"
               rows={3}
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="例如：生存服，每周日凌晨重启"
+              placeholder={$('editInstance.note.placeholder')}
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="ei-addr">连接地址（可选）</Label>
+            <Label htmlFor="ei-addr">{$('editInstance.address')}</Label>
             <Input
               id="ei-addr"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="例如：mc.example.com 或 play.example.com:25565"
+              placeholder={$('editInstance.address.placeholder')}
             />
             <p className="text-xs text-muted-foreground">
-              填了之后会显示在实例卡片 IP 后面的括号里，方便玩家复制连接地址。
+              {$('editInstance.address.hint')}
             </p>
           </div>
           <div className="grid gap-2">
-            <Label>最大内存</Label>
+            <Label>{$('createInstance.memory')}</Label>
             <Select value={memory} onValueChange={setMemory}>
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {recommended && (
-                  <SelectItem value={String(recommended)}>{fmtMB(recommended)}（推荐）</SelectItem>
+                  <SelectItem value={String(recommended)}>{$('createInstance.memory.recommended', fmtMB(recommended))}</SelectItem>
                 )}
                 <SelectItem value="512">512 MB</SelectItem>
                 <SelectItem value="1024">1 GB</SelectItem>
@@ -1182,7 +1194,7 @@ export function EditInstanceDialog({
                 <SelectItem value="4096">4 GB</SelectItem>
                 <SelectItem value="8192">8 GB</SelectItem>
                 <SelectItem value="16384">16 GB</SelectItem>
-                <SelectItem value="custom">自定义…</SelectItem>
+                <SelectItem value="custom">{$('createInstance.memory.custom')}</SelectItem>
               </SelectContent>
             </Select>
             {memory === 'custom' && (
@@ -1190,18 +1202,18 @@ export function EditInstanceDialog({
                 inputMode="numeric"
                 value={customMem}
                 onChange={(e) => setCustomMem(e.target.value.replace(/[^\d]/g, ''))}
-                placeholder="输入确切内存（MB），如 1536"
+                placeholder={$('createInstance.memory.customPlaceholder')}
               />
             )}
             <p className="text-xs text-muted-foreground">
-              当前 {fmtMB(instance.memoryMB)}
-              {running && ' · 实例正在运行，改动需重启后生效'}
+              {$('editInstance.memory.current', fmtMB(instance.memoryMB))}
+              {running && $('editInstance.memory.needRestart')}
             </p>
           </div>
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button
             disabled={busy}
@@ -1209,7 +1221,7 @@ export function EditInstanceDialog({
               setBusy(true);
               const memMB = resolveMemoryMB();
               if (!memMB || memMB < 512 || memMB > 32768) {
-                error('内存需在 512 - 32768 MB 之间');
+                error($('createInstance.error.memoryRange'));
                 setBusy(false);
                 return;
               }
@@ -1218,17 +1230,17 @@ export function EditInstanceDialog({
                   method: 'PUT',
                   body: { note, address, memoryMB: memMB },
                 });
-                success('已保存', running ? '内存改动将在下次启动生效' : undefined);
+                success($('editInstance.toast.saved'), running ? $('editInstance.toast.savedRestart') : undefined);
                 onOpenChange(false);
                 onSaved();
               } catch (e) {
-                error('保存失败', errText(e));
+                error($('editServer.error.saveFailed'), errText(e));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            保存
+            {$('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1359,9 +1371,9 @@ function IconCropDialog({
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>裁切服务器图标</DialogTitle>
+          <DialogTitle>{$('iconCrop.title')}</DialogTitle>
           <DialogDescription>
-            在图上按住左键拖出正方形选区，拖动可移动位置，滑杆调大小；输出 64×64 PNG。
+            {$('iconCrop.description')}
           </DialogDescription>
         </DialogHeader>
         <div
@@ -1401,7 +1413,7 @@ function IconCropDialog({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="shrink-0 text-xs text-muted-foreground">选区大小</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{$('iconCrop.size')}</span>
           <input
             type="range"
             min={24}
@@ -1418,10 +1430,10 @@ function IconCropDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button disabled={!ready || !sel.size} onClick={confirm}>
-            确认并上传
+            {$('iconCrop.confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1477,20 +1489,20 @@ export function ReinstallDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-md">
         <DialogHeader className="shrink-0">
-          <DialogTitle>重装核心 · {instance.name}</DialogTitle>
+          <DialogTitle>{$('reinstall.title', instance.name)}</DialogTitle>
           <DialogDescription>
-            会先清掉上次安装的残留文件，再重新下载安装。世界存档、server.properties 与实例设置都会保留。
+            {$('reinstall.description')}
           </DialogDescription>
         </DialogHeader>
         <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1 grid content-start gap-4">
           {instance.error && (
             <p className="rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
-              上次失败：{instance.error}
+              {$('reinstall.lastError', instance.error)}
             </p>
           )}
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
-              <Label>核心类型</Label>
+              <Label>{$('createInstance.coreType')}</Label>
               <Select value={source} onValueChange={onSourceChange}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -1505,17 +1517,17 @@ export function ReinstallDialog({
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label>MC 版本</Label>
+              <Label>{$('createInstance.mcVersion')}</Label>
               {loadErr ? (
-                <p className="text-xs text-destructive">目录加载失败：{loadErr}</p>
+                <p className="text-xs text-destructive">{$('reinstall.catalogLoadFailed', loadErr)}</p>
               ) : !catalog ? (
                 <div className="h-9 animate-pulse rounded-md bg-muted" />
               ) : !catalog.ok || !catalog.versions.length ? (
-                <p className="text-xs text-muted-foreground">该核心目录不可用</p>
+                <p className="text-xs text-muted-foreground">{$('reinstall.catalogUnavailable')}</p>
               ) : (
                 <Select value={version} onValueChange={setVersion}>
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="选择版本" />
+                    <SelectValue placeholder={$('reinstall.version.placeholder')} />
                   </SelectTrigger>
                   <SelectContent className="max-h-72">
                     {catalog.versions.map((v) => (
@@ -1529,19 +1541,19 @@ export function ReinstallDialog({
             </div>
           </div>
           <p className="text-[11px] leading-snug text-muted-foreground">
-            {CORE_HINT[source] ?? ''}。若当前网络装不了某个核心，换个类型再试通常就能装上。
+            {coreHint(source)}{$('reinstall.hintSuffix')}
           </p>
           <MslCredit />
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button
             disabled={busy}
             onClick={async () => {
               if (!version) {
-                error('请选择 MC 版本');
+                error($('reinstall.error.noVersion'));
                 return;
               }
               setBusy(true);
@@ -1551,17 +1563,17 @@ export function ReinstallDialog({
                   method: 'POST',
                   body: { source, version, build: hit?.build ?? '' },
                 });
-                success('已开始重装', '进度见下方控制台');
+                success($('reinstall.toast.started'), $('reinstall.toast.startedDetail'));
                 onOpenChange(false);
                 onStarted();
               } catch (e) {
-                error('重装失败', errText(e));
+                error($('reinstall.error.failed'), errText(e));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            <RotateCw className="h-4 w-4" /> 开始重装
+            <RotateCw className="h-4 w-4" /> {$('reinstall.start')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1596,7 +1608,7 @@ export function ConfirmDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogCancel>{$('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction
             disabled={busy}
             onClick={async (e) => {
@@ -1612,7 +1624,7 @@ export function ConfirmDialog({
               }
             }}
           >
-            确认
+            {$('confirm.ok')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
