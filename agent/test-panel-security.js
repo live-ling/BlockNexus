@@ -271,6 +271,27 @@ async function main() {
     await p.close();
   }
 
+  // ================= O. Accept-Language 决定 error 兜底文案的语言 =================
+  {
+    const p = await makePanel({ trustProxy: 1 });
+    // 面板语言存在浏览器里，后端无从得知 —— 由前端带 Accept-Language 上来。
+    // 每个请求用独立 IP，避免共用失败计数而拿到「还可尝试 N 次」的变体文案。
+    const zh = await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'Accept-Language': 'zh', 'X-Forwarded-For': '40.0.0.1' });
+    const en = await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'Accept-Language': 'en', 'X-Forwarded-For': '40.0.0.2' });
+    const enUs = await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'Accept-Language': 'en-US,en;q=0.9', 'X-Forwarded-For': '40.0.0.3' });
+    const other = await errorOf(p.base, '/login', { username: 'admin', password: 'wrong' }, { 'Accept-Language': 'ja', 'X-Forwarded-For': '40.0.0.4' });
+
+    check('Accept-Language: zh → 中文 error', zh.error === '用户名或密码错误', JSON.stringify(zh));
+    check('Accept-Language: en → 英文 error', en.error === 'Incorrect username or password', JSON.stringify(en));
+    check('Accept-Language: en-US 也识别为英文（只认是否以 en 开头）',
+      enUs.error === 'Incorrect username or password', JSON.stringify(enUs));
+    check('不认识的语言回退中文', other.error === '用户名或密码错误', JSON.stringify(other));
+    check('code 不随语言变化（前端据此本地化）',
+      zh.code === 'auth.bad-credentials' && en.code === 'auth.bad-credentials',
+      `${zh.code} / ${en.code}`);
+    await p.close();
+  }
+
   // ---------- 汇总 ----------
   const pass = results.filter((r) => r.ok).length;
   console.log(`\n${pass}/${results.length} panel-security cases passed`);
