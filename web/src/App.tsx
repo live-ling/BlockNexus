@@ -198,15 +198,17 @@ export function App() {
 }
 
 // 会话失效时统一回到登录态。
-// 判定优先用后端给的稳定错误代码（ApiError.code），文案不再是契约的一部分——
-// 之前这里靠 msg.includes('未登录') 匹配中文，改文案就会静默失效。
-// 保留文案兜底是过渡期考虑：尚未迁移的错误接口没有 code。
+// 判定只用**稳定且与语言无关**的信号：
+//   · 后端错误码 ApiError.code（已迁移的接口）
+//   · HTTP 401（覆盖所有尚未迁移 code 的接口）
+// 刻意**不**匹配文案：面板是双语的，文案会随 Accept-Language 变化，
+// 靠 `msg.includes('未登录')` 兜底在英文响应下会静默失效——
+// 而 status===401 本就语言无关地覆盖了同样的场景，那条兜底是多余的。
 window.addEventListener('unhandledrejection', (e) => {
   const err = e.reason;
   const isNotLoggedIn =
     (err instanceof ApiError && err.code === 'auth.not-logged-in') ||
-    (err instanceof ApiError && err.status === 401) ||
-    (err instanceof Error && err.message.includes('未登录'));
+    (err instanceof ApiError && err.status === 401);
   if (isNotLoggedIn) {
     closeSSE();
     location.reload();

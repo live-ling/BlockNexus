@@ -40,17 +40,23 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 
 // 目录还没拉回来时也保证下拉里有得选（顺序与后端 CORE_KINDS 一致）
-const FALLBACK_KINDS = [
-  { id: 'vanilla', label: CORE_LABEL.vanilla, api: true },
-  { id: 'paper', label: CORE_LABEL.paper, api: true },
-  { id: 'purpur', label: CORE_LABEL.purpur, api: true },
-  { id: 'folia', label: CORE_LABEL.folia, api: true },
-  { id: 'fabric', label: CORE_LABEL.fabric, api: true },
-  { id: 'forge', label: CORE_LABEL.forge, api: true },
-  { id: 'neoforge', label: CORE_LABEL.neoforge, api: true },
-  { id: 'url', label: CORE_LABEL.url, api: false },
-  { id: 'upload', label: CORE_LABEL.upload, api: false },
+// ⚠ 只存 id：显示名在渲染期经 kindLabel() 取，模块顶层取词会把语言固化
+const FALLBACK_KINDS: { id: string; api: boolean; label?: string }[] = [
+  { id: 'vanilla', api: true },
+  { id: 'paper', api: true },
+  { id: 'purpur', api: true },
+  { id: 'folia', api: true },
+  { id: 'fabric', api: true },
+  { id: 'forge', api: true },
+  { id: 'neoforge', api: true },
+  { id: 'url', api: false },
+  { id: 'upload', api: false },
 ];
+
+/** 核心类型显示名：目录已返回时用后端的 label，兜底项按 id 查 CORE_LABEL（渲染期取词） */
+function kindLabel(k: { id: string; label?: string }): string {
+  return k.label ?? CORE_LABEL[k.id] ?? k.id;
+}
 
 /**
  * 核心类型 → i18n 键。
@@ -781,7 +787,7 @@ export function CreateInstanceDialog({
                   <SelectContent>
                     {(cores?.kinds ?? FALLBACK_KINDS).map((k) => (
                       <SelectItem key={k.id} value={k.id}>
-                        {k.label}
+                        {kindLabel(k)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1510,7 +1516,7 @@ export function ReinstallDialog({
                 <SelectContent>
                   {FALLBACK_KINDS.filter((k) => k.api).map((k) => (
                     <SelectItem key={k.id} value={k.id}>
-                      {k.label}
+                      {kindLabel(k)}
                     </SelectItem>
                   ))}
                 </SelectContent>

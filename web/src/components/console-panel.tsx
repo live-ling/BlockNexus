@@ -223,7 +223,7 @@ export function ConsolePanel({
               variant="ghost"
               size="icon"
               className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
-              aria-label="关闭控制台"
+              aria-label={$('console.close')}
               onClick={onClose}
             >
               <X className="h-4 w-4" />

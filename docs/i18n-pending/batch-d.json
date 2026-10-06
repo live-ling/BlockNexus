@@ -1,0 +1,90 @@
+{
+  "zh": {
+    "core.label.vanilla": "原版 Vanilla",
+    "core.label.url": "自定义 URL",
+    "core.label.upload": "上传核心",
+
+    "common.requestFailed": "请求失败 {0}",
+    "common.hide": "隐藏",
+    "common.show": "显示",
+
+    "api.ai.analyzeFailed": "AI 分析失败",
+    "api.time.never": "从未",
+    "api.time.justNow": "刚刚",
+    "api.time.minutesAgo": "{0} 分钟前",
+    "api.time.hoursAgo": "{0} 小时前",
+    "api.time.uptime.hm": "{0}时{1}分",
+    "api.time.uptime.m": "{0}分",
+    "api.time.uptime.s": "{0}秒",
+
+    "pluginConfig.error.multiDoc": "包含多个 YAML 文档，仅支持原文编辑",
+    "pluginConfig.error.yamlParse": "YAML 解析失败",
+    "pluginConfig.error.anchor": "包含 YAML 锚点/别名，表单改值会失真，仅支持原文编辑",
+    "pluginConfig.error.notMapping": "顶层不是映射，仅支持原文编辑",
+    "pluginConfig.error.jsonParse": "JSON 解析失败",
+    "pluginConfig.error.notObject": "顶层不是对象，仅支持原文编辑",
+    "pluginConfig.tomlReason": "TOML 序列化会丢失注释，仅提供原文编辑",
+
+    "upload.error.retriesExhausted": "上传多次重试后仍失败",
+    "upload.error.incomplete": "上传未完成，请点重试继续（已支持断点续传）",
+    "upload.error.sftpNetwork": "网络错误，SFTP 直传失败",
+
+    "uploadChannel.label": "传输通道",
+    "uploadChannel.channel": "加密通道（分块上传）",
+    "uploadChannel.channel.hint": "经面板加密通道分块传输，单文件上限 200MB",
+    "uploadChannel.sftp": "SFTP 直传",
+    "uploadChannel.sftp.noCreds": "（未配置 SSH 凭据）",
+    "uploadChannel.sftp.hint": "用服务器 SSH 凭据直传到实例目录，无 200MB 上限",
+
+    "maskedText.tooltip.hide": "点击隐藏",
+    "maskedText.tooltip.show": "点击显示",
+
+    "console.close": "关闭控制台",
+    "fileTree.select.aria": "选择 {0}",
+    "logViewer.jumpToLatest": "跳到最新"
+  },
+  "en": {
+    "core.label.vanilla": "Vanilla",
+    "core.label.url": "Custom URL",
+    "core.label.upload": "Uploaded core",
+
+    "common.requestFailed": "Request failed {0}",
+    "common.hide": "Hide",
+    "common.show": "Show",
+
+    "api.ai.analyzeFailed": "AI analysis failed",
+    "api.time.never": "Never",
+    "api.time.justNow": "Just now",
+    "api.time.minutesAgo": "{0} min ago",
+    "api.time.hoursAgo": "{0} h ago",
+    "api.time.uptime.hm": "{0}h {1}m",
+    "api.time.uptime.m": "{0}m",
+    "api.time.uptime.s": "{0}s",
+
+    "pluginConfig.error.multiDoc": "Contains multiple YAML documents; raw text editing only",
+    "pluginConfig.error.yamlParse": "Failed to parse YAML",
+    "pluginConfig.error.anchor": "Contains YAML anchors/aliases, so form edits would alter the file; raw text editing only",
+    "pluginConfig.error.notMapping": "The top level is not a mapping; raw text editing only",
+    "pluginConfig.error.jsonParse": "Failed to parse JSON",
+    "pluginConfig.error.notObject": "The top level is not an object; raw text editing only",
+    "pluginConfig.tomlReason": "TOML serialization drops comments; raw text editing only",
+
+    "upload.error.retriesExhausted": "Upload failed after repeated retries",
+    "upload.error.incomplete": "Upload did not finish; click Retry to resume (resumable)",
+    "upload.error.sftpNetwork": "Network error: direct SFTP upload failed",
+
+    "uploadChannel.label": "Transfer channel",
+    "uploadChannel.channel": "Encrypted channel (chunked upload)",
+    "uploadChannel.channel.hint": "Transferred through the panel’s encrypted channel in chunks; max 200 MB per file",
+    "uploadChannel.sftp": "Direct SFTP",
+    "uploadChannel.sftp.noCreds": " (SSH credentials not configured)",
+    "uploadChannel.sftp.hint": "Uploads straight into the instance directory using the server’s SSH credentials; no 200 MB limit",
+
+    "maskedText.tooltip.hide": "Click to hide",
+    "maskedText.tooltip.show": "Click to show",
+
+    "console.close": "Close console",
+    "fileTree.select.aria": "Select {0}",
+    "logViewer.jumpToLatest": "Jump to latest"
+  }
+}

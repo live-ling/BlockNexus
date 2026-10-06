@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { LogViewer } from '@/components/log-viewer';
 import { api, errText, type ServerSummary } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { installLogStore } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 
@@ -79,12 +80,14 @@ export function UninstallDialog({
         method: 'POST',
         body: stopOnly ? {} : { keepBackups, deleteInstances, removeServer },
       });
-      if (stopOnly) success('本机 Agent 正在停止');
+      if (stopOnly) success($('uninstall.toast.stopping'));
       else if (isLocal)
-        success(deleteInstances ? '卸载任务已开始，完成后将删除实例目录' : '卸载任务已开始');
-      else success(removeServer ? '卸载任务已开始，完成后将移出面板' : '卸载任务已开始');
+        success(
+          deleteInstances ? $('uninstall.toast.startedLocalDelete') : $('uninstall.toast.started'),
+        );
+      else success(removeServer ? $('uninstall.toast.startedRemoteRemove') : $('uninstall.toast.started'));
     } catch (e) {
-      error(stopOnly ? '停止失败' : '卸载启动失败', errText(e));
+      error(stopOnly ? $('serverSettings.error.stop') : $('uninstall.error.start'), errText(e));
       setBusy(false);
       return;
     }
@@ -92,8 +95,12 @@ export function UninstallDialog({
     onDone();
   };
 
-  const title = stopOnly ? '停止本机 Agent' : isLocal ? '卸载本机 Agent' : '卸载 Agent';
-  const confirmText = stopOnly ? '确认停止' : '确认卸载';
+  const title = stopOnly
+    ? $('uninstall.title.stop')
+    : isLocal
+      ? $('uninstall.title.local')
+      : $('uninstall.title.remote');
+  const confirmText = stopOnly ? $('uninstall.confirm.stop') : $('uninstall.confirm.uninstall');
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -105,22 +112,30 @@ export function UninstallDialog({
           <DialogDescription>
             {stopOnly ? (
               <>
-                只结束本机 Agent 进程（pid {server.localAgent?.pid || '未知'}），
-                <strong>实例与存档全部保留</strong>，随时可以重新启动。
+                {$('uninstall.stopDesc.pre')}
+                {server.localAgent?.pid || $('common.unknown')}
+                {$('uninstall.stopDesc.mid')}
+                <strong>{$('uninstall.stopDesc.strong')}</strong>
+                {$('uninstall.stopDesc.post')}
               </>
             ) : isLocal ? (
               <>
-                本机 Agent 由面板直接托管：将<strong>停止 Agent 进程</strong>（结束时会先停止运行中的 MC
-                实例），默认<strong>保留实例与存档</strong>，可勾选删除。
+                {$('uninstall.localDesc.pre')}
+                <strong>{$('uninstall.localDesc.strongStop')}</strong>
+                {$('uninstall.localDesc.mid')}
+                <strong>{$('uninstall.localDesc.strongKeep')}</strong>
+                {$('uninstall.localDesc.post')}
                 <span className="block text-xs text-muted-foreground mt-1">
-                  专用目录：
+                  {$('uninstall.localDesc.dir')}
                   <code className="font-mono">{server.localAgent?.dir || 'data/local-agents/<id>'}</code>
                 </span>
               </>
             ) : (
               <>
-                将在服务器上执行：停止并删除<strong>全部 MC 实例（含存档）</strong>、移除 Agent 程序与
-                systemd 服务。此操作不可撤销。
+                {$('uninstall.remoteDesc.pre')}
+                <strong>{$('uninstall.remoteDesc.strong')}</strong>
+                {$('uninstall.remoteDesc.mid')}
+                {$('uninstall.remoteDesc.post')}
               </>
             )}
           </DialogDescription>
@@ -137,10 +152,10 @@ export function UninstallDialog({
                 onCheckedChange={(v) => setDeleteInstances(v === true)}
               />
               <span>
-                同时删除专用目录（含实例与存档）
+                {$('uninstall.opt.deleteInstances')}
                 <span className="block text-xs text-muted-foreground">
-                  不勾选仅停止 Agent，数据保留在
-                  <code className="font-mono"> {server.localAgent?.instancesDir || 'instances/'}</code>
+                  {$('uninstall.opt.deleteInstancesHint.pre')}
+                  <code className="font-mono">{server.localAgent?.instancesDir || 'instances/'}</code>
                 </span>
               </span>
             </label>
@@ -153,10 +168,11 @@ export function UninstallDialog({
                 onCheckedChange={(v) => setKeepBackups(v === true)}
               />
               <span>
-                卸载前把实例备份打包到安装目录之外
+                {$('uninstall.opt.keepBackups')}
                 <span className="block text-xs text-muted-foreground">
-                  生成 <code className="font-mono">/opt/blocknexus-backups-&lt;时间&gt;.tar.gz</code>
-                  （.backups 为空时跳过）
+                  {$('uninstall.opt.keepBackupsHint.pre')}
+                  <code className="font-mono">{$('uninstall.opt.keepBackupsHint.code')}</code>
+                  {$('uninstall.opt.keepBackupsHint.post')}
                 </span>
               </span>
             </label>
@@ -169,9 +185,9 @@ export function UninstallDialog({
                 onCheckedChange={(v) => setRemoveServer(v === true)}
               />
               <span>
-                同时从面板移除该服务器
+                {$('uninstall.opt.removeServer')}
                 <span className="block text-xs text-muted-foreground">
-                  不勾选则保留记录（Agent 显示离线），可随时重新安装
+                  {$('uninstall.opt.removeServerHint')}
                 </span>
               </span>
             </label>
@@ -183,7 +199,11 @@ export function UninstallDialog({
 
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            {busy ? stopOnly ? '停止中…' : '卸载中…' : '取消'}
+            {busy
+              ? stopOnly
+                ? $('uninstall.busy.stop')
+                : $('uninstall.busy.uninstall')
+              : $('common.cancel')}
           </Button>
           <Button
             variant="outline"

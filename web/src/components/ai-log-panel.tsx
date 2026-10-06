@@ -1,16 +1,17 @@
 // AI 日志分析面板：把实例控制台日志交给大模型分析（流式返回）
 // 组件来自 beUI agents：MessageScroller / Message / PromptInput / StreamingResponse / ReasoningText
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, Terminal, User } from 'lucide-react';
 import { Message, MessageAvatar, MessageContent } from '@/components/agents/message';
 import { MessageScroller } from '@/components/agents/message-scroller';
-import { PromptInput, type PromptAction } from '@/components/agents/prompt-input';
+import { PromptInput } from '@/components/agents/prompt-input';
 import { ReasoningText } from '@/components/agents/loading-states/reasoning-text';
 import { Markdown } from '@/components/markdown';
 import { StreamingResponse } from '@/components/agents/streaming-response';
 import { Button } from '@/components/ui/button';
 import { aiAnalyzeStream, errText, type AiStats } from '@/lib/api';
+import { $, type TranslationKey } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 interface ChatItem {
@@ -26,35 +27,36 @@ interface ChatItem {
   stats?: AiStats;
 }
 
-const QUICK_ACTIONS: PromptAction[] = [
+/** 模块顶层只存键名（$() 在渲染期取词，避免被语言切换冻结） */
+const QUICK_ACTIONS: { value: string; labelKey: TranslationKey; descKey: TranslationKey; icon: ReactNode }[] = [
   {
     value: 'analyze',
-    label: '分析运行状态',
-    description: '通读最近日志，指出异常与处理建议',
+    labelKey: 'aiLog.quick.analyze',
+    descKey: 'aiLog.quick.analyze.desc',
     icon: <Terminal className="size-4" />,
   },
   {
     value: 'errors',
-    label: '只看报错',
-    description: '挑出 ERROR / Exception 并解释原因',
+    labelKey: 'aiLog.quick.errors',
+    descKey: 'aiLog.quick.errors.desc',
     icon: <Sparkles className="size-4" />,
   },
   {
     value: 'crash',
-    label: '崩溃原因',
-    description: '服务器为什么停了 / 启动失败',
+    labelKey: 'aiLog.quick.crash',
+    descKey: 'aiLog.quick.crash.desc',
     icon: <Sparkles className="size-4" />,
   },
   {
     value: 'lag',
-    label: '卡顿排查',
-    description: 'TPS 低、卡顿、内存与 GC 相关线索',
+    labelKey: 'aiLog.quick.lag',
+    descKey: 'aiLog.quick.lag.desc',
     icon: <Sparkles className="size-4" />,
   },
   {
     value: 'plugin',
-    label: '插件冲突',
-    description: '定位报错插件与冲突插件',
+    labelKey: 'aiLog.quick.plugin',
+    descKey: 'aiLog.quick.plugin.desc',
     icon: <Sparkles className="size-4" />,
   },
 ];
@@ -64,13 +66,15 @@ function fmtMs(n: number): string {
   return n >= 1000 ? (n / 1000).toFixed(2) + ' s' : n + ' ms';
 }
 
-const ACTION_QUESTION: Record<string, string> = {
-  analyze: '请分析当前运行状态，重点指出报错/异常、可能原因与处理建议；若一切正常请明确说明。',
-  errors: '请只挑出日志中的 ERROR / WARN / Exception 相关内容，逐条解释原因并给出处理办法。',
-  crash: '请分析服务器崩溃或启动失败的原因，指出关键堆栈与对应插件/配置问题，并给出修复步骤。',
-  lag: '请分析是否存在卡顿、TPS 偏低、内存不足或频繁 GC 的迹象，给出排查方向与优化建议。',
-  plugin: '请定位报错涉及的插件，判断是否存在插件冲突或版本不兼容，并给出处理顺序。',
+const ACTION_QUESTION: Record<string, TranslationKey> = {
+  analyze: 'aiLog.q.analyze',
+  errors: 'aiLog.q.errors',
+  crash: 'aiLog.q.crash',
+  lag: 'aiLog.q.lag',
+  plugin: 'aiLog.q.plugin',
 };
+
+const THINKING_KEYS: TranslationKey[] = ['aiLog.thinking.read', 'aiLog.thinking.locate', 'aiLog.thinking.summarize'];
 
 export function AiLogPanel({
   serverId,
@@ -151,7 +155,7 @@ export function AiLogPanel({
         );
       } catch (e) {
         if ((e as Error).name === 'AbortError') {
-          patch((c) => (c.content ? c : { ...c, content: '（已停止）', error: true }));
+          patch((c) => (c.content ? c : { ...c, content: $('aiLog.stopped'), error: true }));
         } else {
           const msg = errText(e);
           toastError(msg);
@@ -169,11 +173,11 @@ export function AiLogPanel({
     <div ref={rootRef} className={`flex min-w-0 flex-col rounded-xl border bg-card ${heightClass}`}>
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
-        <b className="text-sm">AI 日志分析</b>
-        <span className="ml-auto text-xs text-muted-foreground">基于最近 500 行控制台日志</span>
+        <b className="text-sm">{$('aiLog.title')}</b>
+        <span className="ml-auto text-xs text-muted-foreground">{$('aiLog.subtitle')}</span>
         {items.length > 0 && !loading && (
           <Button variant="ghost" size="xs" onClick={() => setItems([])}>
-            清空
+            {$('aiLog.clear')}
           </Button>
         )}
       </div>
@@ -183,18 +187,14 @@ export function AiLogPanel({
         viewportClassName="px-3 py-3"
         contentClassName="gap-3"
         busy={loading}
-        label="AI 日志分析对话"
+        label={$('aiLog.dialogLabel')}
         viewportRef={viewportRef}
       >
         {items.length === 0 ? (
           <div className="grid place-items-center py-10 text-center">
             <div className="max-w-xs">
-              <p className="text-sm text-muted-foreground">
-                点下方「分析运行状态」快速开始，或直接输入你的问题。
-              </p>
-              <p className="mt-1.5 text-xs text-muted-foreground/70">
-                分析会把最近日志发给已配置的模型，请先在面板设置中启用并配置 AI。
-              </p>
+              <p className="text-sm text-muted-foreground">{$('aiLog.empty.hint')}</p>
+              <p className="mt-1.5 text-xs text-muted-foreground/70">{$('aiLog.empty.hint2')}</p>
             </div>
           </div>
         ) : (
@@ -223,7 +223,7 @@ export function AiLogPanel({
                     ) : (
                       <ReasoningText
                         className="text-sm"
-                        phrases={['正在读取日志', '正在定位异常', '正在整理建议']}
+                        phrases={THINKING_KEYS.map((k) => $(k))}
                       />
                     )}
                   </StreamingResponse>
@@ -233,20 +233,20 @@ export function AiLogPanel({
                     {it.stats?.model && <span className="font-mono">{it.stats.model}</span>}
                     {it.lines ? (
                       <span>
-                        参考日志 {it.lines} 行
+                        {$('aiLog.lines', it.lines)}
                         {it.truncated && (
-                          <span className="text-amber-600 dark:text-amber-400">（过长已截断）</span>
+                          <span className="text-amber-600 dark:text-amber-400">{$('aiLog.truncated')}</span>
                         )}
                       </span>
                     ) : null}
-                    {it.stats?.firstTokenMs != null && <span>首字 {fmtMs(it.stats.firstTokenMs)}</span>}
-                    {it.stats?.totalMs != null && <span>总耗时 {fmtMs(it.stats.totalMs)}</span>}
+                    {it.stats?.firstTokenMs != null && <span>{$('aiLog.firstToken', fmtMs(it.stats.firstTokenMs))}</span>}
+                    {it.stats?.totalMs != null && <span>{$('aiLog.totalTime', fmtMs(it.stats.totalMs))}</span>}
                     {it.stats?.usage && (
                       <span>
                         Token{' '}
                         {it.stats.usage.totalTokens != null
                           ? it.stats.usage.totalTokens
-                          : `提示 ${it.stats.usage.promptTokens ?? '—'} / 补全 ${it.stats.usage.completionTokens ?? '—'}`}
+                          : $('aiLog.tokensSplit', it.stats.usage.promptTokens ?? '—', it.stats.usage.completionTokens ?? '—')}
                       </span>
                     )}
                   </div>
@@ -267,11 +267,11 @@ export function AiLogPanel({
           }}
           loading={loading}
           onStop={stop}
-          placeholder="询问日志问题，或点 + 选择快捷分析…"
-          actions={QUICK_ACTIONS}
+          placeholder={$('aiLog.placeholder')}
+          actions={QUICK_ACTIONS.map((a) => ({ value: a.value, label: $(a.labelKey), description: $(a.descKey), icon: a.icon }))}
           onAction={(a) => {
-            const q = ACTION_QUESTION[a];
-            if (q) void ask(q);
+            const qk = ACTION_QUESTION[a];
+            if (qk) void ask($(qk));
           }}
           minRows={1}
           maxRows={4}

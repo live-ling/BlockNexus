@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { api, errText, fmtBytes, timeago, type ServerSummary } from '@/lib/api';
 import { subscribeSSE } from '@/lib/sse';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 import { ConfirmDialog } from '@/components/dialogs';
 
@@ -43,7 +44,7 @@ export function BackupDialog({
   const load = useCallback(() => {
     api<BackupInfo[]>(base)
       .then(setBackups)
-      .catch((e) => error('备份列表获取失败', errText(e)));
+      .catch((e) => error($('backup.error.load'), errText(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base]);
 
@@ -57,8 +58,9 @@ export function BackupDialog({
       setPending(null);
       load();
       if (e.data.done) {
-        if (e.data.ok) success('备份操作完成', typeof e.data.file === 'string' ? e.data.file : undefined);
-        else error('备份操作失败', typeof e.data.error === 'string' ? e.data.error : undefined);
+        if (e.data.ok)
+          success($('backup.toast.done'), typeof e.data.file === 'string' ? e.data.file : undefined);
+        else error($('backup.toast.failed'), typeof e.data.error === 'string' ? e.data.error : undefined);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -68,17 +70,17 @@ export function BackupDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>实例备份 · {instance}</DialogTitle>
+          <DialogTitle>{$('backup.title', instance)}</DialogTitle>
           <DialogDescription>
-            备份为 tar.gz 完整快照，存储在服务器实例目录旁的 .backups 下。恢复会覆盖实例当前全部文件（运行中会先强制停止）。
+            {$('backup.description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="max-h-[45vh] min-h-40 overflow-y-auto rounded-lg border">
           {backups === null ? (
-            <div className="p-4 text-xs text-muted-foreground">加载中…</div>
+            <div className="p-4 text-xs text-muted-foreground">{$('common.loading')}</div>
           ) : backups.length === 0 ? (
-            <div className="p-6 text-center text-xs text-muted-foreground">还没有备份</div>
+            <div className="p-6 text-center text-xs text-muted-foreground">{$('backup.empty')}</div>
           ) : (
             <ul className="divide-y">
               {backups.map((b) => (
@@ -111,7 +113,7 @@ export function BackupDialog({
                     disabled={pending !== null}
                     onClick={() => setPending(`restore:${b.file}`)}
                   >
-                    恢复
+                    {$('backup.restore')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -135,14 +137,14 @@ export function BackupDialog({
               setPending('create');
               try {
                 await api(`${base}/create`, { method: 'POST', body: {} });
-                success('备份任务已开始', '完成后列表自动刷新');
+                success($('backup.toast.started'), $('backup.toast.startedDetail'));
               } catch (e) {
                 setPending(null);
-                error('备份启动失败', errText(e));
+                error($('backup.error.start'), errText(e));
               }
             }}
           >
-            <Plus className="h-4 w-4" /> {pending === 'create' ? '备份中…' : '创建备份'}
+            <Plus className="h-4 w-4" /> {pending === 'create' ? $('backup.creating') : $('backup.create')}
           </Button>
         </div>
 
@@ -152,12 +154,12 @@ export function BackupDialog({
           onOpenChange={(v) => {
             if (!v) setPending(null);
           }}
-          title={`恢复备份 ${pending?.slice(8) ?? ''}？`}
-          description="实例当前全部文件将被备份内容覆盖；若实例正在运行会先强制停止。"
+          title={$('backup.restoreConfirmTitle', pending?.slice(8) ?? '')}
+          description={$('backup.restoreConfirmDesc')}
           onConfirm={async () => {
             const file = pending?.slice(8) ?? '';
             await api(`${base}/restore`, { method: 'POST', body: { file } });
-            success('恢复任务已开始', '完成后自动刷新');
+            success($('backup.toast.restoreStarted'), $('backup.toast.restoreStartedDetail'));
           }}
         />
 
@@ -167,11 +169,11 @@ export function BackupDialog({
           onOpenChange={(v) => {
             if (!v) setDeleteTarget(null);
           }}
-          title={`删除备份 ${deleteTarget ?? ''}？`}
-          description="备份文件将被永久删除。"
+          title={$('backup.deleteConfirmTitle', deleteTarget ?? '')}
+          description={$('backup.deleteConfirmDesc')}
           onConfirm={async () => {
             await api(`${base}/delete`, { method: 'POST', body: { file: deleteTarget } });
-            success('备份已删除');
+            success($('backup.toast.deleted'));
             load();
           }}
         />

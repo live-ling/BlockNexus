@@ -26,6 +26,7 @@ import {
   unescapeValue,
   type PropItem,
 } from '@/lib/properties';
+import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 export function PropertiesDialog({
@@ -72,7 +73,7 @@ export function PropertiesDialog({
       setRawText(data.content);
       setShowRaw(false);
     } catch (e) {
-      error('读取配置失败', errText(e));
+      error($('property.error.load'), errText(e));
     } finally {
       setLoading(false);
     }
@@ -134,7 +135,7 @@ export function PropertiesDialog({
         `/servers/${server.id}/instances/${encodeURIComponent(instance.name)}/properties`,
         { method: 'PUT', body: { content } },
       );
-      success('配置已保存', r.metaSynced ? '面板的端口/MOTD 等已同步' : undefined);
+      success($('property.toast.saved'), r.metaSynced ? $('property.toast.synced') : undefined);
       setInitial(JSON.parse(JSON.stringify(values)));
       onSaved();
       if (restartAfter) {
@@ -144,7 +145,7 @@ export function PropertiesDialog({
         await load();
       }
     } catch (e) {
-      error('保存失败', errText(e));
+      error($('property.error.save'), errText(e));
     } finally {
       setBusy(false);
     }
@@ -159,21 +160,23 @@ export function PropertiesDialog({
       <DialogContent className="flex max-h-[88vh] flex-col sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Settings2 className="h-4 w-4" /> 配置设置 · {instance.name}
+            <Settings2 className="h-4 w-4" /> {$('instanceDetail.serverProperties')} · {instance.name}
           </DialogTitle>
           <DialogDescription>
-            server.properties 的可视化编辑。{running && <span className="text-amber-600 dark:text-amber-400">实例正在运行，改动需重启后生效。</span>}
+            {/* 表达式边界不留空白；英文句尾空格写在键值里 */}
+            {$('property.desc')}
+            {running && <span className="text-amber-600 dark:text-amber-400">{$('property.desc.running')}</span>}
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <div className="py-10 text-center text-sm text-muted-foreground">读取配置中…</div>
+          <div className="py-10 text-center text-sm text-muted-foreground">{$('property.loading')}</div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             {showRaw ? (
               <div className="grid gap-2">
                 <p className="text-xs text-muted-foreground">
-                  原始文本视图：直接编辑整个文件（注释与未知键都在这里）。
+                  {$('property.raw.desc')}
                 </p>
                 <Textarea
                   value={rawText}
@@ -187,14 +190,14 @@ export function PropertiesDialog({
               <div className="grid gap-5">
                 {groups.map((g) => (
                   <div key={g.name} className="grid gap-2.5">
-                    <div className="text-xs font-medium text-muted-foreground">{g.name}</div>
+                    <div className="text-xs font-medium text-muted-foreground">{$(`property.group.${g.name}`)}</div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       {g.keys.map((k) => {
                         const def = PROP_DEFS[k];
                         return (
                           <div key={k} className="grid content-start gap-1.5">
                             <label className="flex items-baseline gap-1.5 text-xs">
-                              <span className="text-foreground">{def.label}</span>
+                              <span className="text-foreground">{$(def.labelKey)}</span>
                               <code className="font-mono text-[10px] text-muted-foreground">{k}</code>
                             </label>
                             {def.type === 'bool' ? (
@@ -203,7 +206,7 @@ export function PropertiesDialog({
                                   checked={values[k] === 'true'}
                                   onCheckedChange={(v) => set(k, v ? 'true' : 'false')}
                                 />
-                                {values[k] === 'true' ? '开启' : '关闭'}
+                                {values[k] === 'true' ? $('property.on') : $('property.off')}
                               </label>
                             ) : def.type === 'select' ? (
                               <Select value={values[k]} onValueChange={(v) => set(k, v)}>
@@ -211,11 +214,14 @@ export function PropertiesDialog({
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {(def.options ?? []).map((o) => (
-                                    <SelectItem key={o} value={o}>
-                                      {def.optionLabels?.[o] ? `${def.optionLabels[o]}（${o}）` : o}
-                                    </SelectItem>
-                                  ))}
+                                  {(def.options ?? []).map((o) => {
+                                    const labelKey = def.optionLabelKeys?.[o];
+                                    return (
+                                      <SelectItem key={o} value={o}>
+                                        {labelKey ? $('property.option.display', $(labelKey), o) : o}
+                                      </SelectItem>
+                                    );
+                                  })}
                                 </SelectContent>
                               </Select>
                             ) : def.type === 'number' ? (
@@ -235,7 +241,7 @@ export function PropertiesDialog({
                             ) : (
                               <Input value={values[k] ?? ''} onChange={(e) => set(k, e.target.value)} />
                             )}
-                            {def.hint && <span className="text-[11px] text-muted-foreground">{def.hint}</span>}
+                            {def.hintKey && <span className="text-[11px] text-muted-foreground">{$(def.hintKey)}</span>}
                           </div>
                         );
                       })}
@@ -246,10 +252,10 @@ export function PropertiesDialog({
                 {unknownKeys.length > 0 && (
                   <div className="grid gap-2">
                     <div className="text-xs font-medium text-muted-foreground">
-                      其他键（{unknownKeys.length}）
+                      {$('property.unknown.count', unknownKeys.length)}
                     </div>
                     <p className="text-[11px] text-muted-foreground">
-                      未做中文映射，保存时原样保留；需要修改请切到「原始文本」。
+                      {$('property.unknown.desc')}
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {unknownKeys.map((k) => (
@@ -270,24 +276,24 @@ export function PropertiesDialog({
 
         <DialogFooter className="!justify-between">
           <Button variant="ghost" size="sm" onClick={() => setShowRaw((v) => !v)}>
-            {showRaw ? '返回表单视图' : '原始文本'}
+            {showRaw ? $('property.form.view') : $('property.raw.view')}
           </Button>
           <div className="flex items-center gap-2">
             {running && (
               <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-                <AlertTriangle className="h-3 w-3" /> 需重启生效
+                <AlertTriangle className="h-3 w-3" /> {$('property.needRestart')}
               </span>
             )}
             <Button variant="outline" onClick={() => onOpenChange(false)}>
-              取消
+              {$('common.cancel')}
             </Button>
             {running ? (
               <Button disabled={busy || (!dirty && !showRaw)} onClick={() => save(true)}>
-                <RotateCw className="h-4 w-4" /> 保存并重启
+                <RotateCw className="h-4 w-4" /> {$('property.saveRestart')}
               </Button>
             ) : (
               <Button disabled={busy || (!dirty && !showRaw)} onClick={() => save(false)}>
-                <Save className="h-4 w-4" /> 保存{dirty ? `（${changedKeys.length} 项改动）` : ''}
+                <Save className="h-4 w-4" /> {$('common.save')}{dirty ? $('property.changeCount', changedKeys.length) : ''}
               </Button>
             )}
           </div>

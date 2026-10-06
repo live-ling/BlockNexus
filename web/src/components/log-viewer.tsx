@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { $ } from '@/lib/i18n';
 
 /** 距底部多少像素以内算「贴着底部」 */
 const STICK_THRESHOLD = 24;
@@ -71,7 +72,7 @@ export function LogViewer({ lines, className = '' }: { lines: string; className?
           className="absolute bottom-2 right-3 h-7 gap-1 rounded-full px-2.5 text-[11px] shadow-sm"
           onClick={jumpToBottom}
         >
-          <ArrowDown className="h-3 w-3" /> 跳到最新
+          <ArrowDown className="h-3 w-3" /> {$('logViewer.jumpToLatest')}
         </Button>
       )}
     </div>

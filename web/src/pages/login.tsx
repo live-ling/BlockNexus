@@ -254,7 +254,7 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
   if (stage === 'password') {
     return (
       <NewPasswordCard
-        description={`邮箱验证通过，为 ${email.trim()} 设置新密码。`}
+        description={$('login.reset.description', email.trim())}
         submit={(pw) => api('/reset-password', { method: 'POST', body: { ticket, password: pw } })}
         onBack={onBack}
         onDone={onDone}
@@ -266,20 +266,22 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
     return (
       <GlassCard>
         <AuthHeader
-          title="输入验证码"
+          title={$('login.code.title')}
           description={
             // 两句各占一行（块级），避免 JSX 跨行文本折叠出多余空格
             sent ? (
               <>
                 <span className="block">
-                  验证码已发往 <span className="font-medium text-foreground">{email.trim()}</span>，15 分钟内有效。
+                  {$('login.code.sent.pre')}
+                  <span className="font-medium text-foreground">{email.trim()}</span>
+                  {$('login.code.sent.post')}
                 </span>
-                <span className="block">请查收邮件（注意垃圾箱），验证通过后设置新密码。</span>
+                <span className="block">{$('login.code.checkInbox')}</span>
               </>
             ) : (
               <>
-                <span className="block">如果该邮箱与面板设置一致，验证码已发出，15 分钟内有效。</span>
-                <span className="block">请查收邮件（注意垃圾箱），验证通过后设置新密码。</span>
+                <span className="block">{$('login.code.sentGeneric')}</span>
+                <span className="block">{$('login.code.checkInbox')}</span>
               </>
             )
           }
@@ -299,7 +301,7 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
                 value={code}
                 status={otpStatus}
                 autoFocus
-                aria-label="6 位邮箱验证码"
+                aria-label={$('login.code.aria')}
                 slotClassName="h-12 w-11"
                 onChange={(v) => {
                   setCode(v);
@@ -307,12 +309,12 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
                   setErr('');
                 }}
                 onComplete={(v) => verifyCode(v)}
-                hint="输入邮件中的 6 位数字验证码"
+                hint={$('login.code.hint')}
               />
             </div>
             {err && <p className="text-center text-xs text-destructive">{err}</p>}
             <Button type="submit" className="h-10 w-full" disabled={busy || code.length !== 6}>
-              验证并继续
+              {$('login.code.verifyAndContinue')}
             </Button>
             <div className="flex items-center justify-between">
               <Button
@@ -323,7 +325,7 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
                 disabled={busy || cooldown > 0}
                 onClick={sendCode}
               >
-                {cooldown > 0 ? `重新发送（${cooldown}s）` : '重新发送验证码'}
+                {cooldown > 0 ? $('login.forgot.resend.countdown', cooldown) : $('login.code.resend')}
               </Button>
               <Button
                 type="button"
@@ -335,7 +337,7 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
                   setStage('email');
                 }}
               >
-                换个邮箱
+                {$('login.code.changeEmail')}
               </Button>
             </div>
           </form>
@@ -347,8 +349,8 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
   return (
     <GlassCard>
       <AuthHeader
-        title="找回密码"
-        description="输入管理员邮箱，面板会发送 6 位验证码（15 分钟有效）"
+        title={$('login.forgot.heading')}
+        description={$('login.forgot.description')}
       />
       <CardContent>
         <form
@@ -358,7 +360,7 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
           }}
           className={FORM}
         >
-          <FieldRow label="管理员邮箱" htmlFor="fp-email">
+          <FieldRow label={$('login.forgot.email')} htmlFor="fp-email">
             <Input
               id="fp-email"
               className={FIELD}
@@ -371,10 +373,10 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
           </FieldRow>
           {err && <p className="text-center text-xs text-destructive">{err}</p>}
           <Button type="submit" className="h-10 w-full" disabled={busy || !email.trim()}>
-            发送验证码
+            {$('login.forgot.send')}
           </Button>
           <Button type="button" variant="ghost" className="h-10 w-full" onClick={onBack}>
-            返回登录
+            {$('login.forgot.back')}
           </Button>
         </form>
       </CardContent>
@@ -408,7 +410,7 @@ function NewPasswordCard({
     e.preventDefault();
     setErr('');
     if (!pwOk) {
-      setErr('新密码至少 6 位，且两次输入一致');
+      setErr($('login.reset.error'));
       return;
     }
     setBusy(true);
@@ -425,10 +427,10 @@ function NewPasswordCard({
   if (done) {
     return (
       <GlassCard>
-        <AuthHeader title="密码已重置" description="请用新密码登录面板。" />
+        <AuthHeader title={$('login.reset.doneTitle')} description={$('login.reset.doneDesc')} />
         <CardContent>
           <Button className="h-10 w-full" onClick={onDone}>
-            去登录
+            {$('login.reset.goLogin')}
           </Button>
         </CardContent>
       </GlassCard>
@@ -437,10 +439,10 @@ function NewPasswordCard({
 
   return (
     <GlassCard>
-      <AuthHeader title="设置新密码" description={description} />
+      <AuthHeader title={$('login.reset.title')} description={description} />
       <CardContent>
         <form onSubmit={onSubmit} className={FORM}>
-          <FieldRow label="新密码" htmlFor="rp-pw1">
+          <FieldRow label={$('login.forgot.newPassword')} htmlFor="rp-pw1">
             <Input
               id="rp-pw1"
               className={FIELD}
@@ -451,7 +453,7 @@ function NewPasswordCard({
               onChange={(e) => setPw1(e.target.value)}
             />
           </FieldRow>
-          <FieldRow label="确认密码" htmlFor="rp-pw2">
+          <FieldRow label={$('login.reset.confirm')} htmlFor="rp-pw2">
             <Input
               id="rp-pw2"
               className={FIELD}
@@ -462,14 +464,14 @@ function NewPasswordCard({
             />
           </FieldRow>
           {mismatch && !err ? (
-            <p className="text-center text-xs text-destructive">两次输入不一致</p>
+            <p className="text-center text-xs text-destructive">{$('login.reset.mismatch')}</p>
           ) : null}
           {err && <p className="text-center text-xs text-destructive">{err}</p>}
           <Button type="submit" className="h-10 w-full" disabled={busy || !pwOk}>
-            重置密码
+            {$('login.forgot.reset')}
           </Button>
           <Button type="button" variant="ghost" className="h-10 w-full" onClick={onBack}>
-            返回登录
+            {$('login.forgot.back')}
           </Button>
         </form>
       </CardContent>
@@ -483,7 +485,7 @@ export function ResetPasswordPage({ token, onDone }: { token: string; onDone: ()
     <AuthShell>
       {token ? (
         <NewPasswordCard
-          description="链接已识别，直接设置新密码即可。"
+          description={$('login.reset.directDesc')}
           submit={(pw) => api('/reset-password', { method: 'POST', body: { token, password: pw } })}
           onBack={onDone}
           onDone={onDone}

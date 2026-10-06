@@ -1,6 +1,6 @@
 // 面板 REST API 客户端与类型定义
 
-import { getLanguage } from './i18n';
+import { $, getLanguage } from './i18n';
 
 export interface JavaInfo {
   installed: boolean;
@@ -198,18 +198,33 @@ export interface McVersions {
   stale?: boolean;
 }
 
-/** 核心 id → 显示名；实例卡片、创建向导共用一份 */
+/**
+ * 核心 id → 显示名；实例卡片、创建向导共用一份。
+ *
+ * ⚠ 可翻译的项写成 getter 而**不是**字面量：`$()` 必须在取用的那一刻求值，
+ * 在模块顶层求值会把语言固化在模块加载时（切换语言后不更新）。
+ * 品牌名（Paper 等）中英一致，保持字面量。
+ */
 export const CORE_LABEL: Record<string, string> = {
-  vanilla: '原版 Vanilla',
+  get vanilla() {
+    return $('core.label.vanilla');
+  },
   paper: 'Paper',
   purpur: 'Purpur',
   folia: 'Folia',
   fabric: 'Fabric',
   forge: 'Forge',
   neoforge: 'NeoForge',
-  mojang: '原版 Vanilla',
-  url: '自定义 URL',
-  upload: '上传核心',
+  // mojang 与 vanilla 是同一核心的两种写法，共用同一个键
+  get mojang() {
+    return $('core.label.vanilla');
+  },
+  get url() {
+    return $('core.label.url');
+  },
+  get upload() {
+    return $('core.label.upload');
+  },
 };
 
 /** 需要用官方安装器现场安装的核心（比直接下 jar 耗时更长） */
@@ -494,7 +509,7 @@ export async function aiAnalyzeStream(
     },
   );
   if (!res.ok || !res.body) {
-    let msg = `请求失败 ${res.status}`;
+    let msg = $('common.requestFailed', res.status);
     try {
       const d = (await res.json()) as { error?: string };
       if (d.error) msg = d.error;
@@ -543,8 +558,9 @@ export async function aiAnalyzeStream(
           model: payload.model || '',
           truncated: payload.truncated,
         });
-      } else if (payload.type === 'error') throw new ApiError(502, payload.error || 'AI 分析失败');
-      else if (payload.type === 'done') {
+      } else if (payload.type === 'error') {
+        throw new ApiError(502, payload.error || $('api.ai.analyzeFailed'));
+      } else if (payload.type === 'done') {
         handlers.onDone?.({
           model: payload.model,
           firstTokenMs: payload.firstTokenMs,
@@ -593,7 +609,7 @@ export async function api<T>(
   if (!res.ok) {
     const d = data as { error?: string; code?: string };
     // 优先用后端文案（已按当前语言渲染）；过渡期未迁移的接口没有 code，走同一条路径
-    const msg = d.error || `请求失败 ${res.status}`;
+    const msg = d.error || $('common.requestFailed', res.status);
     throw new ApiError(res.status, msg, d.code);
   }
   return data as T;
@@ -622,12 +638,12 @@ export function fmtBytes(n: number): string {
 }
 
 export function timeago(ts: number | null): string {
-  if (!ts) return '从未';
+  if (!ts) return $('api.time.never');
   const d = Date.now() - ts;
-  if (d < 60000) return '刚刚';
-  if (d < 3600e3) return Math.floor(d / 60000) + ' 分钟前';
-  if (d < 86400e3) return Math.floor(d / 3600e3) + ' 小时前';
-  return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+  if (d < 60000) return $('api.time.justNow');
+  if (d < 3600e3) return $('api.time.minutesAgo', Math.floor(d / 60000));
+  if (d < 86400e3) return $('api.time.hoursAgo', Math.floor(d / 3600e3));
+  return new Date(ts).toLocaleString(getLanguage() === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
 }
 
 /** 运行时长：X时X分（不足 1 分钟显示 X秒） */
@@ -636,9 +652,9 @@ export function fmtUptime(startedAt: number | null): string {
   const totalSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
-  if (h > 0) return `${h}时${m}分`;
-  if (m > 0) return `${m}分`;
-  return `${totalSec}秒`;
+  if (h > 0) return $('api.time.uptime.hm', h, m);
+  if (m > 0) return $('api.time.uptime.m', m);
+  return $('api.time.uptime.s', totalSec);
 }
 
 /** 延迟等级：good < 80ms，fair < 180ms，否则 poor */

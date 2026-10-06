@@ -3,6 +3,7 @@
 // <file>.blocknexus-upload 半成品 + 文件指纹续传），这就是断点续传——
 // 网络抖动、页面刷新后点「重试」都只补剩下的字节，不再从头传。
 import { api } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 
 export function bufToB64(buf: Uint8Array): string {
   let bin = '';
@@ -90,7 +91,7 @@ export async function uploadFile(
         // 不置 advanced：外层 while 用新的 offset 重新读块发送
       }
     }
-    if (!advanced && offset < file.size && recoveries > 8) throw new Error('上传多次重试后仍失败');
+    if (!advanced && offset < file.size && recoveries > 8) throw new Error($('upload.error.retriesExhausted'));
   }
 
   try {
@@ -102,7 +103,7 @@ export async function uploadFile(
     if (Math.floor((session.received || 0) / chunkSize) * chunkSize >= file.size) {
       await api(`${base}/upload/finish`, { method: 'POST', body: { uploadId: session.uploadId } });
     } else {
-      throw new Error('上传未完成，请点重试继续（已支持断点续传）');
+      throw new Error($('upload.error.incomplete'));
     }
   }
   onProgress?.(100);
@@ -137,14 +138,14 @@ export function uploadFileViaSftp(
         onProgress?.(Math.min(99, Math.round((e.loaded / e.total) * 100)));
       }
     };
-    xhr.onerror = () => reject(new Error('网络错误，SFTP 直传失败'));
+    xhr.onerror = () => reject(new Error($('upload.error.sftpNetwork')));
     xhr.onload = () => {
       const data = (xhr.response ?? {}) as { ok?: boolean; size?: number; error?: string };
       if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
         onProgress?.(100);
         resolve({ size: data.size ?? file.size });
       } else {
-        reject(new Error(data.error || `请求失败 ${xhr.status}`));
+        reject(new Error(data.error || $('common.requestFailed', xhr.status)));
       }
     };
     xhr.send(file);
