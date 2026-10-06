@@ -5,8 +5,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Eraser, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api, errText, type ServerSummary } from '@/lib/api';
+import { $, type TranslationKey } from '@/lib/i18n';
 import { subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
+
+/** 实例状态 → i18n 键。未知状态回退显示原始值，绝不显示空白 */
+function statusLabel(status: string): string {
+  const key = `console.status.${status}` as TranslationKey;
+  const text = $(key);
+  return text === key ? status : text;
+}
 
 const MAX_LINES = 1500;
 /** 历史指令最大保存条数（含合并相邻重复） */
@@ -109,7 +117,7 @@ export function ConsolePanel({
         setStatus(data.status);
         setLines(data.lines.map((l) => l.text));
       })
-      .catch((e) => toastError('控制台加载失败', errText(e)));
+      .catch((e) => toastError($('console.error.load'), errText(e)));
     return () => {
       alive = false;
     };
@@ -157,7 +165,7 @@ export function ConsolePanel({
         body: { cmd: c },
       });
     } catch (e) {
-      toastError('指令发送失败', errText(e));
+      toastError($('console.error.send'), errText(e));
     }
   };
 
@@ -200,7 +208,7 @@ export function ConsolePanel({
         <b className="text-xs font-semibold text-zinc-200">
           {server.name} / {instance}
         </b>
-        <span className="text-xs text-zinc-500">{{ running: '运行中', starting: '启动中', stopped: '已停止', downloading: '下载中', failed: '安装失败', incomplete: '未完成' }[status] ?? status}</span>
+        <span className="text-xs text-zinc-500">{statusLabel(status)}</span>
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"
@@ -208,7 +216,7 @@ export function ConsolePanel({
             className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100"
             onClick={() => setLines([])}
           >
-            <Eraser className="h-3.5 w-3.5" /> 清屏
+            <Eraser className="h-3.5 w-3.5" /> {$('console.clear')}
           </Button>
           {onClose && (
             <Button
@@ -236,7 +244,7 @@ export function ConsolePanel({
             {text}
           </div>
         ))}
-        {!lines.length && <div className="text-zinc-600">（暂无输出）</div>}
+        {!lines.length && <div className="text-zinc-600">{$('console.empty')}</div>}
       </div>
       {/* 指令输入：自增高 + 右下角圆形发送（参考 beUI prompt-input） */}
       <div className="border-t border-zinc-800 bg-[#10141c] p-2">
@@ -261,8 +269,8 @@ export function ConsolePanel({
               rows={MIN_ROWS}
               spellCheck={false}
               autoComplete="off"
-              aria-label="控制台指令"
-              placeholder="输入指令，如 list / say hello（回车发送，↑↓ 翻历史）"
+              aria-label={$('console.input.aria')}
+              placeholder={$('console.input.placeholder')}
               className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent font-mono text-xs leading-5 text-zinc-200 outline-none placeholder:text-zinc-600"
             />
           </div>
@@ -270,8 +278,8 @@ export function ConsolePanel({
             size="icon"
             onClick={() => void send()}
             disabled={!cmd.trim()}
-            aria-label="发送指令"
-            title="发送（Enter）"
+            aria-label={$('console.send')}
+            title={$('console.send.tooltip')}
             className="size-7 shrink-0 rounded-full"
           >
             <Send className="size-3.5" />

@@ -14,6 +14,8 @@ import { ServerDetailPage } from '@/pages/server-detail';
 import { ServerSettingsPage } from '@/pages/server-settings';
 import { ServersPage } from '@/pages/servers';
 import { ApiError, api, type Me, type ServerSummary } from '@/lib/api';
+import { LanguageToggle } from '@/components/language-toggle';
+import { $ } from '@/lib/i18n';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 import { navigate, routeFromLocation, type Route } from '@/lib/router';
@@ -129,7 +131,7 @@ export function App() {
   };
 
   if (me === undefined) {
-    return <div className="grid min-h-screen place-items-center text-sm text-muted-foreground">加载中…</div>;
+    return <div className="grid min-h-screen place-items-center text-sm text-muted-foreground">{$('common.loading')}</div>;
   }
 
   // 重置密码页独立于登录态（邮件链接直达；已登录时也能打开）
@@ -234,14 +236,14 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
     },
     {
       id: 'servers',
-      label: '服务器',
+      label: $('nav.servers'),
       icon: <Server className="h-[18px] w-[18px]" />,
       active: isServerArea,
       onClick: () => (navigate('/')),
     },
     {
       id: 'settings',
-      label: '设置',
+      label: $('nav.settings'),
       icon: <Settings className="h-[18px] w-[18px]" />,
       active: isSettings,
       onClick: () => (navigate('/settings')),
@@ -251,15 +253,19 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
   if (me.authEnabled) {
     items.push({
       id: 'logout',
-      label: '退出',
+      label: $('nav.logout'),
       icon: <LogOut className="h-[18px] w-[18px]" />,
       onClick: onLogout,
     });
   }
 
   return (
-    <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
-      <ExpandableActionBar items={items} size="md" collapseOnBlur={false} />
-    </div>
+    <>
+      {/* 语言切换：登录后也能改（登录页另有一份，因为那时还没进 App） */}
+      <LanguageToggle className="fixed right-4 top-4 z-40 bg-background/60 backdrop-blur" />
+      <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
+        <ExpandableActionBar items={items} size="md" collapseOnBlur={false} />
+      </div>
+    </>
   );
 }
