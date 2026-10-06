@@ -2,6 +2,7 @@
 // 三页共用同一套全屏背景（login-bg.jpg）：图片铺满 + 轻渐变遮罩，卡片毛玻璃浮在上面
 
 import { useEffect, useRef, useState } from 'react';
+import { LanguageToggle } from '@/components/language-toggle';
 import { TextReveal } from '@/components/motion/text-reveal';
 import { OTPInput, type OTPStatus } from '@/components/motion/otp-input';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api, errText } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 
 /** 「记住我」记忆的用户名（localStorage；只存账号，不存密码） */
 const REMEMBER_KEY = 'blocknexus.rememberUser';
@@ -26,6 +28,8 @@ function AuthShell({ children }: { children: React.ReactNode }) {
         className="pointer-events-none absolute inset-0 h-full w-full object-cover"
       />
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-background/35 via-background/15 to-background/5" />
+      {/* 语言切换放在登录之前可达：否则英文用户连登录页都读不懂 */}
+      <LanguageToggle className="absolute right-4 top-4 z-10" />
       {children}
     </div>
   );
@@ -102,7 +106,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
   return (
     <AuthShell>
       <GlassCard>
-        <AuthHeader title="BlockNexus" description="Minecraft 服务器管理面板" />
+        <AuthHeader title={$('login.title')} description={$('login.subtitle')} />
         <CardContent>
           <form
             onSubmit={async (e) => {
@@ -122,7 +126,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             }}
             className={FORM}
           >
-            <FieldRow label="用户名" htmlFor="un">
+            <FieldRow label={$('login.username')} htmlFor="un">
               <Input
                 id="un"
                 className={FIELD}
@@ -132,7 +136,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
                 onChange={(e) => setUsername(e.target.value)}
               />
             </FieldRow>
-            <FieldRow label="密码" htmlFor="pw">
+            <FieldRow label={$('login.password')} htmlFor="pw">
               <Input
                 id="pw"
                 className={FIELD}
@@ -145,18 +149,18 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             <label
               htmlFor="rm"
               className="-mt-2 flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
-              title="记住账号并在关闭浏览器后保持登录"
+              title={$('login.remember.tooltip')}
             >
               <Checkbox
                 id="rm"
                 checked={remember}
                 onCheckedChange={(v) => setRemember(v === true)}
               />
-              记住我
+              {$('login.remember')}
             </label>
             {err && <p className="text-center text-xs text-destructive">{err}</p>}
             <Button type="submit" className="h-10 w-full" disabled={busy}>
-              登 录
+              {busy ? $('login.submitting') : $('login.submit')}
             </Button>
             {/* 「忘记密码」放在提交按钮之后：Tab 顺序保持 用户名 → 密码 → 登录 → 忘记密码 */}
             <Button
@@ -166,9 +170,8 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
               className="mx-auto h-auto px-0 text-xs text-muted-foreground"
               onClick={() => setMode('forgot')}
             >
-              忘记密码？
-            </Button>
-          </form>
+              {$('login.forgot')}
+            </Button>          </form>
         </CardContent>
       </GlassCard>
     </AuthShell>
