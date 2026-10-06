@@ -34,3 +34,6 @@ Thumbs.db
 
 # Release 产物
 /release/
+
+# 官网（另一个 agent 开发中，独立管理，不入本仓库）
+/website/
