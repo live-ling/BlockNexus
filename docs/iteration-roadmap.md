@@ -231,6 +231,35 @@ P4-* 彼此独立，各自需单独里程碑评估
 
 ## P1-8 错误代码表（后端 → 前端的结构化错误契约）⭐ 用户指定
 
+> **状态（2026-10-06）：🚧 基础设施完成并打通认证链路，其余错误点分批迁移中。**
+>
+> **已完成**：
+> - `panel/error-codes.js`：**唯一文案来源**，44 个 code（structure：`<领域>.<问题>` kebab-case，
+>   每条 `{status, zh, en}`）。纯数据、零依赖、零副作用。
+> - 三个导出：`errorResponse(code, params, {status,lang})` 产出**过渡期形状** `{error, code}`
+>   （同时给已渲染文案与稳定 code，因此旧前端缓存照常显示）；`messageOf` / `statusOf` / `hasErrorCode`。
+> - 未知 code 回退成 **code 本身**（绝不空白，可见即知缺哪个）。
+> - 后端统一出口 `fail(res, code, params[, status])`，已迁移：登录/锁定/凭据错误、
+>   未登录 401、CSRF 415。
+> - 前端：`ApiError` 增加 `code` 字段，`api()` 透传；`App.tsx` 的会话失效判定改用
+>   `code === 'auth.not-logged-in' || status === 401`，**消灭了 `msg.includes('未登录')` 这处字符串匹配**
+>   （保留文案兜底作为过渡）。
+> - 测试：`agent/test-error-codes.js` **29 用例**（含「中英占位符名称与顺序必须一致」
+>   这条结构性守卫，防止译文错位）；`web/src/lib/api.test.ts` **10 用例**（stub fetch，
+>   覆盖 code 透传 / 无 code 的旧接口 / 非 JSON 响应 / errText）。
+> - **实测**：`401 → {"error":"未登录","code":"auth.not-logged-in"}`、
+>   `403 → auth.bad-credentials`、`415 → request.json-required`，状态码语义全部不变。
+>
+> **待迁移**（约 40 处，机械但量大，分批做且每批可独立合并）：
+> `server.*` / `instance.*` / `settings.*` / `ai.*` / `notification.*` /
+> `file.*` / `internal.license-missing`，以及集中式错误中间件
+> （`AGENT_OFFLINE→agent.offline`、`AGENT_TIMEOUT→agent.timeout`）。
+>
+> **一处设计取舍要记下**：`error-codes.js` 同时存放 zh/en 文案，严格说不属于「后端」。
+> 之所以这么做，是因为前后端同仓库，放一处可免去双份维护；前端目前仍用后端渲染好的
+> `error` 文案，**将来做真正的按语言渲染时，会把这个表暴露给前端（或复用为前端文案），
+> 而非再抄一份**。
+
 | 项 | 内容 |
 |---|---|
 | **问题** | 后端错误是**中文裸字符串**，直接透传到前端 toast（`panel/api.js:564` `'未登录'`、`:741` `'服务器不存在'`、`:898` `'该服务器正在安装中'`）。后果：① 前端无法本地化；② 文案与 UI 强耦合；③ 调用方只能靠字符串匹配判断错误类型（`web/src/App.tsx:199-205` 就在 `msg.includes('未登录')` 正则匹配）；④ 同一语义在多处各写一遍文案 |
