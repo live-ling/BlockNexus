@@ -10,7 +10,7 @@ const nodemailer = require('nodemailer');
 const { installAgent, updateAgentScript, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
 const localAgent = require('./localagent');
 const mailTpl = require('./mail');
-const { errorResponse } = require('./error-codes');
+const { errorResponse, langOf } = require('./error-codes');
 
 const COOKIE = 'blocknexussid';
 const SESSION_TTL = 7 * 24 * 3600 * 1000;
@@ -94,18 +94,9 @@ async function checkLatestRelease(version, force = false) {
   }
 }
 
-/**
- * 从 Accept-Language 判断用哪种语言渲染 error 文案。
- * 面板的语言设置存在浏览器 localStorage，后端无从得知，因此由前端把它作为请求头带上来。
- * 不做内容协商的复杂处理（q 值、通配符）：只认「是否以 en 开头」，其余一律中文。
- *
- * 注意：`error` 只是**给不认 code 的调用方的兜底文案**；
- * 认 code 的调用方应当自行本地化，那时 error 文案是什么语言都无所谓。
- */
-function langOf(req) {
-  const al = String((req && req.headers && req.headers['accept-language']) || '');
-  return /^\s*en\b/i.test(al) ? 'en' : 'zh';
-}
+// langOf（从 Accept-Language 判断用哪种语言渲染 error 文案）已移到 panel/error-codes.js：
+// 它和错误文案本地化是同一件事，且 http-errors.js 的 app 级兜底中间件要用同一规则
+// ——放在两处迟早会出现「错误码按 A 规则判语言、兜底中间件按 B 规则判」。
 
 function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const router = express.Router();
@@ -393,10 +384,40 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // 登录限流：同一来源连续失败 5 次锁定 5 分钟，缓解爆破
   const LOGIN_MAX_FAILS = Number(limiterOpts.maxFails) || 5;
   const LOGIN_LOCK_MS = Number(limiterOpts.lockMs) || 5 * 60 * 1000;
-  // 限流记录上限：loginFails 按来源 IP 建键，公网暴露时可被外部驱动无限增长。
+  // 限流记录上限：这些表都按来源 IP 建键，公网暴露时可被外部驱动无限增长。
   // 表满时淘汰最早的记录而非拒绝请求——拒绝等于顺手做出拒绝服务。
-  const LOGIN_MAX_TRACKED = Number(limiterOpts.maxTracked) || 10000;
+  //
+  // ⚠ 只靠下面 60s 的周期 GC 不够：GC 决定的是记录**存活时间**（发码记录约 1 小时），
+  //    而在存活窗口内增长**速率**不受任何全局约束——每 IP 的配额是按桶分的，
+  //    桶的数量由攻击者控制（换 IP / 反代下换 XFF 值）。
+  //    所以每张表都必须另有**数量**上限。
+  const LIMITER_MAX_TRACKED = Number(limiterOpts.maxTracked) || 10000;
+  // loginFails 的上限名对外暴露（/api/limits 会返回它），保持不变
+  const LOGIN_MAX_TRACKED = LIMITER_MAX_TRACKED;
   const loginFails = new Map(); // ip -> { count, until, at }
+
+  /** loginFails 记录是否已无用（周期 GC 与上限裁剪**共用**同一谓词，避免两处判定漂移） */
+  const loginStale = (r, now) => (r.until || 0) <= now && now >= (r.at || 0) + LOGIN_LOCK_MS;
+
+  /**
+   * 给「按来源建键」的限流表兜一个**数量**上限。
+   * 表满时先清过期项，仍满则淘汰最早一条（Map 保持插入序）。
+   *
+   * 抽成函数而不是在每处复制：三张表（loginFails / forgotSent / verifyFails）
+   * 是同一个失效模式，复制三遍迟早会有一处漏改。
+   *
+   * @param isStale 该记录是否已无用；必须与周期 GC 用同一个谓词，
+   *                否则会出现「GC 认为该留、上限认为该删」的不一致。
+   */
+  function capTracked(map, max, now, isStale) {
+    if (map.size < max) return;
+    for (const [k, r] of [...map]) if (isStale(r, now)) map.delete(k);
+    while (map.size >= max) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
 
   /**
    * 清掉锁定期已过、且久未再尝试的记录。
@@ -406,7 +427,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
    */
   function pruneLoginFails(now) {
     for (const [ip, r] of loginFails) {
-      if ((r.until || 0) <= now && now >= (r.at || 0) + LOGIN_LOCK_MS) loginFails.delete(ip);
+      if (loginStale(r, now)) loginFails.delete(ip);
     }
   }
 
@@ -421,14 +442,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!config.verifyCredentials(username, password)) {
       const count = (rec && rec.until === 0 ? rec.count : 0) + 1;
       const now = Date.now();
-      // 表满且是新 IP：先清过期记录，仍满则淘汰最早的一条（Map 保持插入序）
-      if (!loginFails.has(ip) && loginFails.size >= LOGIN_MAX_TRACKED) {
-        pruneLoginFails(now);
-        if (loginFails.size >= LOGIN_MAX_TRACKED) {
-          const oldest = loginFails.keys().next().value;
-          if (oldest !== undefined) loginFails.delete(oldest);
-        }
-      }
+      // 表满且是新 IP 时先腾位置（已有记录不裁剪，避免把自己刚累计的次数挤掉）
+      if (!loginFails.has(ip)) capTracked(loginFails, LIMITER_MAX_TRACKED, now, loginStale);
       loginFails.set(ip, {
         count,
         until: count >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0,
@@ -494,6 +509,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
   const forgotSent = new Map(); // ip -> { count, windowStart, lastAt }
   const verifyFails = new Map(); // ip -> { count, until, at }
+
+  /** 发码记录是否已无用（周期 GC 与上限裁剪共用，下同） */
+  const forgotStale = (r, now) => now - r.windowStart > FORGOT_WINDOW_MS && now - r.lastAt > FORGOT_COOLDOWN_MS;
+  /** 验证码试错记录是否已无用 */
+  const verifyStale = (r, now) => (r.until || 0) <= now && now - r.at > VERIFY_LOCK_MS;
   const resetTickets = new Map(); // ticket -> expires（内存态：重启后需重新校验验证码）
   let codeTries = { hash: '', count: 0 }; // 当前验证码累计试错次数
 
@@ -525,6 +545,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     // 不论邮箱是否匹配都计数：否则不匹配的请求可以无限打（拿它探测+轰炸管理员邮箱）
     rec.count += 1;
     rec.lastAt = now;
+    // 这一步是**无前置条件**地按 IP 建键（不看邮箱是否匹配、不看 SMTP 是否配置），
+    // 所以是新来源时必须先腾位置——否则这是唯一键洪水的直接入口。
+    if (!forgotSent.has(ip)) capTracked(forgotSent, LIMITER_MAX_TRACKED, now, forgotStale);
     forgotSent.set(ip, rec);
 
     const email = String((req.body || {}).email || '').trim();
@@ -580,6 +603,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       let count = rec && now - rec.at < VERIFY_LOCK_MS ? rec.count : 0;
       count += 1;
       const until = count >= VERIFY_MAX_FAILS ? now + VERIFY_LOCK_MS : 0;
+      // 同 forgotSent：失败路径也是无前置条件地按 IP 建键，需上限保护
+      if (!verifyFails.has(ip)) capTracked(verifyFails, LIMITER_MAX_TRACKED, now, verifyStale);
       verifyFails.set(ip, { count, until, at: now });
       if (until) {
         return fail(res, 'auth.reset.relock-15min');
@@ -637,10 +662,10 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   setInterval(() => {
     const now = Date.now();
     for (const [ip, r] of forgotSent) {
-      if (now - r.windowStart > FORGOT_WINDOW_MS && now - r.lastAt > FORGOT_COOLDOWN_MS) forgotSent.delete(ip);
+      if (forgotStale(r, now)) forgotSent.delete(ip);
     }
     for (const [ip, r] of verifyFails) {
-      if ((r.until || 0) <= now && now - r.at > VERIFY_LOCK_MS) verifyFails.delete(ip);
+      if (verifyStale(r, now)) verifyFails.delete(ip);
     }
     for (const [t, exp] of resetTickets) {
       if (exp <= now) resetTickets.delete(t);
@@ -657,7 +682,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     hook({
       loginFails,
       sessions,
-      limits: { LOGIN_MAX_FAILS, LOGIN_LOCK_MS, LOGIN_MAX_TRACKED },
+      // 这两张表同样按来源 IP 建键，是「唯一键洪水」的直接入口，
+      // 暴露给测试以便断言数量上限真的生效
+      forgotSent,
+      verifyFails,
+      limits: { LOGIN_MAX_FAILS, LOGIN_LOCK_MS, LOGIN_MAX_TRACKED, LIMITER_MAX_TRACKED },
       pruneLoginFails,
     });
   }
@@ -3049,4 +3078,4 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   return router;
 }
 
-module.exports = { createApi, __setTestHook };
+module.exports = { createApi, __setTestHook, langOf };

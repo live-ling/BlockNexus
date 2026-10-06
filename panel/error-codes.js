@@ -239,6 +239,19 @@ const ERROR_CODES = {
     zh: '需要 application/json',
     en: 'Content-Type application/json is required',
   },
+  // 下面两条由 server.js 的 **app 级**错误中间件产出。
+  // 必须有它们，否则畸形 body 会落到 Express 内置默认处理器，
+  // 在非 production 下把完整堆栈（含安装绝对路径）回给未认证调用方。
+  'request.body-invalid': {
+    status: 400,
+    zh: '请求体不是合法的 JSON',
+    en: 'Request body is not valid JSON',
+  },
+  'request.body-too-large': {
+    status: 413,
+    zh: '请求体过大',
+    en: 'Request body is too large',
+  },
   'file.upload-out-of-order': {
     status: 409,
     zh: '分块乱序',
@@ -329,6 +342,24 @@ function errorResponse(code, params, opts = {}) {
   return { status, body: { error: text, code: String(code) } };
 }
 
+/**
+ * 从 Accept-Language 判断用哪种语言渲染 error 文案。
+ *
+ * 面板的语言设置存在浏览器 localStorage，后端无从得知，因此由前端把它作为请求头带上来。
+ * 不做内容协商的复杂处理（q 值、通配符）：只认「是否以 en 开头」，其余一律中文。
+ *
+ * 放在本模块而不是 api.js：它与「code → 本地化文案」是同一件事，
+ * 且 panel/http-errors.js 的 app 级兜底中间件也要用**同一个**规则
+ * ——分两处迟早会出现「错误码按 A 规则判语言、兜底中间件按 B 规则判」。
+ *
+ * 注意：`error` 只是**给不认 code 的调用方的兜底文案**；
+ * 认 code 的调用方应当自行本地化，那时 error 文案是什么语言都无所谓。
+ */
+function langOf(req) {
+  const al = String((req && req.headers && req.headers['accept-language']) || '');
+  return /^\s*en\b/i.test(al) ? 'en' : 'zh';
+}
+
 module.exports = {
   ERROR_CODES,
   renderTemplate,
@@ -336,4 +367,5 @@ module.exports = {
   statusOf,
   messageOf,
   errorResponse,
+  langOf,
 };
