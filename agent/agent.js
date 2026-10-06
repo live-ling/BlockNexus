@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 'use strict';
-// BlockNexus Agent —— 零依赖单文件（仅用 Node.js 标准库），由面板通过 SSH 安装到远程服务器。
+// BlockNexus Agent —— 单文件，由面板通过 SSH 安装到远程服务器。
 //
 //   node agent.js --panel ws://面板地址:3080 --token <服务器token> --id <服务器ID>
 //   （也可省略参数，读取同目录 agent.json，字段: panel/token/id）
 //
 // 职责：主动回连面板（WebSocket）→ token 挑战握手 → AES-256-GCM 加密通道 →
 //       执行面板下发的 MC 实例操作（创建/下载/启动/停止/控制台/删除）。
+//
+// 依赖说明：第三方依赖已**内联**在本文件中，目标机无需 npm install；
+//          运行时只 require Node 标准库。
 //
 // ⚠ 本文件由 agent/build.js 从 agent/src/** 生成，请勿直接编辑：
 //   改源码后运行 `npm run build:agent` 重新打包。
@@ -16,7 +19,7 @@
 const __modules = {};
 const __cache = {};
 
-// 加载已打包模块：相对 require 已被 build.js 改写为 __require(<模块 id>)
+// 加载已打包模块：相对/裸 require 已被 build.js 改写为 __require(<模块 id>)
 function __require(id) {
   const cached = __cache[id];
   if (cached) return cached.exports;
@@ -24,12 +27,12 @@ function __require(id) {
   if (!factory) throw new Error('未打包的模块: ' + id);
   const mod = { exports: {} };
   __cache[id] = mod;
-  factory(mod, mod.exports, __require);
+  factory(mod, mod.exports, __require, __dirname, __filename);
   return mod.exports;
 }
 
 // ---------------------------- src/entry.js ----------------------------
-__modules["src/entry.js"] = function (module, exports, __require) {
+__modules["src/entry.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 启动入口（配置载入、信号处理）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -96,7 +99,7 @@ if (process.platform === 'win32') {
 };
 
 // ---------------------------- src/config.js ----------------------------
-__modules["src/config.js"] = function (module, exports, __require) {
+__modules["src/config.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 配置与版本常量
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -168,7 +171,7 @@ module.exports = { VERSION, AGENT_VERSION, parseArgs, loadConfig };
 };
 
 // ---------------------------- src/state.js ----------------------------
-__modules["src/state.js"] = function (module, exports, __require) {
+__modules["src/state.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 跨模块可变状态
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -189,7 +192,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/manager.js ----------------------------
-__modules["src/instance/manager.js"] = function (module, exports, __require) {
+__modules["src/instance/manager.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — InstanceManager 骨架（注册表、状态、元数据与控制台缓冲）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -415,7 +418,7 @@ module.exports = { InstanceManager };
 };
 
 // ---------------------------- src/eventbus.js ----------------------------
-__modules["src/eventbus.js"] = function (module, exports, __require) {
+__modules["src/eventbus.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — Agent 事件出口（sendEvent 注入点）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -437,7 +440,7 @@ module.exports = { sendEvent, setHandler };
 };
 
 // ---------------------------- src/instance/lifecycle.js ----------------------------
-__modules["src/instance/lifecycle.js"] = function (module, exports, __require) {
+__modules["src/instance/lifecycle.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 实例生命周期（启动/停止/重启/删除/控制台指令）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -720,7 +723,7 @@ module.exports = {
 };
 
 // ---------------------------- src/catalog.js ----------------------------
-__modules["src/catalog.js"] = function (module, exports, __require) {
+__modules["src/catalog.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 服务端核心目录与 MSL 镜像源
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -817,7 +820,7 @@ module.exports = { CORE_KINDS, PAPER_API, PAPERCLIP_SOURCES, PURPUR_API, FABRIC_
 };
 
 // ---------------------------- src/http.js ----------------------------
-__modules["src/http.js"] = function (module, exports, __require) {
+__modules["src/http.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — HTTP 下载、Mojang 清单与镜像改写
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -933,7 +936,7 @@ module.exports = { MANIFEST_URL, MANIFEST_MIRRORS, MOJANG_FILE_HOSTS, MANIFEST_T
 };
 
 // ---------------------------- src/util.js ----------------------------
-__modules["src/util.js"] = function (module, exports, __require) {
+__modules["src/util.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 通用工具（哈希校验、子进程、版本号、名称校验）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -1035,7 +1038,7 @@ module.exports = { mavenVersions, runCmd, tarCmdCache, tarCmd, verifyHash, cmpVe
 };
 
 // ---------------------------- src/instance/install.js ----------------------------
-__modules["src/instance/install.js"] = function (module, exports, __require) {
+__modules["src/instance/install.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 实例创建、安装/重装与面板代下
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -1287,7 +1290,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/core.js ----------------------------
-__modules["src/instance/core.js"] = function (module, exports, __require) {
+__modules["src/instance/core.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 核心解析与下载（含 paperclip 原版核心预置）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -1768,7 +1771,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/catalog-cache.js ----------------------------
-__modules["src/instance/catalog-cache.js"] = function (module, exports, __require) {
+__modules["src/instance/catalog-cache.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 版本/核心目录缓存与查询
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -1975,7 +1978,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/players.js ----------------------------
-__modules["src/instance/players.js"] = function (module, exports, __require) {
+__modules["src/instance/players.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 玩家跟踪与 SLP 查询
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -2235,7 +2238,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/watchdog.js ----------------------------
-__modules["src/instance/watchdog.js"] = function (module, exports, __require) {
+__modules["src/instance/watchdog.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 看门狗（崩溃自动重启 + 定时重启）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -2359,7 +2362,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/backup-schedule.js ----------------------------
-__modules["src/instance/backup-schedule.js"] = function (module, exports, __require) {
+__modules["src/instance/backup-schedule.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 存档定时备份（每日/固定间隔计划 + 保留份数清理）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -2448,7 +2451,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/fs.js ----------------------------
-__modules["src/instance/fs.js"] = function (module, exports, __require) {
+__modules["src/instance/fs.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 文件管理与加密通道传输会话
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -2846,7 +2849,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/backups.js ----------------------------
-__modules["src/instance/backups.js"] = function (module, exports, __require) {
+__modules["src/instance/backups.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 备份（tar.gz 快照）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -2987,7 +2990,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/serverinfo.js ----------------------------
-__modules["src/instance/serverinfo.js"] = function (module, exports, __require) {
+__modules["src/instance/serverinfo.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 封禁名单、图标、域名探测、模组、server.properties
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -3267,7 +3270,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/spark.js ----------------------------
-__modules["src/instance/spark.js"] = function (module, exports, __require) {
+__modules["src/instance/spark.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — spark 性能分析
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -3588,7 +3591,7 @@ module.exports = {
 };
 
 // ---------------------------- src/instance/java.js ----------------------------
-__modules["src/instance/java.js"] = function (module, exports, __require) {
+__modules["src/instance/java.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — Java 运行时安装（Temurin）与卸载准备
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -3946,7 +3949,7 @@ module.exports = {
 };
 
 // ---------------------------- src/agent.js ----------------------------
-__modules["src/agent.js"] = function (module, exports, __require) {
+__modules["src/agent.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — Agent 主类（面板连接与 RPC 派发）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -4294,7 +4297,7 @@ module.exports = { Agent };
 };
 
 // ---------------------------- src/crypto.js ----------------------------
-__modules["src/crypto.js"] = function (module, exports, __require) {
+__modules["src/crypto.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — 加密（AES-256-GCM 帧 + token 挑战握手）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
@@ -4384,7 +4387,7 @@ module.exports = { FRAME_VERSION, hkdf, deriveKeys, computeProof, be64, Sealer, 
 };
 
 // ---------------------------- src/ws.js ----------------------------
-__modules["src/ws.js"] = function (module, exports, __require) {
+__modules["src/ws.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
 // BlockNexus Agent — WebSocket（RFC6455 客户端/服务端）与面板握手
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
