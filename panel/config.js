@@ -200,6 +200,20 @@ class Config {
     this.save();
     return this.data.servers.length < before;
   }
+
+  // 服务器卡片排序：按给定 id 顺序重排（未出现在 ids 里的保持原相对顺序追加在后）
+  reorderServers(ids) {
+    const list = Array.isArray(ids) ? ids.map(String) : [];
+    if (!list.length) return this.data.servers;
+    const rank = new Map(list.map((id, i) => [id, i]));
+    this.data.servers = [...this.data.servers].sort((a, b) => {
+      const ra = rank.has(a.id) ? rank.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const rb = rank.has(b.id) ? rank.get(b.id) : Number.MAX_SAFE_INTEGER;
+      return ra - rb;
+    });
+    this.save();
+    return this.data.servers;
+  }
 }
 
 module.exports = { Config };

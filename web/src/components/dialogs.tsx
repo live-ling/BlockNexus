@@ -128,13 +128,15 @@ export function AddServerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="no-scrollbar max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle>添加服务器</DialogTitle>
           <DialogDescription>
             填好主机与 SSH 账号后先点「验证连接」，通过后再保存；保存后进入详情页可一键安装 Agent。
           </DialogDescription>
         </DialogHeader>
+        {/* 表单区自身滚动（no-scrollbar 隐藏滚动条）：未溢出贴合内容，超出即滚，底栏固定可见 */}
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         {/* 双列紧凑排布：主机/端口、用户/认证方式成对，密码与私钥独占整行 */}
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
           <div className="grid gap-1.5 sm:col-span-2">
@@ -286,7 +288,8 @@ export function AddServerDialog({
             </>
           )}
         </div>
-        <DialogFooter>
+        </div>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
@@ -353,10 +356,12 @@ export function EditServerDialog({
   }, [open, server.agent.tls]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="no-scrollbar max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle>编辑服务器</DialogTitle>
         </DialogHeader>
+        {/* 表单区自身滚动，底栏固定（与添加弹窗一致） */}
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         {/* 与添加弹窗一致：双列紧凑排布，端口等短字段按内容收敛宽度 */}
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
           <div className="grid gap-1.5 sm:col-span-2">
@@ -424,7 +429,8 @@ export function EditServerDialog({
             </label>
           )}
         </div>
-        <DialogFooter>
+        </div>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
@@ -541,13 +547,14 @@ export function ManualInstallDialog({
   }, [open, server.id, panelPort]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="shrink-0">
           <DialogTitle>手动安装 Agent</DialogTitle>
           <DialogDescription>
             适用于 SSH 自动安装失败、或无 root 权限的环境。在目标服务器上执行：
           </DialogDescription>
         </DialogHeader>
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1 grid content-start gap-4">
         <pre className="overflow-x-auto rounded-md border bg-muted/50 p-3 font-mono text-xs text-primary">
           {cmds || '加载中…'}
         </pre>
@@ -566,6 +573,7 @@ export function ManualInstallDialog({
         <p className="text-xs text-muted-foreground">
           token 等于服务器控制权，请勿泄露。生产环境建议用 systemd 托管（自动安装流程会自动配置）。
         </p>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -718,10 +726,10 @@ export function CreateInstanceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-2xl">
         {!step2 ? (
           <>
-            <DialogHeader>
+            <DialogHeader className="shrink-0">
               <DialogTitle>新建 MC 实例</DialogTitle>
               <DialogDescription>
                 选一个服务端核心，面板会自动下载安装（Fabric/Forge/NeoForge 会跑官方安装器，耗时稍长）；
@@ -729,6 +737,8 @@ export function CreateInstanceDialog({
               </DialogDescription>
               <MslCredit />
             </DialogHeader>
+            {/* 表单区自身滚动（no-scrollbar 隐藏滚动条），底栏固定 */}
+            <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
             {/* 两列紧凑排布：核心类型/版本、内存/正版验证成对，MOTD 独占整行 */}
             <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
               {/* 名称占满剩余宽度，端口按内容收敛为固定窄列 */}
@@ -876,7 +886,8 @@ export function CreateInstanceDialog({
                 <Input id="c-motd" defaultValue="A Minecraft Server" />
               </div>
             </div>
-            <label className="flex items-center gap-2 text-sm">
+            </div>
+            <label className="flex shrink-0 items-center gap-2 text-sm">
               <Checkbox checked={eula} onCheckedChange={(v) => setEula(v === true)} />
               <span>
                 我已阅读并同意{' '}
@@ -890,7 +901,7 @@ export function CreateInstanceDialog({
                 </a>
               </span>
             </label>
-            <DialogFooter>
+            <DialogFooter className="shrink-0">
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 取消
               </Button>
@@ -962,10 +973,11 @@ export function CreateInstanceDialog({
           </>
         ) : (
           <>
-            <DialogHeader>
+            <DialogHeader className="shrink-0">
               <DialogTitle>上传服务端核心 · {uploadInst}</DialogTitle>
               <DialogDescription>上传完成后自动重命名为 server.jar；也可以稍后在「文件管理」中上传。</DialogDescription>
             </DialogHeader>
+            <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
             <UploadChannelSelect server={server} value={channel} onChange={setChannel} />
             <FileUpload
               value={uploadItems}
@@ -980,7 +992,8 @@ export function CreateInstanceDialog({
               }
               browseLabel="选择文件"
             />
-            <DialogFooter>
+            </div>
+            <DialogFooter className="shrink-0">
               <Button
                 variant="outline"
                 onClick={() => {
@@ -1073,12 +1086,12 @@ export function EditInstanceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-md">
+        <DialogHeader className="shrink-0">
           <DialogTitle>编辑实例 · {instance.name}</DialogTitle>
           <DialogDescription>备注与连接地址只影响面板展示，不改变服务端配置。</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1 grid content-start gap-4">
           <div className="flex items-center gap-3">
             <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border bg-muted/40">
               {!iconMissing ? (
@@ -1177,7 +1190,7 @@ export function EditInstanceDialog({
             </p>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
@@ -1453,14 +1466,14 @@ export function ReinstallDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-md">
+        <DialogHeader className="shrink-0">
           <DialogTitle>重装核心 · {instance.name}</DialogTitle>
           <DialogDescription>
             会先清掉上次安装的残留文件，再重新下载安装。世界存档、server.properties 与实例设置都会保留。
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1 grid content-start gap-4">
           {instance.error && (
             <p className="rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
               上次失败：{instance.error}
@@ -1511,7 +1524,7 @@ export function ReinstallDialog({
           </p>
           <MslCredit />
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>

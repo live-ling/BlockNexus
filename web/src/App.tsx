@@ -185,6 +185,9 @@ export function App() {
           me={me}
           servers={servers}
           onAdd={(s) => setServers((cur) => [...cur, { ...s, online: false }])}
+          onReorder={(ids) =>
+            setServers((cur) => ids.map((id) => cur.find((s) => s.id === id)).filter(Boolean) as ServerSummary[])
+          }
         />
       )}
       </div>

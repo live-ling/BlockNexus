@@ -405,12 +405,22 @@ export function ServerSettingsPage({
               ['系统', `${server.info.os} · ${server.info.arch}`],
               ['Node', server.info.node],
               [
-                '远端 Agent',
-                server.info.agentVersion ? (
-                  `v${server.info.agentVersion}`
-                ) : (
-                  <span key="av" className="text-muted-foreground">旧版（未上报版本）</span>
-                ),
+                'Agent',
+                <span
+                  key="agent"
+                  className={
+                    agentOutdated(server) ? 'text-amber-600 dark:text-amber-400' : undefined
+                  }
+                >
+                  远端{' '}
+                  {server.info.agentVersion ? (
+                    `v${server.info.agentVersion}`
+                  ) : (
+                    <span className="text-muted-foreground">旧版（未上报版本）</span>
+                  )}{' '}
+                  · 本地 v{server.agentBundled ?? '—'}
+                  {agentOutdated(server) ? '（待自动更新）' : ''}
+                </span>,
               ],
               [
                 '内存',

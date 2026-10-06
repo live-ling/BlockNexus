@@ -86,8 +86,8 @@ export function AutoRestartDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <RotateCw className="h-4 w-4" /> 自动重启 · {instance.name}
           </DialogTitle>
@@ -96,6 +96,8 @@ export function AutoRestartDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* 内容区自身滚动：定时任务多时不撑爆窗口，底栏固定 */}
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <div className="grid gap-5">
           {/* 崩溃自动重启 */}
           <label className="flex items-center justify-between gap-4 rounded-lg border p-3">
@@ -239,8 +241,9 @@ export function AutoRestartDialog({
             )}
           </div>
         </div>
+        </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>

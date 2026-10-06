@@ -1,12 +1,14 @@
 {
   "name": "blocknexus",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Minecraft 服务器管理面板 — 本地面板 + 远程 Agent（参考 DeepSeek Harness 架构）",
   "private": true,
   "main": "panel/server.js",
   "scripts": {
     "start": "node panel/server.js",
     "build:web": "npm --prefix web run build",
+    "build:agent": "node agent/build.js",
+    "test:agent": "node agent/test-module-imports.js && node agent/build.js --check && node agent/test-bundle-fresh.js && node agent/test-bundle-smoke.js && node agent/test-bootstrap-vanilla.js && node agent/test-start-singleflight.js && node agent/test-watchdog-schedule.js && node agent/test-player-tracking.js && node agent/test-fs-ops.js && node agent/e2e-panel-install.js",
     "launch": "node scripts/blocknexus-launcher.js",
     "stop": "node scripts/blocknexus-launcher.js --stop",
     "exit-tray": "node scripts/blocknexus-launcher.js --exit-tray",

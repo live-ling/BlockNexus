@@ -1,4 +1,4 @@
-// Mod 管理器：实例 mods 目录的列表 / 启用-禁用 / 删除 / 上传
+// Mod 管理器：实例 mods 目录的列表 / 启用-禁用 / 删除 / 上传（含整窗拖拽）
 // 启停 = 原地改名加/去 .disabled 后缀（Forge/Fabric 通用约定），路径由 Agent 锁定在 mods 内
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -28,14 +28,19 @@ interface Props {
   instance: string;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** Mod 列表发生变化（上传/启停/删除）后回调，父级可借此刷新实例信息 */
+  onChanged?: () => void;
 }
 
-export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Props) {
+export function ModManagerDialog({ serverId, instance, open, onOpenChange, onChanged }: Props) {
   const { success, error } = useToastHelpers();
   const [list, setList] = useState<ModsList | null>(null);
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [uploading, setUploading] = useState<{ name: string; pct: number }[]>([]);
+  // 整窗拖拽：dragenter/dragleave 会随子元素反复触发，用计数器判断真正离开
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
@@ -48,12 +53,21 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
     if (open) reload();
   }, [open, reload]);
 
+  // 关闭对话框时复位拖拽状态（拖拽中按 Esc 关窗等）
+  useEffect(() => {
+    if (!open) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  }, [open]);
+
   const doToggle = async (file: string, disable: boolean, label: string) => {
     setBusyFile(file);
     try {
       await toggleMod(serverId, instance, file, disable);
       success(disable ? `已禁用 ${label}` : `已启用 ${label}`, '下次启动生效');
       reload();
+      onChanged?.();
     } catch (e) {
       error('操作失败', errText(e));
     } finally {
@@ -68,6 +82,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
       success('已删除', file);
       setDeleting(null);
       reload();
+      onChanged?.();
     } catch (e) {
       error('删除失败', errText(e));
     } finally {
@@ -75,9 +90,15 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
     }
   };
 
-  const doUpload = async (files: FileList | null) => {
-    if (!files || !files.length) return;
-    for (const f of Array.from(files)) {
+  const doUpload = async (files: FileList | File[]) => {
+    const arr = Array.from(files);
+    if (!arr.length) return;
+    // Mod 只认 .jar（.jar.disabled 也接受，按禁用态放入）；混入的其他文件不静默丢弃
+    const jars = arr.filter((f) => /\.jar(\.disabled)?$/i.test(f.name));
+    const skipped = arr.length - jars.length;
+    if (skipped > 0) error(`已跳过 ${skipped} 个非 .jar 文件`, 'Mod 管理只接受 .jar');
+    if (!jars.length) return;
+    for (const f of jars) {
       setUploading((cur) => [...cur, { name: f.name, pct: 0 }]);
       try {
         await uploadFile(serverId, instance, 'mods', f, (pct) =>
@@ -90,6 +111,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
     setUploading([]);
     success('上传完成', '新 Mod 默认为启用状态，重启后加载');
     reload();
+    onChanged?.();
   };
 
   const enabled = list?.mods.filter((m) => !m.disabled).length ?? 0;
@@ -97,7 +119,40 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+        <DialogContent
+          className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg"
+          onDragEnter={(e) => {
+            if (!e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+            dragDepth.current += 1;
+            setDragging(true);
+          }}
+          onDragOver={(e) => {
+            if (!e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+          }}
+          onDragLeave={() => {
+            dragDepth.current = Math.max(0, dragDepth.current - 1);
+            if (dragDepth.current === 0) setDragging(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            dragDepth.current = 0;
+            setDragging(false);
+            void doUpload(e.dataTransfer.files);
+          }}
+        >
+          {/* 拖拽覆盖层：整窗任意位置松开即上传 */}
+          {dragging && (
+            <div className="pointer-events-none absolute inset-0 z-50 grid place-items-center rounded-lg border-2 border-dashed border-primary bg-background/85">
+              <div className="flex flex-col items-center gap-2 text-primary">
+                <Upload className="h-8 w-8" />
+                <p className="text-sm font-medium">松开上传 Mod</p>
+                <p className="text-xs text-muted-foreground">支持多个 .jar 文件</p>
+              </div>
+            </div>
+          )}
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Puzzle className="h-4 w-4 text-primary" /> Mod 管理
@@ -117,7 +172,7 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
                 accept=".jar,.disabled"
                 className="hidden"
                 onChange={(e) => {
-                  void doUpload(e.target.files);
+                  if (e.target.files) void doUpload(e.target.files);
                   e.target.value = '';
                 }}
               />
@@ -136,7 +191,8 @@ export function ModManagerDialog({ serverId, instance, open, onOpenChange }: Pro
             </p>
           )}
 
-          <div className="grid max-h-[52vh] content-start gap-1.5 overflow-y-auto">
+          {/* 列表自身滚动（max-h 内收缩、隐藏滚动条），头部与底注固定 */}
+          <div className="scrollbar-hide grid min-h-0 flex-1 content-start gap-1.5 overflow-y-auto">
             {(list?.mods ?? []).map((m) => (
               <div
                 key={m.file}

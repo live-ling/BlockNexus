@@ -345,6 +345,12 @@ class AgentHub extends require('events').EventEmitter {
     const conn = this.conns.get(serverId);
     return conn && conn.alive ? conn.rtt : null;
   }
+
+  // 本次 Agent 连接的建立时刻（在线时长统计用；离线为 null）
+  getOnlineSince(serverId) {
+    const conn = this.conns.get(serverId);
+    return conn && conn.alive ? conn.attachedAt : null;
+  }
 }
 
 class AgentConn {
@@ -353,6 +359,7 @@ class AgentConn {
     this.server = server;
     this.ws = ws;
     this.alive = true;
+    this.attachedAt = Date.now(); // 本次连接建立时刻（在线时长的起点）
     this.sealer = new Sealer(keys.kP2A); // 面板→Agent
     this.opener = new Opener(keys.kA2P); // Agent→面板
     this.pending = new Map();

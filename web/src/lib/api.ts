@@ -32,6 +32,8 @@ export interface ServerSummary {
   online: boolean;
   /** 面板所在机器 → 该服务器 的链路延迟（毫秒），未测到为 null */
   latency: number | null;
+  /** 本次 Agent 连接的建立时刻（在线时长统计用；离线/旧版面板未返回时为 null） */
+  onlineSince?: number | null;
   /** 最近一次资源快照（面板后台 30s 拉取；Agent 离线/未上线时为 null） */
   stats: {
     memTotalMB: number;
@@ -157,6 +159,8 @@ export interface Instance {
   build?: string;
   /** 自定义直链（source=url 时），面板代下要用它来下载 */
   url?: string;
+  /** 是否装了 spark（决定实例详情页要不要显示 Spark 标签页；老版本 Agent 不返回该字段） */
+  sparkInstalled?: boolean;
 }
 
 /** 运行中实例的在线人数快照：{ [实例名]: { online, max, list, running } } */

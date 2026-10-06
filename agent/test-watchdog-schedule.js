@@ -1,14 +1,14 @@
 // 看门狗定时任务判定逻辑的回归测试
-// 从 agent.js 源码提取 scheduleDue 的正则/规则常量，逐例验证；
+// 从 agent/src/instance/watchdog.js 提取 scheduleDue 的规则常量，逐例验证；
 // 并断言源码中确实存在对应规则，防止测试与实现漂移。
 
 const fs = require('fs');
 const path = require('path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'agent', 'agent.js'), 'utf8');
+const src = fs.readFileSync(path.join(__dirname, 'src', 'instance', 'watchdog.js'), 'utf8');
 const start = src.indexOf('scheduleDue(s, now) {');
-if (start < 0) throw new Error('agent.js 中未找到 scheduleDue');
-const body = src.slice(start, src.indexOf('\n  }', start));
+if (start < 0) throw new Error('watchdog.js 中未找到 scheduleDue');
+const body = src.slice(start, src.indexOf('\n  },', start));
 
 for (const frag of ["s.type === 'daily'", "s.type === 'interval'", 's.days', '20 * 3600e3', '10080']) {
   if (!body.includes(frag)) throw new Error('实现中缺少规则: ' + frag);

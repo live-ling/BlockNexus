@@ -1,17 +1,16 @@
 # 依赖
 node_modules/
 
-# 运行时数据（首次启动自动创建；含 token、SSH 凭据、TLS 私钥，绝不能入库）
-data/*
-!data/config.example.json
+# 运行时数据（含真实凭据：token、SSH 密码、TLS 私钥 —— 绝不能入库）
+data/
 
 # 日志
 *.log
 
-# 前端构建产物（npm run build:web 重新生成）
+# 前端构建产物
 web/dist/
 
-# 本地构建 / 签名产物（scripts/build-exe.ps1 重新生成；自签证书只对本机有意义）
+# 本地构建 / 签名产物（build-exe.ps1 可重新生成；自签证书在别处无意义）
 /BlockNexus.exe
 /BlockNexus.exe.config
 /BlockNexus.cer
@@ -25,6 +24,3 @@ web/dist/
 .idea/
 .DS_Store
 Thumbs.db
-
-# 构建脚本同步外壳时写入的本机路径（build-exe.ps1）
-/root.txt

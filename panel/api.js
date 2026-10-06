@@ -13,6 +13,8 @@ const mailTpl = require('./mail');
 
 const COOKIE = 'blocknexussid';
 const SESSION_TTL = 7 * 24 * 3600 * 1000;
+// 勾选「记住我」：Cookie 与会话有效期都放宽到 30 天（滑动续期），关浏览器仍保持登录
+const REMEMBER_TTL = 30 * 24 * 3600 * 1000;
 
 // 面板版本：读 package.json（/api/me、/api/version 共用）
 const APP_VERSION = (() => {
@@ -331,7 +333,7 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       const wait = Math.ceil((rec.until - Date.now()) / 1000);
       return res.status(429).json({ error: `尝试次数过多，请 ${wait} 秒后再试` });
     }
-    const { username, password } = req.body || {};
+    const { username, password, remember } = req.body || {};
     if (!config.verifyCredentials(username, password)) {
       const count = (rec && rec.until === 0 ? rec.count : 0) + 1;
       loginFails.set(ip, {
@@ -345,8 +347,13 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     }
     loginFails.delete(ip);
     const sid = crypto.randomBytes(24).toString('hex');
-    sessions.set(sid, Date.now() + SESSION_TTL);
-    res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 3600}`);
+    // 「记住我」勾选 → 30 天有效期 + 持久 Cookie（关浏览器保持登录）；
+    // 未勾选 → 7 天滑动有效期 + 会话 Cookie（关浏览器即失效，需重新登录）
+    const rememberOn = remember !== false;
+    const ttl = rememberOn ? REMEMBER_TTL : SESSION_TTL;
+    sessions.set(sid, { exp: Date.now() + ttl, remember: rememberOn });
+    const maxAge = rememberOn ? `; Max-Age=${Math.floor(REMEMBER_TTL / 1000)}` : '';
+    res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/${maxAge}`);
     res.json({ ok: true });
   });
 
@@ -547,9 +554,10 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   router.use((req, res, next) => {
     if (!config.data.panel.authEnabled) return next();
     const sid = getSid(req);
-    const exp = sid && sessions.get(sid);
-    if (exp && exp > Date.now()) {
-      sessions.set(sid, Date.now() + SESSION_TTL);
+    const sess = sid && sessions.get(sid);
+    if (sess && sess.exp > Date.now()) {
+      // 滑动续期：记住我的会话续 30 天，普通会话续 7 天（Cookie 本身的存活由浏览器管）
+      sessions.set(sid, { ...sess, exp: Date.now() + (sess.remember ? REMEMBER_TTL : SESSION_TTL) });
       return next();
     }
     if (sid) sessions.delete(sid);
@@ -612,7 +620,7 @@ function createApi(config, hub, bus, limiterOpts = {}) {
         config.data.panel.authEnabled = true;
         config.save();
         const sid = crypto.randomBytes(24).toString('hex');
-        sessions.set(sid, Date.now() + SESSION_TTL);
+        sessions.set(sid, { exp: Date.now() + SESSION_TTL, remember: false });
         res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 3600}`);
       } else {
         // 关闭登录时也允许顺带改用户名（面板此时本身免密，无泄露面）
@@ -705,6 +713,8 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       ...rest,
       online: hub.isOnline(server.id),
       latency: hub.getLatency(server.id),
+      // 本次 Agent 连接的建立时刻（在线时长统计用；离线为 null）
+      onlineSince: hub.getOnlineSince ? hub.getOnlineSince(server.id) : null,
       // 最近一次资源快照（后台 30s 拉取；Agent 未上线或太旧时为 null）
       stats: statsCache.get(server.id)?.data ?? null,
       // 面板自身监听范围（前端据此提示手工安装命令是否可用）
@@ -741,6 +751,14 @@ function createApi(config, hub, bus, limiterOpts = {}) {
         agentUpdate: agentUpdateState.get(s.id) || null,
       })),
     );
+  });
+
+  // 服务器卡片排序（首页拖动后持久化）；返回重排后的完整列表
+  router.post('/servers/reorder', (req, res) => {
+    const ids = (req.body || {}).ids;
+    if (!Array.isArray(ids)) return res.status(400).json({ error: '缺少 ids 数组' });
+    config.reorderServers(ids);
+    res.json({ ok: true });
   });
 
   // 手动触发 Agent 更新（自动更新失败/被限流后的兜底入口）；结果经 SSE agent-update 推送
@@ -797,7 +815,12 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   router.get('/servers/:id', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
-    res.json(sanitize(server, { revealToken: req.query.token === '1' }));
+    // 与列表接口一致：附上面板随附的 Agent 版本与自动更新状态（设置页的版本比对要用）
+    res.json({
+      ...sanitize(server, { revealToken: req.query.token === '1' }),
+      agentBundled: BUNDLED_AGENT_VERSION,
+      agentUpdate: agentUpdateState.get(server.id) || null,
+    });
   });
 
   router.put('/servers/:id', (req, res) => {
@@ -961,8 +984,9 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   ];
   let panelVersionsCache = null;
 
-  // 统一 UA：部分镜像（清华 TUNA、MSL 等）要求或不带 UA 就 403；MSL 要求 UA 含应用名
-  const HTTP_UA = 'BlockNexus/0.1.0';
+  // 统一 UA：部分镜像（清华 TUNA、MSL 等）要求或不带 UA 就 403；MSL 要求 UA 含应用名。
+  // 从 APP_VERSION 派生，避免像旧版那样把版本号写死在这里、升级后 UA 仍停留在旧版本。
+  const HTTP_UA = `BlockNexus/${APP_VERSION}`;
 
   function fetchJsonPanel(urlStr, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -1712,6 +1736,9 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     }
   });
 
+  // 启动/重启要宽容一些：Paper 系首启要先预下载原版核心（几分钟），超时太短会让面板
+  // 先返回 504，而 Agent 其实还在正常启动。停止仍是即时动作，保持 60s。
+  const INSTANCE_OP_TIMEOUT = { start: 300000, restart: 300000, stop: 60000 };
   for (const [route, action] of [
     ['start', 'instance.start'],
     ['stop', 'instance.stop'],
@@ -1722,7 +1749,7 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       if (!server) return;
       try {
         res.json(
-          await agent(server)(action, { name: req.params.name, ...(req.body || {}) }, 60000)
+          await agent(server)(action, { name: req.params.name, ...(req.body || {}) }, INSTANCE_OP_TIMEOUT[route])
         );
       } catch (e) {
         next(e);
@@ -1769,6 +1796,49 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       }
     });
   }
+
+  // ---------- spark 性能模组：实时数据（前端轮询）/ profiler 控制 / 健康摘要 ----------
+  // 数据本身由 Agent 解析控制台输出得到（spark 无外部查询接口），这里只做透传
+  router.get('/servers/:id/instances/:name/spark/stats', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'instance.spark.stats', { name: req.params.name }, 15000));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/servers/:id/instances/:name/spark/profiler', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      const body = req.body || {};
+      const timeoutSec = Math.min(Math.max(Math.round(Number(body.timeoutSec) || 60), 15), 600);
+      const stop = body.action === 'stop';
+      // start 即时返回（报告链接由 Agent 被动捕获）；stop 等上传完成最长 45s
+      const waitMs = stop ? 60000 : 20000;
+      res.json(
+        await agent(server)(
+          'instance.spark.profiler',
+          { name: req.params.name, action: stop ? 'stop' : 'start', timeoutSec },
+          waitMs,
+        ),
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.get('/servers/:id/instances/:name/spark/health', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'instance.spark.health', { name: req.params.name }, 20000));
+    } catch (e) {
+      next(e);
+    }
+  });
 
   // ---------- 封禁目录：查看与解封（运行中走 pardon 命令，停止时改 JSON） ----------
   router.get('/servers/:id/instances/:name/banlist', async (req, res, next) => {

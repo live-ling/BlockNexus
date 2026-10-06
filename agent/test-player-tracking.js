@@ -1,11 +1,11 @@
-// 玩家跟踪解析验证：从 agent.js 源码中提取 trackPlayers 里的正则，逐条喂日志行
+// 玩家跟踪解析验证：从 agent/src/instance/players.js 提取 trackPlayers 里的正则，逐条喂日志行
 const fs = require('fs');
 const path = require('path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'agent', 'agent.js'), 'utf8');
+const src = fs.readFileSync(path.join(__dirname, 'src', 'instance', 'players.js'), 'utf8');
 const start = src.indexOf('trackPlayers(rec, line) {');
 if (start < 0) throw new Error('未找到 trackPlayers');
-const body = src.slice(start, src.indexOf('\n  }', start));
+const body = src.slice(start, src.indexOf('\n  },', start));
 
 // 复刻方法中的四条规则（与 agent.js 保持一致的正则字符串）
 const NAME = '([^\\s]{1,32})';
@@ -59,7 +59,7 @@ console.log(`\n${pass}/${tests.length} passed | final: ${JSON.stringify([...set]
 // ---------- makeLineSplitter 验证：从源码提取方法体直接调用 ----------
 const ms = src.indexOf('makeLineSplitter(onLine) {');
 if (ms < 0) throw new Error('未找到 makeLineSplitter');
-const splitterBody = src.slice(src.indexOf('{', ms) + 1, src.indexOf('\n  }', ms));
+const splitterBody = src.slice(src.indexOf('{', ms) + 1, src.indexOf('\n  },', ms));
 // 源码片段防漂移：关键实现细节必须在位
 for (const frag of ['0x0a', 'Buffer.concat', 'MAX_REST', "\\r$"]) {
   if (!splitterBody.includes(frag)) throw new Error('makeLineSplitter 缺少实现细节: ' + frag);

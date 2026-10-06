@@ -127,8 +127,17 @@ panel/
   api.js        REST API（登录、服务器 CRUD、安装、实例操作）+ SSE 实时推送
   mail.js       邮件模板（HTML 卡片样式 + 纯文本兜底）
 agent/
-  agent.js      零依赖单文件 Agent（自带 RFC6455 WebSocket 客户端 + 同套加密实现）
+  agent.js      零依赖单文件 Agent（自带 RFC6455 WebSocket 客户端 + 同套加密实现）——**由 build.js 生成，勿直接编辑**
+  build.js      打包器：把 src/** 拼成上面的单文件产物（`npm run build:agent`；`--check` 只校验是否同步）
+  src/          Agent 源码，按功能组分模块（config/crypto/ws/http/catalog/util + instance/**）
 data/           运行时数据（config.json、本地测试实例），已 gitignore
+```
+
+Agent 是「源码分模块 + 打包成单文件」：交付物仍是单文件（SSH 只上传一个文件、systemd 直接跑它、面板 `/agent.js` 匿名下载、手动 `curl -o agent.js` 安装都依赖这一点），所以改完源码必须重新打包：
+
+```bash
+npm run build:agent   # 重新生成 agent/agent.js
+npm run test:agent    # 全部 Agent 测试（含产物新鲜度校验：忘打包会直接失败）
 ```
 
 ## 前端开发
@@ -299,6 +308,26 @@ node agent/e2e-panel-install.js
 node agent/e2e-reset-code.js
 ```
 
+Agent 单元测试（全部零依赖，不需要面板与真实服务器）：
+
+```bash
+npm run test:agent
+```
+
+逐个说明：
+
+| 脚本 | 覆盖内容 |
+| --- | --- |
+| `node agent/test-module-imports.js` | 模块导入完整性（跨模块符号漏 import / 拼错名） |
+| `node agent/build.js --check` | 产物新鲜度：`agent/agent.js` 是否与 `src/**` 同步 |
+| `node agent/test-bundle-fresh.js` | 产物与源码一致、仍是零依赖、保留 `AGENT_VERSION` 常量 |
+| `node agent/test-bundle-smoke.js` | 黑盒启动产物（横幅、监听端口、SIGTERM 干净退出） |
+| `node agent/test-bootstrap-vanilla.js` | 原版核心预下载（官方/镜像、sha1 自愈、并发只下一次） |
+| `node agent/test-start-singleflight.js` | 启动并发去重（并发只 spawn 一个 java）、进程归属、取消启动 |
+| `node agent/test-watchdog-schedule.js` | 看门狗定时任务判定规则 |
+| `node agent/test-player-tracking.js` | 玩家进出/名单解析、控制台跨 chunk 拼行 |
+| `node agent/test-fs-ops.js` | 文件管理（复制/移动/压缩/解压/路径越界） |
+
 ## AI 日志分析（实例详情页「AI 分析」）
 
 实例详情页顶部可在「终端 / AI 分析」间切换。启用后，AI 会读取该实例的控制台日志并流式给出分析。日志量取 **Agent 环形缓冲的全部内容（最多 500 行）**，这是上游能提供的上限；若日志整体过长仍会按字符截断，此时回答下方会标注「（过长已截断）」。
@@ -345,6 +374,17 @@ GET  /api/version                    (当前版本 + GitHub 最新 Release 与�
 GET  /api/events                     (SSE: status / latency / stats / agent-event / install / agent-update)
 GET  /agent.js                       (Agent 单文件下载，匿名)
 ```
+
+## 版本号与 User-Agent
+
+有两套**独立**的版本号，不要互相覆盖：
+
+| 版本 | 位置 | 用途 |
+| --- | --- | --- |
+| **面板版本** | `package.json` 的 `version` | 启动横幅、`/api/me`、`/api/version`、关于页与设置页「版本与更新」卡片；与 GitHub Release 标签（`v0.2.0` 形式）比对判断有无更新 |
+| **Agent 版本** | `agent/src/config.js` 的 `AGENT_VERSION` | 面板从交付产物 `agent/agent.js` 文本里正则提取，与远端 `hi` 上报值比对，不一致即自动更新远端脚本；本机 Agent 也可单独更新 |
+
+对外 HTTP 请求的 User-Agent 都由这两处派生，不再另写版本字面量。镜像源对 UA 有实际要求：清华 TUNA 对**不带 UA** 的请求返回 403，MSL 要求 UA 含应用名，所以这两个字符串不能删空。改完 Agent 版本记得 `npm run build:agent`——产物里的 `AGENT_VERSION = 'x.y.z'` 是面板提取版本号的正则目标，`npm run test:agent` 会校验产物与源码同步。
 
 ## 安全注意事项
 

@@ -97,8 +97,8 @@ export function UninstallDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="shrink-0">
           <DialogTitle className={`flex items-center gap-2 ${stopOnly ? '' : 'text-destructive'}`}>
             <AlertTriangle className="h-4 w-4" /> {title} · {server.name}
           </DialogTitle>
@@ -126,6 +126,8 @@ export function UninstallDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* 选项与日志区自身滚动，底栏固定可见 */}
+        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <div className="grid gap-3">
           {!stopOnly && isLocal && (
             <label className="flex items-start gap-2 text-sm">
@@ -177,8 +179,9 @@ export function UninstallDialog({
 
           {log?.lines && <LogViewer lines={log.lines} />}
         </div>
+        </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {busy ? stopOnly ? '停止中…' : '卸载中…' : '取消'}
           </Button>

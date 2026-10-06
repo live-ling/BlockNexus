@@ -1,5 +1,5 @@
 {
-  "name": "blocknexus-web",
+  "name": "web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -36,7 +36,5 @@
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
-  },
-  "description": "BlockNexus 面板前端（React + Vite）",
-  "license": "MIT"
+  }
 }

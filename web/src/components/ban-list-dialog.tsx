@@ -90,7 +90,7 @@ export function BanListDialog({ serverId, instance, open, onOpenChange }: Props)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Ban className="h-4 w-4 text-destructive" /> 封禁目录
@@ -98,6 +98,8 @@ export function BanListDialog({ serverId, instance, open, onOpenChange }: Props)
           </DialogTitle>
         </DialogHeader>
 
+        {/* 主体自身滚动：未溢出时贴合内容，超出即进入滚动（对话框高度封顶） */}
+        <div className="scrollbar-hide -mx-1 grid min-h-0 flex-1 content-start gap-4 overflow-y-auto px-1">
         {list && !list.running && (players.length > 0 || ips.length > 0) && (
           <p className="rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
             实例当前未运行：解封将直接修改 banned-*.json 文件。
@@ -133,8 +135,9 @@ export function BanListDialog({ serverId, instance, open, onOpenChange }: Props)
           ))}
           {!ips.length && <p className="px-1 pb-1 text-xs text-muted-foreground">没有封禁的 IP。</p>}
         </div>
+        </div>
 
-        <p className="text-[11px] leading-snug text-muted-foreground">
+        <p className="shrink-0 text-[11px] leading-snug text-muted-foreground">
           数据来自实例目录的 banned-players.json / banned-ips.json；在控制台用 ban / ban-ip 添加，
           pardon / pardon-ip 解除。
         </p>

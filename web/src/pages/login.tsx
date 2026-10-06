@@ -6,9 +6,13 @@ import { TextReveal } from '@/components/motion/text-reveal';
 import { OTPInput, type OTPStatus } from '@/components/motion/otp-input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api, errText } from '@/lib/api';
+
+/** 「记住我」记忆的用户名（localStorage；只存账号，不存密码） */
+const REMEMBER_KEY = 'blocknexus.rememberUser';
 
 /** 全屏背景容器：登录 / 找回 / 重置 三页共用，保证切换模式时背景不闪 */
 function AuthShell({ children }: { children: React.ReactNode }) {
@@ -75,8 +79,10 @@ function FieldRow({
 
 export function LoginPage({ onLogin }: { onLogin: () => void }) {
   const [mode, setMode] = useState<'login' | 'forgot'>('login');
-  const [username, setUsername] = useState('');
+  // 「记住我」：勾选时上次的用户名回填并保持登录（持久 Cookie）；仅存账号名，不存密码
+  const [username, setUsername] = useState(() => localStorage.getItem(REMEMBER_KEY) ?? '');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(() => localStorage.getItem(REMEMBER_KEY) !== null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -104,7 +110,9 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
               setErr('');
               setBusy(true);
               try {
-                await api('/login', { method: 'POST', body: { username, password } });
+                await api('/login', { method: 'POST', body: { username, password, remember } });
+                if (remember) localStorage.setItem(REMEMBER_KEY, username.trim());
+                else localStorage.removeItem(REMEMBER_KEY);
                 onLogin();
               } catch (ex) {
                 setErr(errText(ex));
@@ -134,6 +142,18 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </FieldRow>
+            <label
+              htmlFor="rm"
+              className="-mt-2 flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
+              title="记住账号并在关闭浏览器后保持登录"
+            >
+              <Checkbox
+                id="rm"
+                checked={remember}
+                onCheckedChange={(v) => setRemember(v === true)}
+              />
+              记住我
+            </label>
             {err && <p className="text-center text-xs text-destructive">{err}</p>}
             <Button type="submit" className="h-10 w-full" disabled={busy}>
               登 录

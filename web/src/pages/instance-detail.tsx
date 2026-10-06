@@ -2,7 +2,7 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
@@ -12,6 +12,7 @@ import { BanListDialog } from '@/components/ban-list-dialog';
 import { ModManagerDialog } from '@/components/mod-manager';
 import { AutoRestartDialog } from '@/components/auto-restart-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
+import { SparkPanel } from '@/components/spark-panel';
 import { InstanceStatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -79,8 +80,8 @@ export function InstanceDetailPage({
     { state: 'checking' | 'done'; result?: DomainCheckResult } | null
   >(null);
   const [bansOpen, setBansOpen] = useState(false);
-  // 主区视图：终端 / AI 日志分析
-  const [mainView, setMainView] = useState<'console' | 'ai'>('console');
+  // 主区视图：终端 / AI 日志分析 / spark 性能
+  const [mainView, setMainView] = useState<'console' | 'ai' | 'spark'>('console');
   const [, forceTick] = useState(0);
 
   const loadServer = useCallback(() => {
@@ -118,6 +119,11 @@ export function InstanceDetailPage({
   const running = instance?.status === 'running';
   const starting = instance?.status === 'starting';
   const active = running || starting;
+  // spark 被卸载（Mod 管理删除）时若正停留在 Spark 视图，退回终端
+  useEffect(() => {
+    if (instance && !instance.sparkInstalled && mainView === 'spark') setMainView('console');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance?.sparkInstalled]);
   useEffect(() => {
     if (!running) return;
     loadPlayers();
@@ -463,6 +469,16 @@ export function InstanceDetailPage({
             >
               <Sparkles className="h-3.5 w-3.5" /> AI 分析
             </Button>
+            {/* 未装 spark 不显示标签（装了之后 Mod 管理变更会刷新实例信息把它带出来） */}
+            {instance.sparkInstalled && (
+              <Button
+                size="sm"
+                variant={mainView === 'spark' ? 'secondary' : 'ghost'}
+                onClick={() => setMainView('spark')}
+              >
+                <Activity className="h-3.5 w-3.5" /> Spark
+              </Button>
+            )}
           </div>
           {/* 两个面板都常驻挂载，只切换可见性：
               条件渲染会在切走时卸载组件，AI 的对话记录与进行中的流会一起丢失，
@@ -480,6 +496,16 @@ export function InstanceDetailPage({
               serverId={server.id}
               instanceName={instance.name}
               heightClass="h-[45vh] lg:h-[60vh]"
+            />
+          </div>
+          <div className={mainView === 'spark' ? '' : 'hidden'}>
+            <SparkPanel
+              serverId={server.id}
+              instance={instance.name}
+              running={running}
+              visible={mainView === 'spark'}
+              heightClass="h-[45vh] lg:h-[60vh]"
+              onOpenMods={() => setModsOpen(true)}
             />
           </div>
         </div>
@@ -575,6 +601,7 @@ export function InstanceDetailPage({
         instance={instance.name}
         open={modsOpen}
         onOpenChange={setModsOpen}
+        onChanged={loadInstance}
       />
       <BackupDialog
         server={server}

@@ -1,34 +1,35 @@
-// fs.copy/move/compress/extract 验证：从 agent.js 提取方法体，在临时目录里用真实文件系统
+// fs.copy/move/compress/extract 验证：从 agent/src 提取方法体，在临时目录里用真实文件系统
 // 与系统 tar 走完整流程（复制/移动/守卫/压缩/解压/路径越界）
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'agent', 'agent.js'), 'utf8');
+// 文件管理方法在 instance/fs.js，runCmd/tarCmd 在 util.js（拆分后的源码布局）
+const src = fs.readFileSync(path.join(__dirname, 'src', 'instance', 'fs.js'), 'utf8');
+const utilSrc = fs.readFileSync(path.join(__dirname, 'src', 'util.js'), 'utf8');
 
-// 从类源码提取方法（与 trackPlayers 测试同一套路：body 不含收尾 `}`，eval 时补齐）
-// 用 AsyncFunction 构造（compressPaths/extractArchive 方法体里有 await），调用返回 Promise，需 await
+// 从模块源码提取方法定义（对象字面量成员：2 空格缩进 + 签名，收尾为 "\n  },"）；
+// 只能按「行首缩进的定义」匹配，否则会命中调用点
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
 async function extractMethod(name) {
-  let ms = src.indexOf(`${name}(`);
-  if (ms < 0) throw new Error('未找到 ' + name);
-  if (src.slice(ms - 6, ms) === 'async ') ms -= 6; // 连 async 前缀一起带上
-  const body = src.slice(ms, src.indexOf('\n  }', ms));
+  const m = new RegExp(`^  (?:async )?${name}\\(`, 'm').exec(src);
+  if (!m) throw new Error('未找到 ' + name);
+  const body = src.slice(m.index, src.indexOf('\n  },', m.index));
   if (body.length < 40) throw new Error(name + ' 提取内容异常');
   return await AsyncFunction('fs', 'path', 'runCmd', 'tarCmd', 'return {' + body + '}}')(fs, path, runCmd, tarCmd);
 }
 
 // runCmd 也从源码提取（模块级函数）——保证测试跑的就是实现本身
-const rc = src.indexOf('function runCmd(cmd, args, timeoutMs = 300000) {');
+const rc = utilSrc.indexOf('function runCmd(cmd, args, timeoutMs = 300000) {');
 if (rc < 0) throw new Error('未找到 runCmd');
-const runCmd = new Function('spawn', 'return ' + src.slice(rc, src.indexOf('\n}', rc) + 2) + ';')(spawn);
+const runCmd = new Function('spawn', 'return ' + utilSrc.slice(rc, utilSrc.indexOf('\n}', rc) + 2) + ';')(spawn);
 
 // tarCmd 同样从源码提取（Windows 锁定 System32 bsdtar 的实现）
 // tarCmdCache 是模块级缓存变量，测试作用域里以参数注入（每次调用重新解析，无缓存语义影响）
-const tc = src.indexOf('function tarCmd() {');
+const tc = utilSrc.indexOf('function tarCmd() {');
 if (tc < 0) throw new Error('未找到 tarCmd');
-const tarCmd = new Function('path', 'process', 'fs', 'tarCmdCache', 'return ' + src.slice(tc, src.indexOf('\n}', tc) + 2) + ';')(path, process, fs, null);
+const tarCmd = new Function('path', 'process', 'fs', 'tarCmdCache', 'return ' + utilSrc.slice(tc, utilSrc.indexOf('\n}', tc) + 2) + ';')(path, process, fs, null);
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'bn-fsops-'));
 
