@@ -2319,6 +2319,23 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     }
   });
 
+  // 定时备份设置（计划任务 + 保留份数）
+  router.put('/servers/:id/instances/:name/backup-schedule', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(
+        await agent(server)(
+          'instance.backupSchedule.set',
+          { name: req.params.name, backupSchedule: req.body || {} },
+          15000,
+        ),
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // server.properties 可视化配置
   router.get('/servers/:id/instances/:name/properties', async (req, res, next) => {
     const server = requireServer(req, res);

@@ -257,6 +257,8 @@ class Agent {
         return m.iconSet(p.name, p.b64);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
+      case 'instance.backupSchedule.set':
+        return m.setBackupSchedule(p.name, p.backupSchedule || {});
       case 'instance.properties.get':
         return m.getProperties(p.name);
       case 'instance.properties.set':

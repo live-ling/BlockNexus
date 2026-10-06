@@ -106,7 +106,7 @@ const path = require('path');
 const state = __require("src/state.js");
 
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
-const AGENT_VERSION = '0.3.4';
+const AGENT_VERSION = '0.3.5';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -211,9 +211,10 @@ class InstanceManager {
     this.bootstrapJobs = new Map(); // name|version -> 进行中的原版核心预下载（并发去重）
     fs.mkdirSync(this.dir, { recursive: true });
     this.scan();
-    // 清理过期传输会话；每 30 秒检查看门狗的定时重启任务
+    // 清理过期传输会话；每 30 秒检查看门狗定时重启与定时备份任务
     setInterval(() => this.gcTransferSessions(), 10 * 60e3).unref();
     setInterval(() => this.checkWatchdogSchedules(), 30e3).unref();
+    setInterval(() => this.checkBackupSchedules(), 30e3).unref();
   }
 
   instDir(name) {
@@ -331,6 +332,7 @@ class InstanceManager {
       address: rec.meta.address || '',
       maxPlayers: this.readMaxPlayers(rec),
       watchdog: rec.meta.watchdog || { autoRestart: false, restartDelaySec: 5, schedules: [] },
+      backupSchedule: rec.meta.backupSchedule || this.defaultBackupSchedule(),
       status: this.statusOf(rec),
       pid: rec.proc ? rec.proc.pid : null,
       startedAt: rec.startedAt,
@@ -406,6 +408,7 @@ Object.assign(
   __require("src/instance/catalog-cache.js"),
   __require("src/instance/players.js"),
   __require("src/instance/watchdog.js"),
+  __require("src/instance/backup-schedule.js"),
   __require("src/instance/fs.js"),
   __require("src/instance/backups.js"),
   __require("src/instance/serverinfo.js"),
@@ -2360,6 +2363,95 @@ module.exports = {
 };
 };
 
+// ---------------------------- src/instance/backup-schedule.js ----------------------------
+__modules["src/instance/backup-schedule.js"] = function (module, exports, __require) {
+'use strict';
+// BlockNexus Agent — 存档定时备份（每日/固定间隔计划 + 保留份数清理）
+// 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
+
+const crypto = require('crypto');
+const { sendEvent } = __require("src/eventbus.js");
+
+
+
+module.exports = {
+  // ---------- 定时备份 ----------
+  defaultBackupSchedule() {
+    // keepCount 默认 0 = 不清理：老实例没有该字段时保持现状（备份只增不减）
+    return { enabled: false, keepCount: 0, schedules: [] };
+  },
+
+  setBackupSchedule(name, cfg = {}) {
+    const rec = this.get(name);
+    const cur = rec.meta.backupSchedule || this.defaultBackupSchedule();
+    const next = { ...cur };
+    if (cfg.enabled !== undefined) next.enabled = !!cfg.enabled;
+    if (cfg.keepCount !== undefined) {
+      next.keepCount = Math.min(Math.max(Math.round(Number(cfg.keepCount) || 0), 0), 1000);
+    }
+    if (Array.isArray(cfg.schedules)) {
+      next.schedules = cfg.schedules.slice(0, 10).map((s) => {
+        const prev = (cur.schedules || []).find((x) => x.id === s.id);
+        return {
+          id: String(s.id || crypto.randomBytes(4).toString('hex')),
+          enabled: s.enabled !== false,
+          type: s.type === 'interval' ? 'interval' : 'daily',
+          time: /^\d{1,2}:\d{2}$/.test(s.time || '') ? s.time : '04:00',
+          days: Array.isArray(s.days) ? s.days.filter((d) => d >= 0 && d <= 6) : [],
+          intervalMinutes: Math.min(Math.max(Number(s.intervalMinutes) || 360, 5), 10080),
+          // 新任务从现在开始计时，避免保存后立刻触发；老任务保留上次触发时间
+          lastFiredAt: prev ? prev.lastFiredAt : Date.now(),
+        };
+      });
+    }
+    rec.meta.backupSchedule = next;
+    this.saveMeta(rec);
+    this.emitUpdated(rec);
+    return next;
+  },
+
+  // 每 30 秒检查一次各实例的定时备份任务（与定时重启同一节拍；实例停止时也照常备份）
+  checkBackupSchedules() {
+    const now = new Date();
+    for (const rec of this.map.values()) {
+      const bs = rec.meta.backupSchedule;
+      if (!bs || !bs.enabled || !Array.isArray(bs.schedules) || !bs.schedules.length) continue;
+      for (const s of bs.schedules) {
+        if (!s.enabled || !this.scheduleDue(s, now)) continue;
+        s.lastFiredAt = Date.now();
+        this.saveMeta(rec); // 先落盘再去备份，崩溃/重启也不会重复触发
+        const label = s.type === 'daily' ? `每日 ${s.time}` : `每 ${s.intervalMinutes} 分钟`;
+        this.emitConsole(rec, `[BlockNexus] 定时备份触发（${label}）`);
+        this.backupCreate(rec.meta.name)
+          .then((r) =>
+            sendEvent('backup.updated', {
+              instance: rec.meta.name,
+              done: true,
+              ok: true,
+              file: r.file,
+              trigger: 'schedule',
+            }),
+          )
+          .catch((e) => {
+            if (/备份正在进行中/.test(e.message)) {
+              this.emitConsole(rec, '[BlockNexus] 上一次备份仍在进行，本次定时触发已跳过');
+              return;
+            }
+            this.emitConsole(rec, '[BlockNexus] 定时备份失败: ' + e.message);
+            sendEvent('backup.updated', {
+              instance: rec.meta.name,
+              done: true,
+              ok: false,
+              error: e.message,
+              trigger: 'schedule',
+            });
+          });
+      }
+    }
+  },
+};
+};
+
 // ---------------------------- src/instance/fs.js ----------------------------
 __modules["src/instance/fs.js"] = function (module, exports, __require) {
 'use strict';
@@ -2767,6 +2859,7 @@ __modules["src/instance/backups.js"] = function (module, exports, __require) {
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { fmtSize } = __require("src/util.js");
 
 
 
@@ -2800,19 +2893,67 @@ module.exports = {
   },
 
   async backupCreate(name) {
-    this.get(name);
-    const dir = this.backupsDir(name);
-    fs.mkdirSync(dir, { recursive: true });
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const file = `${name}-${stamp}.tar.gz`;
-    const instDir = this.instanceRoot(name);
-    const backupAbs = path.join(dir, file);
-    // 相对路径（相对实例目录），避免 GNU tar 把 Windows 盘符 "D:" 误判为远程主机
-    const rel = path.relative(instDir, backupAbs).split(path.sep).join('/');
-    await this.tarRun(['-czf', rel, '.'], instDir);
-    return { file, size: fs.statSync(backupAbs).size };
+    const rec = this.get(name);
+    if (rec.backupBusy) throw new Error('备份正在进行中，请稍后再试');
+    rec.backupBusy = true;
+    try {
+      const dir = this.backupsDir(name);
+      fs.mkdirSync(dir, { recursive: true });
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+      const file = `${name}-${stamp}.tar.gz`;
+      const instDir = this.instanceRoot(name);
+      const backupAbs = path.join(dir, file);
+      // 相对路径（相对实例目录），避免 GNU tar 把 Windows 盘符 "D:" 误判为远程主机
+      const rel = path.relative(instDir, backupAbs).split(path.sep).join('/');
+      // 运行中先让世界落盘（save-off + save-all flush），避免 tar 捕获到正在写入的存档；
+      // 命令失败（非原版核心等）只记日志，不阻断备份
+      const send = (cmd) => {
+        try {
+          this.command(name, cmd);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const running = !!rec.proc;
+      if (running) {
+        this.emitConsole(rec, '[BlockNexus] 开始备份：已暂停世界自动保存（save-off）…');
+        send('save-off');
+        send('save-all flush');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      try {
+        await this.tarRun(['-czf', rel, '.'], instDir);
+      } finally {
+        if (running) send('save-on');
+      }
+      const size = fs.statSync(backupAbs).size;
+      this.emitConsole(rec, `[BlockNexus] 备份完成: ${file} (${fmtSize(size)})`);
+      const removed = this.pruneBackups(name, rec.meta.backupSchedule && rec.meta.backupSchedule.keepCount);
+      if (removed.length) {
+        this.emitConsole(rec, `[BlockNexus] 已按保留份数清理 ${removed.length} 个最旧备份`);
+      }
+      return { file, size };
+    } finally {
+      rec.backupBusy = false;
+    }
+  },
+
+  // 按保留份数清理最旧备份（keepCount<1 表示不限制；手动与定时备份一起计数）
+  pruneBackups(name, keepCount) {
+    const n = Math.round(Number(keepCount) || 0);
+    if (n < 1) return [];
+    const list = this.backupList(name);
+    if (list.length <= n) return [];
+    const removed = list.slice(n).map((b) => b.file);
+    for (const f of removed) {
+      try {
+        fs.rmSync(path.join(this.backupsDir(name), f), { force: true });
+      } catch {}
+    }
+    return removed;
   },
 
   backupList(name) {
@@ -4070,6 +4211,8 @@ class Agent {
         return m.iconSet(p.name, p.b64);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
+      case 'instance.backupSchedule.set':
+        return m.setBackupSchedule(p.name, p.backupSchedule || {});
       case 'instance.properties.get':
         return m.getProperties(p.name);
       case 'instance.properties.set':
