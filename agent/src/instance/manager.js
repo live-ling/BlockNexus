@@ -21,9 +21,10 @@ class InstanceManager {
     this.bootstrapJobs = new Map(); // name|version -> 进行中的原版核心预下载（并发去重）
     fs.mkdirSync(this.dir, { recursive: true });
     this.scan();
-    // 清理过期传输会话；每 30 秒检查看门狗的定时重启任务
+    // 清理过期传输会话；每 30 秒检查看门狗定时重启与定时备份任务
     setInterval(() => this.gcTransferSessions(), 10 * 60e3).unref();
     setInterval(() => this.checkWatchdogSchedules(), 30e3).unref();
+    setInterval(() => this.checkBackupSchedules(), 30e3).unref();
   }
 
   instDir(name) {
@@ -141,6 +142,7 @@ class InstanceManager {
       address: rec.meta.address || '',
       maxPlayers: this.readMaxPlayers(rec),
       watchdog: rec.meta.watchdog || { autoRestart: false, restartDelaySec: 5, schedules: [] },
+      backupSchedule: rec.meta.backupSchedule || this.defaultBackupSchedule(),
       status: this.statusOf(rec),
       pid: rec.proc ? rec.proc.pid : null,
       startedAt: rec.startedAt,
@@ -216,6 +218,7 @@ Object.assign(
   require('./catalog-cache.js'),
   require('./players.js'),
   require('./watchdog.js'),
+  require('./backup-schedule.js'),
   require('./fs.js'),
   require('./backups.js'),
   require('./serverinfo.js'),

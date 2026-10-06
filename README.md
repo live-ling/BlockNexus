@@ -297,6 +297,7 @@ beUI 组件用法：`cd web && npx shadcn@latest add @beui/<name>`（已装：bo
 - **实例卡片**：标题行 + 备注 + 信息网格（`版本/内存`、`玩家/运行时间`，以及各占一行的 `IP：host:port` 与 `域名`；标签列按内容自适应、不换行），**右下角是启停按钮**（红框=停止、绿框=启动）；点击卡片其余区域进入实例详情。
 - **实例编辑**：详情页「编辑」按钮打开模态框设置**备注**与**连接地址/域名**（仅面板展示，不改服务端配置；卡片内不再提供行内编辑，域名值点击为复制）。
 - **备份**：实例卡片「备份」按钮 → tar.gz 完整快照（用系统 `tar` 打包），存于服务器 `<实例目录>/.backups/<name>/`；支持创建/列表/下载/恢复/删除，恢复会清空实例目录后解包（运行中先强制停止）。删除实例时可勾选「删除前自动创建备份」，且备份在实例删除后仍然保留——重建同名实例即可从旧备份恢复。
+- **定时备份**：详情页「定时备份」按钮（启用时带绿点）设置计划任务（每日固定时间+星期过滤 / 固定间隔，与自动重启同一套规则）与**保留份数**（开启时默认 10，0 = 不限制）。到期由 Agent 每 30 秒轮询触发，**面板关闭也照常执行**；实例未运行也会备份（停机存档最干净），运行中会先 `save-off` + `save-all flush` 落盘 3 秒再打包、完成后 `save-on`——手动备份同样受益，避免 tar 捕获正在写入的存档。每次备份成功后按保留份数自动清理最旧快照（手动与自动一起计数，0 时不清理）；同一实例同一时刻只跑一个备份任务，完成/失败经 SSE 推送 toast 并写入实例控制台。
 - **核心来源**（新建实例三选一）：
   1. `官方版本` — Mojang 官方清单。获取链路带多层兜底：官方源 → BMCLAPI 镜像（清单与 server.jar 下载地址都会按路径改写走镜像）→ 最近 7 天的磁盘缓存（页面提示「缓存列表」）→ **MSL 镜像**；Agent 全部失败时面板会用自身网络再兜底一次，保证「版本列表加载失败」不再阻塞建实例；
   2. `自定义 URL` — 任意可直连的 `.jar` 下载地址（Paper/Purpur/Fabric/Forge 安装器直链等）；
@@ -379,6 +380,7 @@ POST /api/servers/:id/install        POST /api/servers/:id/token/rotate
 POST /api/servers/:id/agent-update   (Agent 版本落后时的手动更新兜底)
 GET|POST /api/servers/:id/instances  DELETE /api/servers/:id/instances/:name
 POST /api/servers/:id/instances/:name/start|stop|restart|command
+PUT /api/servers/:id/instances/:name/watchdog|backup-schedule  (自动重启 / 定时备份设置)
 GET  /api/servers/:id/instances/:name/console?tail=200
 GET  /api/servers/:id/instances/:name/domain-check
 GET  /api/servers/:id/instances/:name/banlist

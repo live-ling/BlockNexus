@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { fmtSize } = require('../util.js');
 
 
 
@@ -38,19 +39,67 @@ module.exports = {
   },
 
   async backupCreate(name) {
-    this.get(name);
-    const dir = this.backupsDir(name);
-    fs.mkdirSync(dir, { recursive: true });
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const file = `${name}-${stamp}.tar.gz`;
-    const instDir = this.instanceRoot(name);
-    const backupAbs = path.join(dir, file);
-    // 相对路径（相对实例目录），避免 GNU tar 把 Windows 盘符 "D:" 误判为远程主机
-    const rel = path.relative(instDir, backupAbs).split(path.sep).join('/');
-    await this.tarRun(['-czf', rel, '.'], instDir);
-    return { file, size: fs.statSync(backupAbs).size };
+    const rec = this.get(name);
+    if (rec.backupBusy) throw new Error('备份正在进行中，请稍后再试');
+    rec.backupBusy = true;
+    try {
+      const dir = this.backupsDir(name);
+      fs.mkdirSync(dir, { recursive: true });
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+      const file = `${name}-${stamp}.tar.gz`;
+      const instDir = this.instanceRoot(name);
+      const backupAbs = path.join(dir, file);
+      // 相对路径（相对实例目录），避免 GNU tar 把 Windows 盘符 "D:" 误判为远程主机
+      const rel = path.relative(instDir, backupAbs).split(path.sep).join('/');
+      // 运行中先让世界落盘（save-off + save-all flush），避免 tar 捕获到正在写入的存档；
+      // 命令失败（非原版核心等）只记日志，不阻断备份
+      const send = (cmd) => {
+        try {
+          this.command(name, cmd);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const running = !!rec.proc;
+      if (running) {
+        this.emitConsole(rec, '[BlockNexus] 开始备份：已暂停世界自动保存（save-off）…');
+        send('save-off');
+        send('save-all flush');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      try {
+        await this.tarRun(['-czf', rel, '.'], instDir);
+      } finally {
+        if (running) send('save-on');
+      }
+      const size = fs.statSync(backupAbs).size;
+      this.emitConsole(rec, `[BlockNexus] 备份完成: ${file} (${fmtSize(size)})`);
+      const removed = this.pruneBackups(name, rec.meta.backupSchedule && rec.meta.backupSchedule.keepCount);
+      if (removed.length) {
+        this.emitConsole(rec, `[BlockNexus] 已按保留份数清理 ${removed.length} 个最旧备份`);
+      }
+      return { file, size };
+    } finally {
+      rec.backupBusy = false;
+    }
+  },
+
+  // 按保留份数清理最旧备份（keepCount<1 表示不限制；手动与定时备份一起计数）
+  pruneBackups(name, keepCount) {
+    const n = Math.round(Number(keepCount) || 0);
+    if (n < 1) return [];
+    const list = this.backupList(name);
+    if (list.length <= n) return [];
+    const removed = list.slice(n).map((b) => b.file);
+    for (const f of removed) {
+      try {
+        fs.rmSync(path.join(this.backupsDir(name), f), { force: true });
+      } catch {}
+    }
+    return removed;
   },
 
   backupList(name) {

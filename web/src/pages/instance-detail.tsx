@@ -2,7 +2,7 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CalendarClock, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
@@ -11,6 +11,7 @@ import { FileManagerDialog } from '@/components/file-manager';
 import { BanListDialog } from '@/components/ban-list-dialog';
 import { ModManagerDialog } from '@/components/mod-manager';
 import { AutoRestartDialog } from '@/components/auto-restart-dialog';
+import { BackupScheduleDialog } from '@/components/backup-schedule-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
 import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
@@ -67,6 +68,7 @@ export function InstanceDetailPage({
   const [filesOpen, setFilesOpen] = useState(false);
   const [modsOpen, setModsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
+  const [backupScheduleOpen, setBackupScheduleOpen] = useState(false);
   const [watchdogOpen, setWatchdogOpen] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
   const [plugCfgOpen, setPlugCfgOpen] = useState(false);
@@ -172,6 +174,18 @@ export function InstanceDetailPage({
       if (e.type === 'agent-event' && e.event === 'instance.updated' && e.data?.instance === instanceName) {
         loadInstance();
         setTimeout(loadPlayers, 1500);
+      }
+      // 定时备份的完成/失败通知（手动备份的完成提示在备份对话框里处理）
+      if (
+        e.type === 'agent-event' &&
+        e.event === 'backup.updated' &&
+        e.data?.instance === instanceName &&
+        e.data?.trigger === 'schedule' &&
+        e.data?.done
+      ) {
+        if (e.data.ok) success('定时备份完成', String(e.data.file || ''));
+        else error('定时备份失败', String(e.data.error || '未知错误'));
+        loadInstance();
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -285,6 +299,9 @@ export function InstanceDetailPage({
   const isFailed = instance.status === 'failed';
   // 自动重启是否已启用（按钮上显示小绿点）
   const watchdogOn = !!instance.watchdog?.autoRestart || (instance.watchdog?.schedules ?? []).some((s) => s.enabled);
+  // 定时备份是否已启用（同样用小绿点指示）
+  const backupOn =
+    !!instance.backupSchedule?.enabled && (instance.backupSchedule?.schedules ?? []).some((s) => s.enabled);
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-4 pb-24 pt-7">
@@ -424,6 +441,10 @@ export function InstanceDetailPage({
               </Button>
               <Button size="lg" variant="outline" onClick={() => setBackupOpen(true)}>
                 <Archive className="h-4 w-4" /> 备份
+              </Button>
+              <Button size="lg" variant="outline" onClick={() => setBackupScheduleOpen(true)}>
+                <CalendarClock className="h-4 w-4" /> 定时备份
+                {backupOn && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setModsOpen(true)}>
                 <Puzzle className="h-4 w-4" /> Mod 管理
@@ -655,6 +676,13 @@ export function InstanceDetailPage({
         instance={instance}
         open={watchdogOpen}
         onOpenChange={setWatchdogOpen}
+        onSaved={loadInstance}
+      />
+      <BackupScheduleDialog
+        server={server}
+        instance={instance}
+        open={backupScheduleOpen}
+        onOpenChange={setBackupScheduleOpen}
         onSaved={loadInstance}
       />
       <ReinstallDialog

@@ -136,6 +136,17 @@ export interface WatchdogConfig {
   schedules: WatchdogSchedule[];
 }
 
+/** 定时备份任务（结构与 WatchdogSchedule 一致，复用同一套每日/间隔规则） */
+export type BackupScheduleItem = WatchdogSchedule;
+
+export interface BackupScheduleConfig {
+  /** 定时备份总开关 */
+  enabled: boolean;
+  /** 保留最近 N 份备份，0 = 不限制（手动与自动一起计数） */
+  keepCount: number;
+  schedules: BackupScheduleItem[];
+}
+
 export interface Instance {
   name: string;
   version: string;
@@ -148,6 +159,8 @@ export interface Instance {
   /** server.properties 的 max-players */
   maxPlayers: number;
   watchdog: WatchdogConfig;
+  /** 定时备份设置（老版本 Agent 不返回该字段） */
+  backupSchedule?: BackupScheduleConfig;
   status: InstanceStatus;
   pid: number | null;
   startedAt: number | null;
@@ -356,6 +369,18 @@ export function deleteMod(serverId: string, instance: string, file: string): Pro
   return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/mods/delete`, {
     method: 'POST',
     body: { file },
+  });
+}
+
+/** 保存实例的定时备份设置（计划任务 + 保留份数），返回保存后的完整配置 */
+export function saveBackupSchedule(
+  serverId: string,
+  instance: string,
+  cfg: BackupScheduleConfig,
+): Promise<{ ok: boolean; backupSchedule: BackupScheduleConfig }> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/backup-schedule`, {
+    method: 'PUT',
+    body: cfg,
   });
 }
 
