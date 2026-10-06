@@ -10,6 +10,7 @@ const nodemailer = require('nodemailer');
 const { installAgent, updateAgentScript, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
 const localAgent = require('./localagent');
 const mailTpl = require('./mail');
+const { errorResponse } = require('./error-codes');
 
 const COOKIE = 'blocknexussid';
 const SESSION_TTL = 7 * 24 * 3600 * 1000;
@@ -103,6 +104,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // 请求本身是否加密（req.secure）在 cookieAttrs 里另外判定——面板可能同时通过
   // http://127.0.0.1 与 https://反代域名 访问，按请求判定才能两边都正确。
   const FORCE_SECURE_COOKIE = opts.secureCookies === true;
+
+  // 错误响应统一出口：文案来自 panel/error-codes.js，后端只给 code + 参数。
+  // 过渡期同时回 `error`（已渲染文案）与 `code`，因此旧的前端缓存也照常显示。
+  // `_req` 目前未用，是为将来按 Accept-Language 出多语言文案预留的落点（不做猜测，保持中文）。
+  function fail(res, code, params, statusOverride) {
+    const { status, body } = errorResponse(code, params, { status: statusOverride });
+    return res.status(status).json(body);
+  }
 
   // ---------- 任务日志：留存最近一批，供页面刷新后重放 ----------
   // 纯广播的日志一刷新就丢，而 SSH 装 Node 动辄几分钟，用户很可能中途刷新，
@@ -360,7 +369,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!CSRF_SAFE_TYPES.some((t) => req.is(t))) {
       // 例外：SFTP 直传走二进制流，同样无法被跨域表单伪造
       if (req.path.endsWith('/files/upload/sftp')) return next();
-      return res.status(415).json({ error: '需要 application/json' });
+      return fail(res, 'request.json-required');
     }
     next();
   });
@@ -391,7 +400,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const rec = loginFails.get(ip);
     if (rec && rec.until > Date.now()) {
       const wait = Math.ceil((rec.until - Date.now()) / 1000);
-      return res.status(429).json({ error: `尝试次数过多，请 ${wait} 秒后再试` });
+      return fail(res, 'auth.too-many-attempts', { seconds: wait });
     }
     const { username, password, remember } = req.body || {};
     if (!config.verifyCredentials(username, password)) {
@@ -410,12 +419,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         until: count >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0,
         at: now, // 供 GC 判断「最后一次尝试」的时间
       });
+      if (count >= LOGIN_MAX_FAILS) {
+        return fail(res, 'auth.login-locked', { minutes: Math.round(LOGIN_LOCK_MS / 60000) });
+      }
       const left = LOGIN_MAX_FAILS - count;
-      return res.status(403).json({
-        error: count >= LOGIN_MAX_FAILS
-          ? `尝试次数过多，已锁定 ${Math.round(LOGIN_LOCK_MS / 60000)} 分钟`
-          : `用户名或密码错误${left <= 2 ? `（还可尝试 ${left} 次）` : ''}`,
-      });
+      // 只在快用完时提示剩余次数（沿用既有行为，避免每次失败都暴露计数）
+      return left <= 2
+        ? fail(res, 'auth.bad-credentials-with-left', { left })
+        : fail(res, 'auth.bad-credentials');
     }
     loginFails.delete(ip);
     const sid = crypto.randomBytes(24).toString('hex');
@@ -648,7 +659,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       return next();
     }
     if (sid) sessions.delete(sid);
-    res.status(401).json({ error: '未登录' });
+    fail(res, 'auth.not-logged-in');
   });
 
   // ---------- 版本与更新检查（登录后） ----------
