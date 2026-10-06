@@ -524,7 +524,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     return want.length === got.length && crypto.timingSafeEqual(want, got);
   }
 
-  router.post('/forgot-password', async (req, res) => {
+  // 刻意不是 async：发信已改为不等待（见下方说明），避免 await 造成的时序泄露
+  router.post('/forgot-password', (req, res) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     const rec = forgotSent.get(ip) || { count: 0, windowStart: now, lastAt: 0 };
@@ -552,30 +553,40 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
     const email = String((req.body || {}).email || '').trim();
     const st = config.data.settings;
+    const smtpReady = smtpConfigured();
     const match =
       !!email &&
       !!config.data.panel.passwordHash &&
       email.toLowerCase() === String(st.adminEmail || '').toLowerCase();
-    // 邮箱不匹配/未配置也返回成功，避免被用来探测管理员邮箱
-    if (!match || !smtpConfigured()) return res.json({ ok: true, sent: false });
-    // 6 位数字验证码：邮件里直接可读，也便于在没有域名/公网地址时手动输入
-    const code = String(crypto.randomInt(100000, 1000000));
-    config.data.panel.resetCode = {
-      hash: crypto.createHash('sha256').update(code).digest('hex'), // 只存摘要，不存原始验证码
-      expires: now + 15 * 60e3,
-    };
-    config.save();
-    codeTries = { hash: '', count: 0 }; // 新码重新计试错
-    try {
-      await sendMail(
-        st.adminEmail,
-        '[BlockNexus] 重置面板密码',
-        mailTpl.resetCodeMail({ code }),
-      );
-    } catch (e) {
-      return fail(res, 'notification.send-failed', { detail: e.message });
+
+    // 响应**恒为同一形状**，且**不等待发信**完成。
+    //
+    // 原先的三重差异构成一个完整的「管理员邮箱枚举」通道（未认证即可用）：
+    //   ① sent 字段：false = 邮箱不匹配或 SMTP 未配置，true = 匹配且发信成功
+    //   ② cooldownSec 只在匹配分支出现
+    //   ③ 响应耗时：不匹配立即返回，匹配要等数秒 SMTP 握手
+    // 现在：匹配与否不体现在响应里。
+    // `smtpReady` 可以回——它是**服务端全局**状态，对所有邮箱都一样，
+    // 不含「这个邮箱是否存在」的信息，前端靠它避免「没配 SMTP 却提示已发送」的误导。
+    const cooldownSec = FORGOT_COOLDOWN_MS / 1000;
+    if (match && smtpReady) {
+      // 6 位数字验证码：邮件里直接可读，也便于在没有域名/公网地址时手动输入
+      const code = String(crypto.randomInt(100000, 1000000));
+      config.data.panel.resetCode = {
+        hash: crypto.createHash('sha256').update(code).digest('hex'), // 只存摘要，不存原始验证码
+        expires: now + 15 * 60e3,
+      };
+      config.save();
+      codeTries = { hash: '', count: 0 }; // 新码重新计试错
+      // 刻意**不 await**：await 会让「匹配」的响应比「不匹配」慢数秒，
+      // 等于把答案写在响应耗时里。验证码已在上方同步落盘，所以先回响应是安全的。
+      // 失败只进服务端日志——原先把 nodemailer 原始报错（含 SMTP host/端口/认证细节）
+      // 回给未认证调用方，既是信息泄露，也又一次区分了两条分支。
+      sendMail(st.adminEmail, '[BlockNexus] 重置面板密码', mailTpl.resetCodeMail({ code })).catch((e) => {
+        console.error('[forgot-password] 验证码邮件发送失败:', (e && e.message) || e);
+      });
     }
-    res.json({ ok: true, sent: true, cooldownSec: FORGOT_COOLDOWN_MS / 1000 });
+    res.json({ ok: true, sent: true, cooldownSec, smtpReady });
   });
 
   /** 第 ② 步：校验验证码。通过后作废验证码并发放一次性改密票据 */
@@ -596,7 +607,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (codeTries.count > VERIFY_MAX_GLOBAL) {
         delete config.data.panel.resetCode;
         config.save();
-        return fail(res, 'auth.reset.verify-too-many');
+        // 不回 verify-too-many：那个 code 只可能在「有码在途」时出现，
+        // 等于告诉攻击者「刚才那个邮箱命中了」。作废动作照旧，只是响应不再区分。
+        return fail(res, 'auth.reset.code-invalid');
       }
     }
     if (!usable || !/^\d{6}$/.test(code) || !hashEquals(rt && rt.hash, code)) {
@@ -607,12 +620,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (!verifyFails.has(ip)) capTracked(verifyFails, LIMITER_MAX_TRACKED, now, verifyStale);
       verifyFails.set(ip, { count, until, at: now });
       if (until) {
+        // 按本 IP 自己累计的失败次数锁定——只反映攻击者自身的行为，
+        // 不泄露「有没有验证码在途」，因此可以保留这条更具体的提示。
         return fail(res, 'auth.reset.relock-15min');
       }
-      if (usable) {
-        return fail(res, 'auth.reset.code-wrong', { left: Math.max(0, VERIFY_MAX_FAILS - count) });
-      }
-      return fail(res, 'auth.reset.code-expired');
+      // 有码但错 / 无码 / 已过期：**统一成同一条响应**。
+      // 分开回 code-wrong 与 code-expired 会构成「此刻是否有码在途」的预言机，
+      // 配合 /forgot-password 即可枚举管理员邮箱（详见 error-codes.js 的说明）。
+      return fail(res, 'auth.reset.code-invalid');
     }
     // 通过：验证码一次性作废（防止同码二次使用），换一张短时改密票据
     verifyFails.delete(ip);
@@ -641,7 +656,16 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         ok = true;
       }
     }
-    // 兼容旧邮件里的链接 token：也按摘要比对，命中即可用
+    // 兼容旧邮件里的链接 token：也按摘要比对，命中即可用。
+    //
+    // ⚠ 关于这条分支的准确状态（审计报告曾判它为「死代码、永远不可达」，**该判断有误**）：
+    //   · 生产代码里确实**没有任何写入点**——没有哪条路径会创建 panel.resetToken；
+    //   · 但 agent/e2e-reset-code.js 的 T14 会写入它并断言该路径可用，
+    //     所以它是**被测试覆盖的兼容路径**，不是死代码，删掉会连带删掉 T14 与
+    //     docs/blocknexus-current-state.md 里的说明。
+    //   · 实际不可达性来自「没有写入点」，而不是代码本身不可执行：
+    //     要激活它必须先能手改 config.json —— 那时攻击者已经拿到主机权限。
+    // 结论：保留，并把状态写清楚，避免后人误以为是第二条改密通道（也避免误删）。
     if (!ok && legacy && config.data.panel.resetToken) {
       if (now <= config.data.panel.resetToken.expires && hashEquals(config.data.panel.resetToken.hash, legacy)) {
         delete config.data.panel.resetToken;
@@ -669,6 +693,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
     for (const [t, exp] of resetTickets) {
       if (exp <= now) resetTickets.delete(t);
+    }
+    // 会话表原先只有「再次出示且已过期」「登出」「改密」三个删除时机，
+    // 没有后台 GC：登录后从不点登出、也再不回访的会话会**永久驻留**（每条约百字节）。
+    // 量级很小，但它是本文件里唯一一张没有任何回收路径兜底的按会话增长的表，补上更整齐。
+    // 注意：sessions 的值是 { exp, remember }（不是数字），且 exp 会随每次请求滑动续期，
+    // 所以在跑的会话不会被这里误删。
+    for (const [sid, sess] of sessions) {
+      if (!sess || sess.exp <= now) sessions.delete(sid);
     }
     // loginFails 原先漏在这张清单之外：锁定到期后记录会永久驻留
     pruneLoginFails(now);

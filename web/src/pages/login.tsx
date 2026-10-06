@@ -182,7 +182,6 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
 function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const [stage, setStage] = useState<'email' | 'code' | 'password'>('email');
   const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false); // 后端是否真的发信（false = 邮箱不匹配/SMTP 未配置）
   const [code, setCode] = useState('');
   const [otpStatus, setOtpStatus] = useState<OTPStatus>('idle');
   const [ticket, setTicket] = useState('');
@@ -210,12 +209,12 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
     setErr('');
     setBusy(true);
     try {
-      const r = await api<{ sent?: boolean; cooldownSec?: number }>('/forgot-password', {
+      // 响应不区分「邮箱是否匹配」（防枚举，见后端 /forgot-password 的说明），
+      // 所以前端一律用中性文案，不据此判断邮箱是否存在。
+      const r = await api<{ cooldownSec?: number }>('/forgot-password', {
         method: 'POST',
         body: { email: email.trim() },
       });
-      // 后端对不匹配的邮箱也返回成功（防探测），这里据 sent 决定文案，不谎报"已发往该邮箱"
-      setSent(!!r.sent);
       setCooldown(r.cooldownSec ?? 60);
       setCode('');
       setOtpStatus('idle');
@@ -268,22 +267,16 @@ function ForgotFlow({ onBack, onDone }: { onBack: () => void; onDone: () => void
         <AuthHeader
           title={$('login.code.title')}
           description={
-            // 两句各占一行（块级），避免 JSX 跨行文本折叠出多余空格
-            sent ? (
-              <>
-                <span className="block">
-                  {$('login.code.sent.pre')}
-                  <span className="font-medium text-foreground">{email.trim()}</span>
-                  {$('login.code.sent.post')}
-                </span>
-                <span className="block">{$('login.code.checkInbox')}</span>
-              </>
-            ) : (
-              <>
-                <span className="block">{$('login.code.sentGeneric')}</span>
-                <span className="block">{$('login.code.checkInbox')}</span>
-              </>
-            )
+            // 两句各占一行（块级），避免 JSX 跨行文本折叠出多余空格。
+            //
+            // 这里**刻意不区分「邮箱是否匹配」**：后端现在对该分支的响应完全一致
+            // （sent 恒为 true、且不等待发信），所以前端也只能给中性文案。
+            // 原先「验证码已发往 <email>」那支已删除——邮箱不匹配时它就是谎报，
+            // 而且它依赖后端把匹配结果告诉我，那正是被消除的枚举通道。
+            <>
+              <span className="block">{$('login.code.sentGeneric')}</span>
+              <span className="block">{$('login.code.checkInbox')}</span>
+            </>
           }
         />
         <CardContent>
