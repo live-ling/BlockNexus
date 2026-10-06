@@ -9,6 +9,24 @@ const { spawnSync } = require('child_process');
 const { execFile } = require('child_process');
 const { sendEvent } = require('../eventbus.js');
 
+/**
+ * Agent 自身的内存占用快照。
+ * rss 是进程实际驻留内存，是「Agent 占了多少」最直观的指标；
+ * heapUsed 用于判断是否 V8 堆在涨（与外部缓冲区分开）。
+ * 面板用这两个值展示占用并在超阈值时提示——
+ * 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
+ * 没有读数就无法验收，所以随 sysStats 一起上报。
+ */
+function selfUsage() {
+  const mu = process.memoryUsage();
+  const MB = 1048576;
+  return {
+    rssMB: Math.round(mu.rss / MB),
+    heapUsedMB: Math.round(mu.heapUsed / MB),
+    uptimeSec: Math.round(process.uptime()),
+  };
+}
+
 class InstanceManager {
   constructor(instancesDir) {
     this.dir = instancesDir;
@@ -88,6 +106,10 @@ class InstanceManager {
       memTotalMB: Math.round(total / 1048576),
       memUsedMB: Math.max(0, Math.round((total - avail) / 1048576)),
       disk: null,
+      // Agent 自身占用：面板据此展示「Agent 占用」并在超阈值时提示。
+      // 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
+      // 没有这个读数就无法验收，故随资源快照一起上报。
+      self: selfUsage(),
     };
     const gb = (n) => Math.round((n / 1073741824) * 10) / 10;
     try {

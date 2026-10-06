@@ -7,6 +7,15 @@ const fs = require('fs');
 const path = require('path');
 const { runCmd, tarCmd } = require('../util.js');
 
+// 传输会话数量上限。
+// 之所以除了「时间过期」还要有「数量上限」：gcTransferSessions 每 10 分钟才跑一次，
+// 而上传会话能活 2 小时——一次突发创建就足以在 GC 生效前把内存与文件描述符顶起来。
+// 用户要求 Agent 内存尽量小（目标 ≤80MB），这里是可被外部驱动的增长点。
+// 超限时淘汰**最旧**的会话（Map 保持插入序）：宁可让最老的传输失效重来，
+// 也不要无限占用内存。
+const MAX_UPLOAD_SESSIONS = 64;
+const MAX_DOWNLOAD_SESSIONS = 64;
+
 
 
 module.exports = {
@@ -268,6 +277,17 @@ module.exports = {
         fs.writeFileSync(metaPath, JSON.stringify(m));
       } catch {}
     }
+    // 超上限先淘汰最旧的会话（连同其 tmp/meta 半成品），再登记新会话
+    while (this.uploads.size >= MAX_UPLOAD_SESSIONS) {
+      const oldestId = this.uploads.keys().next().value;
+      if (oldestId === undefined) break;
+      const old = this.uploads.get(oldestId);
+      try {
+        fs.rmSync(old.tmpPath, { force: true });
+        fs.rmSync(old.metaPath, { force: true });
+      } catch {}
+      this.uploads.delete(oldestId);
+    }
     const uploadId = crypto.randomBytes(8).toString('hex');
     this.uploads.set(uploadId, {
       finalPath,
@@ -335,6 +355,16 @@ module.exports = {
     const st = fs.statSync(absPath);
     if (st.isDirectory()) throw new Error('不能下载目录（请先压缩）');
     const fd = fs.openSync(absPath, 'r');
+    // 超上限先淘汰最旧的会话并关掉它的 fd（fd 泄漏同样会顶内存）
+    while (this.downloads.size >= MAX_DOWNLOAD_SESSIONS) {
+      const oldestId = this.downloads.keys().next().value;
+      if (oldestId === undefined) break;
+      const old = this.downloads.get(oldestId);
+      try {
+        fs.closeSync(old.fd);
+      } catch {}
+      this.downloads.delete(oldestId);
+    }
     const downloadId = crypto.randomBytes(8).toString('hex');
     this.downloads.set(downloadId, { fd, pos: 0, size: st.size, at: Date.now() });
     return { downloadId, size: st.size, chunk: 512 * 1024 };

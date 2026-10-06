@@ -204,6 +204,24 @@ const { spawnSync } = require('child_process');
 const { execFile } = require('child_process');
 const { sendEvent } = __require("src/eventbus.js");
 
+/**
+ * Agent 自身的内存占用快照。
+ * rss 是进程实际驻留内存，是「Agent 占了多少」最直观的指标；
+ * heapUsed 用于判断是否 V8 堆在涨（与外部缓冲区分开）。
+ * 面板用这两个值展示占用并在超阈值时提示——
+ * 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
+ * 没有读数就无法验收，所以随 sysStats 一起上报。
+ */
+function selfUsage() {
+  const mu = process.memoryUsage();
+  const MB = 1048576;
+  return {
+    rssMB: Math.round(mu.rss / MB),
+    heapUsedMB: Math.round(mu.heapUsed / MB),
+    uptimeSec: Math.round(process.uptime()),
+  };
+}
+
 class InstanceManager {
   constructor(instancesDir) {
     this.dir = instancesDir;
@@ -283,6 +301,10 @@ class InstanceManager {
       memTotalMB: Math.round(total / 1048576),
       memUsedMB: Math.max(0, Math.round((total - avail) / 1048576)),
       disk: null,
+      // Agent 自身占用：面板据此展示「Agent 占用」并在超阈值时提示。
+      // 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
+      // 没有这个读数就无法验收，故随资源快照一起上报。
+      self: selfUsage(),
     };
     const gb = (n) => Math.round((n / 1073741824) * 10) / 10;
     try {
@@ -2461,6 +2483,15 @@ const fs = require('fs');
 const path = require('path');
 const { runCmd, tarCmd } = __require("src/util.js");
 
+// 传输会话数量上限。
+// 之所以除了「时间过期」还要有「数量上限」：gcTransferSessions 每 10 分钟才跑一次，
+// 而上传会话能活 2 小时——一次突发创建就足以在 GC 生效前把内存与文件描述符顶起来。
+// 用户要求 Agent 内存尽量小（目标 ≤80MB），这里是可被外部驱动的增长点。
+// 超限时淘汰**最旧**的会话（Map 保持插入序）：宁可让最老的传输失效重来，
+// 也不要无限占用内存。
+const MAX_UPLOAD_SESSIONS = 64;
+const MAX_DOWNLOAD_SESSIONS = 64;
+
 
 
 module.exports = {
@@ -2722,6 +2753,17 @@ module.exports = {
         fs.writeFileSync(metaPath, JSON.stringify(m));
       } catch {}
     }
+    // 超上限先淘汰最旧的会话（连同其 tmp/meta 半成品），再登记新会话
+    while (this.uploads.size >= MAX_UPLOAD_SESSIONS) {
+      const oldestId = this.uploads.keys().next().value;
+      if (oldestId === undefined) break;
+      const old = this.uploads.get(oldestId);
+      try {
+        fs.rmSync(old.tmpPath, { force: true });
+        fs.rmSync(old.metaPath, { force: true });
+      } catch {}
+      this.uploads.delete(oldestId);
+    }
     const uploadId = crypto.randomBytes(8).toString('hex');
     this.uploads.set(uploadId, {
       finalPath,
@@ -2789,6 +2831,16 @@ module.exports = {
     const st = fs.statSync(absPath);
     if (st.isDirectory()) throw new Error('不能下载目录（请先压缩）');
     const fd = fs.openSync(absPath, 'r');
+    // 超上限先淘汰最旧的会话并关掉它的 fd（fd 泄漏同样会顶内存）
+    while (this.downloads.size >= MAX_DOWNLOAD_SESSIONS) {
+      const oldestId = this.downloads.keys().next().value;
+      if (oldestId === undefined) break;
+      const old = this.downloads.get(oldestId);
+      try {
+        fs.closeSync(old.fd);
+      } catch {}
+      this.downloads.delete(oldestId);
+    }
     const downloadId = crypto.randomBytes(8).toString('hex');
     this.downloads.set(downloadId, { fd, pos: 0, size: st.size, at: Date.now() });
     return { downloadId, size: st.size, chunk: 512 * 1024 };
