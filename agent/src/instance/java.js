@@ -11,6 +11,16 @@ const { spawnSync } = require('child_process');
 const { HTTP_UA, downloadToFile } = require('../http.js');
 const { sendEvent } = require('../eventbus.js');
 
+// Temurin 兜底安装根目录：每个版本一个 jdk-* 子目录，互不覆盖，可切换/卸载
+const JAVA_ROOT = '/opt/blocknexus-java';
+// PATH 里指向默认版本的软链（systemd 默认 PATH 含 /usr/local/bin，优先于 /usr/bin）
+const JAVA_LINK = '/usr/local/bin/java';
+// 从目录名解析大版本：jdk-21.0.5+y → 21，jdk8u432-b06 → 8（Temurin 8 没有 '-'+版本段）
+const jdkMajor = (name) => {
+  const m = /^jdk-?(\d+)/.exec(name);
+  return m ? Number(m[1]) : 0;
+};
+
 
 
 module.exports = {
@@ -80,91 +90,36 @@ module.exports = {
     });
   },
 
+  // root 或免密 sudo 校验，返回命令前缀；不可用直接抛错
+  ensureSudo() {
+    const isRoot = !(process.getuid && process.getuid() !== 0);
+    if (isRoot) return '';
+    const chk = spawnSync('sudo', ['-n', 'true'], { encoding: 'utf8', timeout: 10000 });
+    if (chk.status !== 0) throw new Error('需要 root 或免密 sudo 才能管理 Java');
+    return 'sudo ';
+  },
+
   async installJava(requested = 21) {
+    if (process.platform === 'win32') {
+      throw new Error('Java 管理仅支持 Linux 服务器（Windows 请自行安装 JRE 并加入 PATH）');
+    }
+    requested = Number(requested) || 21;
     const before = this.javaInfo();
-    if (before.installed && before.major >= requested) {
-      this.emitJava(`已安装 Java ${before.major}，无需处理`);
+    if (before.installed && before.major === requested) {
+      this.emitJava(`已安装并使用 Java ${requested}，无需处理`);
       return { java: before, already: true };
     }
-
-    this.emitJava('检测系统与包管理器…');
-    const isRoot = !(process.getuid && process.getuid() !== 0);
-    let sudo = '';
-    if (!isRoot) {
-      const chk = spawnSync('sudo', ['-n', 'true'], { encoding: 'utf8', timeout: 10000 });
-      if (chk.status !== 0) throw new Error('需要 root 或免密 sudo 才能安装 Java');
-      sudo = 'sudo ';
+    // 统一走 Temurin：版本齐全（8/11/17/21/25 都有）、每版本独立目录，
+    // 装/切/卸都在 /opt/blocknexus-java 内闭环；系统包 Java 仍可通过「设为默认」切回
+    const sudo = this.ensureSudo();
+    await this.installTemurin(requested, sudo);
+    this._javaCmd = null;
+    const after = this.javaInfo();
+    if (!after.installed) throw new Error('Java 安装后未探测到可用的 java');
+    if (after.major !== requested) {
+      this.emitJava(`⚠ 默认 java 仍是 ${after.major}（未覆盖非本面板创建的链接）`);
     }
-    const which = (c) => spawnSync('sh', ['-c', 'command -v ' + c], { timeout: 10000 }).status === 0;
-    const tried = [];
-    let ok = false;
-    // 各发行版对同版本 Java 的包名不同，逐个试；全失败还有 Temurin 镜像兜底
-    const pkgLists = {
-      apt: requested > 17
-        ? [`openjdk-${requested}-jre-headless`, ...(requested !== 21 ? ['openjdk-21-jre-headless'] : []), 'openjdk-17-jre-headless']
-        : [`openjdk-${requested}-jre-headless`],
-      dnf: [`java-${requested}-openjdk-headless`, ...(requested !== 21 ? ['java-latest-openjdk-headless'] : [])],
-      apk: [`openjdk${requested}-jre-headless`],
-    };
-
-    if (which('apt-get')) {
-      this.emitJava('更新软件包索引（apt-get update）…');
-      await this.runSh(sudo + 'apt-get update -y', sudo); // 失败也继续（缓存的索引可能够用）
-      for (const pkg of pkgLists.apt) {
-        this.emitJava(`尝试安装 ${pkg}…`);
-        tried.push(pkg);
-        const r = await this.runSh(`${sudo}apt-get install -y ${pkg}`, sudo, 900000);
-        if (r.code === 0) {
-          ok = true;
-          break;
-        }
-      }
-    } else if (which('dnf') || which('yum')) {
-      const pm = which('dnf') ? 'dnf' : 'yum';
-      for (const pkg of pkgLists.dnf) {
-        this.emitJava(`尝试安装 ${pkg}…`);
-        tried.push(pkg);
-        const r = await this.runSh(`${sudo}${pm} install -y ${pkg}`, sudo, 900000);
-        if (r.code === 0) {
-          ok = true;
-          break;
-        }
-      }
-    } else if (which('apk')) {
-      for (const pkg of pkgLists.apk) {
-        this.emitJava(`尝试安装 ${pkg}…`);
-        tried.push(pkg);
-        const r = await this.runSh(`${sudo}apk add --no-cache ${pkg}`, sudo, 900000);
-        if (r.code === 0) {
-          ok = true;
-          break;
-        }
-      }
-    } else {
-      this.emitJava('无法识别包管理器（仅支持 apt/dnf/yum/apk），改用 Temurin 镜像下载…');
-    }
-
-    let after = this.javaInfo();
-    // 发行源装不到目标版本（例如 Debian 12 只有 17，而 MC 1.20.5+ 需要 21）时，
-    // 从 TUNA/Adoptium 下载 Temurin JRE 兜底
-    if (!after.installed || after.major < requested) {
-      try {
-        this.emitJava(`发行源中没有合适的 Java ${requested}，尝试下载 Temurin JRE ${requested}…`);
-        await this.installTemurin(requested, sudo);
-        after = this.javaInfo();
-      } catch (e) {
-        this.emitJava('Temurin 下载失败: ' + e.message);
-      }
-    }
-
-    if (!after.installed) {
-      this.emitJava('✗ Java 安装失败，已尝试: ' + tried.join(', '));
-      throw new Error('Java 安装失败（已尝试: ' + (tried.join(', ') || '无可用方式') + '），请手动安装 JDK ' + requested);
-    }
-    if (after.major < requested) {
-      this.emitJava(`⚠ 当前 Java ${after.major} 可运行 1.20.4 及更早版本；MC 1.20.5+ 需要 Java 21`);
-    }
-    this.emitJava(`✓ Java ${after.major} 就绪`);
+    this.emitJava(`✓ Java ${requested} 就绪`);
     return { java: after };
   },
 
@@ -195,15 +150,15 @@ module.exports = {
             );
           }
         });
-        this.emitJava('解压到 /opt/blocknexus-java…');
-        await this.runSh(`${sudo}mkdir -p /opt/blocknexus-java`, sudo, 60000);
-        await this.runSh(`${sudo}tar -xzf ${tmp} -C /opt/blocknexus-java`, sudo, 300000);
+        this.emitJava(`解压到 ${JAVA_ROOT}…`);
+        await this.runSh(`${sudo}mkdir -p ${JAVA_ROOT}`, sudo, 60000);
+        await this.runSh(`${sudo}tar -xzf ${tmp} -C ${JAVA_ROOT}`, sudo, 300000);
         await this.runSh(`${sudo}rm -f ${tmp}`, sudo, 60000);
-        const dirs = fs.readdirSync('/opt/blocknexus-java').filter((d) => d.startsWith('jdk-' + major));
+        const dirs = fs.readdirSync(JAVA_ROOT).filter((d) => jdkMajor(d) === major);
         if (!dirs.length) throw new Error('解压后未找到 JDK 目录');
-        const jdk = path.join('/opt/blocknexus-java', dirs[dirs.length - 1]);
+        const jdk = path.join(JAVA_ROOT, dirs[dirs.length - 1]);
         // 让 PATH 里的 java 指向新 JDK（systemd 默认 PATH 含 /usr/local/bin）
-        const linkPath = '/usr/local/bin/java';
+        const linkPath = JAVA_LINK;
         let canLink = true;
         try {
           const cur = fs.readlinkSync(linkPath);
@@ -257,5 +212,143 @@ module.exports = {
       }
     })();
     return true;
+  },
+
+  // ---------- Java 多版本管理：列表 / 切换 / 卸载 ----------
+
+  // 当前生效 java 的真实路径（跟进软链）；探测不到返回 null
+  _realJavaPath() {
+    const cmd = this.javaCmd();
+    if (!cmd) return null;
+    try {
+      let p = cmd;
+      if (!p.includes('/')) {
+        const r = spawnSync('sh', ['-c', 'command -v java'], { encoding: 'utf8', timeout: 10000 });
+        if (r.status !== 0 || !r.stdout.trim()) return null;
+        p = r.stdout.trim();
+      }
+      return fs.realpathSync(p);
+    } catch {
+      return null;
+    }
+  },
+
+  // 运行指定 java 可执行文件取版本信息（javaInfo 的指定路径版）
+  _javaInfoOf(cmd) {
+    try {
+      const r = spawnSync(cmd, ['-version'], { encoding: 'utf8', timeout: 15000 });
+      const out = (r.stderr || '') + (r.stdout || '');
+      const m = /version "(\d+)(?:\.(\d+))?/.exec(out);
+      if (r.error || !m) return null;
+      const major = Number(m[1]) === 1 ? Number(m[2] || 0) : Number(m[1]);
+      return { major, raw: out.split('\n')[0].trim() };
+    } catch {
+      return null;
+    }
+  },
+
+  // 列出全部可用的 Java：托管版本（/opt/blocknexus-java/jdk-*）+ 系统包 Java（/usr/bin/java），
+  // active 标记当前默认 java 指向的那个；前端按单选列表渲染，勾选即切换。
+  listJavas() {
+    if (process.platform === 'win32') throw new Error('Java 管理仅支持 Linux 服务器');
+    const activeReal = this._realJavaPath();
+    const activeIsManaged = !!activeReal && activeReal.startsWith(JAVA_ROOT + path.sep);
+    let managed = [];
+    try {
+      managed = fs
+        .readdirSync(JAVA_ROOT)
+        .map((d) => {
+          const full = path.join(JAVA_ROOT, d);
+          const bin = path.join(full, 'bin', 'java');
+          if (!fs.existsSync(bin)) return null;
+          let active = false;
+          try {
+            active = !!activeReal && activeReal === fs.realpathSync(bin);
+          } catch {
+            active = false;
+          }
+          return { path: full, name: d, major: jdkMajor(d), active };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.major - b.major || a.name.localeCompare(b.name));
+    } catch {
+      // JAVA_ROOT 不存在 → 尚未通过面板装过
+    }
+    // 系统包 Java（apt/dnf/apk 装的）：面板不负责它的安装与卸载，但可以切换过去用
+    let system = null;
+    if (fs.existsSync('/usr/bin/java')) {
+      const info = this._javaInfoOf('/usr/bin/java');
+      if (info) {
+        system = {
+          path: 'system',
+          name: 'system',
+          major: info.major,
+          raw: info.raw,
+          active: !!activeReal && !activeIsManaged,
+        };
+      }
+    }
+    return { active: this.javaInfo(), managed, system };
+  },
+
+  // 切换默认 Java：target 为托管目录绝对路径，或 'system'（摘掉我们的软链、用回系统包）
+  async switchJava(target) {
+    if (process.platform === 'win32') throw new Error('Java 管理仅支持 Linux 服务器');
+    const sudo = this.ensureSudo();
+    if (String(target) === 'system') {
+      let cur = null;
+      try {
+        cur = fs.readlinkSync(JAVA_LINK);
+      } catch {
+        // 链接不存在 → 已在用系统 java
+      }
+      if (cur && (cur.includes('blocknexus-java') || cur.includes('mcpan-java'))) {
+        await this.runSh(`${sudo}rm -f ${JAVA_LINK}`, sudo, 60000);
+      }
+      this._javaCmd = null;
+      const after = this.javaInfo();
+      if (!after.installed) throw new Error('已切换为系统 Java，但未探测到可用的 java（系统未装 OpenJDK？）');
+      return { java: after };
+    }
+    const full = path.resolve(String(target || ''));
+    if (!full.startsWith(JAVA_ROOT + path.sep) || !fs.existsSync(path.join(full, 'bin', 'java'))) {
+      throw new Error('无效的 Java 目录');
+    }
+    await this.runSh(`${sudo}ln -sfn ${full}/bin/java ${JAVA_LINK}`, sudo, 60000);
+    this._javaCmd = null;
+    const after = this.javaInfo();
+    if (!after.installed) throw new Error('切换后未探测到可用的 java');
+    return { java: after };
+  },
+
+  // 卸载托管 Java：只允许删 /opt/blocknexus-java 下的 jdk-* 目录。
+  // 若删的是正在使用的版本，先回退到其余托管版本（取最高），没有托管版本则回退系统包；
+  // 两者都没有时拒绝卸载（避免服务器从此没有可用的 java）。
+  async uninstallJava(target) {
+    if (process.platform === 'win32') throw new Error('Java 管理仅支持 Linux 服务器');
+    const full = path.resolve(String(target || ''));
+    if (!full.startsWith(JAVA_ROOT + path.sep) || !/^jdk-/.test(path.basename(full))) {
+      throw new Error('只能卸载通过面板安装的 Temurin Java');
+    }
+    if (!fs.existsSync(path.join(full, 'bin', 'java'))) throw new Error('该目录不是有效的 Java 安装');
+    const sudo = this.ensureSudo();
+    const { managed } = this.listJavas();
+    const isActive = managed.some((j) => j.path === full && j.active);
+    if (isActive) {
+      const fallback = managed
+        .filter((j) => j.path !== full)
+        .sort((a, b) => b.major - a.major)[0];
+      if (fallback) {
+        await this.runSh(`${sudo}ln -sfn ${fallback.path}/bin/java ${JAVA_LINK}`, sudo, 60000);
+        this.emitJava(`默认 Java 已切换到 ${fallback.name}`);
+      } else if (fs.existsSync('/usr/bin/java')) {
+        await this.runSh(`${sudo}rm -f ${JAVA_LINK}`, sudo, 60000); // 回退系统包
+      } else {
+        throw new Error('这是唯一可用的 Java，卸载后将无法启动任何实例；请先安装其他版本');
+      }
+    }
+    await this.runSh(`${sudo}rm -rf ${full}`, sudo, 300000);
+    this._javaCmd = null;
+    return { java: this.javaInfo() };
   }
 };

@@ -228,16 +228,16 @@ beUI 组件用法：`cd web && npx shadcn@latest add @beui/<name>`（已装：bo
 - SLP 完全不通时（如 `enable-status=false`）自动退回控制台跟踪结果；SLP 实测 0 人时会清空跟踪集，杜绝过期鬼影；
 - 服务器启动中的短暂窗口会优雅降级为 `—/20`，不会拖慢接口（单实例查询 1.5 秒硬超时）。
 
-## Java 安装
+## Java 环境（多版本管理）
 
-服务器设置页「系统信息」卡与实例详情页侧栏都提供 **Java 版本选择 + 安装**（`Java 21（推荐）` / `Java 17`）：
+服务器设置页独立的「Java 环境」卡：多版本的 **安装 / 切换 / 卸载**（服务器设置页在 Agent 卡与系统信息卡之间；实例详情页侧栏保留快捷入口）：
 
-
-- **异步任务**：点击后面板立即返回，安装过程与结果通过实时事件推送（按钮变「安装中…」并显示当前步骤，完成后自动刷新状态）；
-- **版本可选**：安装的是你选中的那个版本；若系统已装更高版本会提示无需处理；
-- **安装顺序**：发行源里的 OpenJDK 21 → OpenJDK 17 →（仍不满足时）**Adoptium Temurin JRE 21 兜底**——优先清华 TUNA 镜像（国内快），失败再走 Adoptium 官方 API；Temurin 解压到 `/opt/blocknexus-java` 并把 `/usr/local/bin/java` 链接过去（只覆盖自己创建的链接）；
-- 每一步（更新索引、尝试的包、下载百分比、解压）都会实时显示，失败时给出已尝试的包列表与原因；
-- MC 1.20.5+ 需要 Java 21；Java 17 只能运行 1.20.4 及更早版本。
+- **版本可选**：`Java 25（最新）` / `Java 21（推荐 · 1.20.5+）` / `Java 17（1.17 – 1.20.4）` / `Java 11（旧版备用）` / `Java 8（MC ≤ 1.16）`，旧版到最新全覆盖；
+- **统一走 Temurin JRE**：优先清华 TUNA 镜像（国内快），失败再走 Adoptium 官方 API；每个版本独立目录落位 `/opt/blocknexus-java/jdk-*/`，互不覆盖；
+- **完整安装列表 + 勾选生效**：卡片列出全部可用 Java（面板装的 Temurin 各版本 + 系统包 Java `/usr/bin/java`），点选即切换默认版本（`/usr/local/bin/java` 软链重指，Agent 立即重探测），选中行高亮「使用中」；
+- **卸载**：托管版本可单独卸载（永久删除该版本目录）；卸载正在使用的版本会自动回退到其余版本或系统 Java，唯一可用时拒绝卸载；也可一键「改用系统包 Java」摘除面板的软链；
+- **异步任务**：安装点击后面板立即返回，过程与结果实时推送（下载百分比、解压、链接每一步都显示）；
+- 启动实例不再按 Java 版本硬性拦截——选错版本时服务端会自行报错，日志在控制台可见。
 
 ## 卸载 Agent
 
@@ -377,6 +377,7 @@ GET|POST /api/servers/:id/instances/:name/icon   (server-icon 读取/上传)
 GET  /api/servers/:id/instances/:name/mods
 POST /api/servers/:id/instances/:name/mods/toggle|mods/delete
 GET  /api/servers/:id/mcversions     POST /api/servers/:id/java-install
+GET  /api/servers/:id/javas          POST /api/servers/:id/java-use|java-uninstall   (Java 多版本)
 POST /api/servers/:id/instances/:name/retry-install|reinstall|panel-install
 POST /api/settings/ai-test           POST /api/settings/ai-models
 POST /api/servers/:id/instances/:name/ai-analyze

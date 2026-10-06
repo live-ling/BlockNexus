@@ -295,6 +295,12 @@ class Agent {
         if (m.javaJob) return { ok: true, started: true, busy: true };
         m.startJavaInstall(Number(p.major) || 21);
         return { ok: true, started: true };
+      case 'java.list':
+        return m.listJavas();
+      case 'java.use':
+        return m.switchJava(String(p.target || ''));
+      case 'java.uninstall':
+        return m.uninstallJava(String(p.target || ''));
       case 'fs.list':
         return m.listFiles(p.name, p.path);
       case 'fs.read':

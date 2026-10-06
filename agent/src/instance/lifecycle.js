@@ -79,8 +79,9 @@ module.exports = {
       }
     }
     const java = this.javaInfo();
-    if (!java.installed) throw new Error('未检测到 Java，请先在面板执行"安装 Java"或在服务器手动安装 JDK 17+');
-    if (java.major < 16) throw new Error(`Java 版本过低 (${java.major})，Minecraft 1.17+ 需要 Java 16+`);
+    if (!java.installed) throw new Error('未检测到 Java，请先在面板「Java 环境」里安装或切换版本');
+    // 不再按版本硬拦：Java 卡支持多版本切换，旧版 MC 用 Java 8/11、1.17+ 用 17/21、
+    // 1.20.5+ 用 21/25，选错时服务端会自己报错，日志在控制台可见
 
     // paperclip 引导器（Paper/Purpur/Folia）首启需要原版核心：安装时已预置过，
     // 这里再兜底一次（覆盖面板代下、旧版本装的实例、或安装时预下载失败的情况）

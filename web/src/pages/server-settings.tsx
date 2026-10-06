@@ -17,9 +17,26 @@ import {
 } from '@/components/dialogs';
 import { UninstallDialog, uninstallLogKey } from '@/components/uninstall-dialog';
 import { LogViewer } from '@/components/log-viewer';
-import { api, agentOutdated, errText, fmtDiskGB, fmtMB, latencyTone, timeago, type Me, type ServerSummary } from '@/lib/api';
+import {
+  api,
+  agentOutdated,
+  errText,
+  fmtDiskGB,
+  fmtMB,
+  latencyTone,
+  listJavas,
+  timeago,
+  switchJava,
+  uninstallJava,
+
+  type JavaEntry,
+  type JavaListResult,
+  type Me,
+  type ServerSummary,
+} from '@/lib/api';
 import { installLogStore, subscribeServer } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 
 export function ServerSettingsPage({
   serverId,
@@ -40,7 +57,6 @@ export function ServerSettingsPage({
   const [manualOpen, setManualOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [javaBusy, setJavaBusy] = useState(false);
-  const [javaTarget, setJavaTarget] = useState('21');
   const [javaMsg, setJavaMsg] = useState('');
   const [uninstallOpen, setUninstallOpen] = useState(false);
   // stopOnly 模式：复用卸载弹窗做「只停本机 Agent」
@@ -174,7 +190,6 @@ export function ServerSettingsPage({
   };
 
   const tone = latencyTone(server.latency);
-  const javaWarn = server.info?.java?.installed && (server.info.java.major ?? 0) < 17;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-5 pb-24 pt-7">
@@ -348,55 +363,13 @@ export function ServerSettingsPage({
         )}
       </SettingsCard>
 
+      {/* Java 环境（多版本安装/切换/卸载） */}
+      <JavaCard server={server} javaBusy={javaBusy} javaMsg={javaMsg} onReload={load} />
+
       {/* 系统信息 */}
-      {javaBusy && (
-        <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-          正在安装 Java… {javaMsg && <span className="font-mono">{javaMsg}</span>}
-        </div>
-      )}
       <SettingsCard
         title="系统信息"
         description={server.info ? undefined : 'Agent 离线时暂无数据'}
-        actions={
-          server.online &&
-          server.info &&
-          (!server.info.java.installed || (server.info.java.major ?? 0) < 21) ? (
-            <div className="flex items-center gap-2">
-              <Select value={javaTarget} onValueChange={setJavaTarget}>
-                <SelectTrigger size="sm" className="w-[136px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="21">Java 21（推荐）</SelectItem>
-                  <SelectItem value="17">Java 17</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={javaBusy}
-                onClick={async () => {
-                  try {
-                    const r = await api<{ busy?: boolean }>(`/servers/${serverId}/java-install`, {
-                      method: 'POST',
-                      body: { major: Number(javaTarget) },
-                    });
-                    setJavaBusy(true);
-                    success(
-                      r.busy ? 'Java 安装已在进行中' : `Java ${javaTarget} 安装任务已下发`,
-                      '完成后自动更新状态',
-                    );
-                  } catch (e) {
-                    error(errText(e));
-                  }
-                }}
-              >
-                {javaBusy ? '安装中…' : '安装'}
-              </Button>
-            </div>
-          ) : null
-        }
       >
         {server.info ? (
           <InfoGrid
@@ -434,14 +407,6 @@ export function ServerSettingsPage({
                   ? fmtDiskGB(server.stats.disk.totalGB - server.stats.disk.freeGB, server.stats.disk.totalGB) +
                     `（${server.info.instancesDir} 所在分区）`
                   : '—',
-              ],
-              [
-                'Java',
-                <span key="java" className={javaWarn ? 'text-amber-600 dark:text-amber-400' : undefined}>
-                  {server.info.java.installed
-                    ? `${server.info.java.major}（${server.info.java.raw ?? ''}）`
-                    : '未安装（MC 1.20.5+ 需 Java 21）'}
-                </span>,
               ],
               ['实例目录', server.info.instancesDir],
             ]}
@@ -541,6 +506,233 @@ export function ServerSettingsPage({
         }}
       />
     </div>
+  );
+}
+
+/** Java 环境卡：当前生效版本 + 托管版本列表（切换/卸载）+ 安装新版本。
+ *  安装走 Temurin JRE（版本齐全、每版本独立目录），旧版 MC（Java 8/11）到最新（25）都覆盖。 */
+function JavaCard({
+  server,
+  javaBusy,
+  javaMsg,
+  onReload,
+}: {
+  server: ServerSummary;
+  javaBusy: boolean;
+  javaMsg: string;
+  onReload: () => void;
+}) {
+  const { success, error } = useToastHelpers();
+  const [javas, setJavas] = useState<JavaListResult | null>(null);
+  const [loadErr, setLoadErr] = useState('');
+  const [target, setTarget] = useState('21');
+  const [acting, setActing] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<JavaEntry | null>(null);
+
+  const refresh = useCallback(() => {
+    listJavas(server.id)
+      .then((r) => {
+        setJavas(r);
+        setLoadErr('');
+      })
+      .catch((e) => setLoadErr(errText(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server.id]);
+
+  // java.updated → 页面 load() 刷新 server.info.java → 这里跟着重拉托管版本列表
+  useEffect(() => {
+    if (server.online) refresh();
+  }, [refresh, server.online, server.info?.java?.raw, server.info?.java?.installed]);
+
+  const install = async () => {
+    try {
+      const r = await api<{ busy?: boolean }>(`/servers/${server.id}/java-install`, {
+        method: 'POST',
+        body: { major: Number(target) },
+      });
+      success(r.busy ? 'Java 安装已在进行中' : `Java ${target} 安装任务已下发`, '完成后自动更新状态');
+    } catch (e) {
+      error(errText(e));
+    }
+  };
+
+  const setDefault = async (t: string, label: string) => {
+    setActing(true);
+    try {
+      await switchJava(server.id, t);
+      success(`默认 Java 已切换到 ${label}`);
+      onReload();
+      refresh();
+    } catch (e) {
+      error('切换失败', errText(e));
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const doUninstall = async (entry: JavaEntry) => {
+    setActing(true);
+    try {
+      await uninstallJava(server.id, entry.path);
+      success(`${entry.name} 已卸载`);
+      setConfirmTarget(null);
+      onReload();
+      refresh();
+    } catch (e) {
+      error('卸载失败', errText(e));
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const info = server.info;
+  // 版本列表是切换/卸载后即时拉取的，比面板缓存的 info.java 新——「当前生效」以它为准
+  const liveJava = javas?.active ?? info?.java ?? null;
+  // 低于 17 意味着跑不了 1.17+ 的实例，提示但不拦启动
+  const warn = !!liveJava?.installed && (liveJava.major ?? 0) < 17;
+
+  return (
+    <SettingsCard
+      title="Java 环境"
+      description="Temurin JRE 多版本管理"
+      actions={
+        server.online && info ? (
+          <div className="flex items-center gap-2">
+            <Select value={target} onValueChange={setTarget}>
+              <SelectTrigger size="sm" className="w-[190px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="25">Java 25（最新）</SelectItem>
+                <SelectItem value="21">Java 21（推荐 · 1.20.5+）</SelectItem>
+                <SelectItem value="17">Java 17（1.17 – 1.20.4）</SelectItem>
+                <SelectItem value="11">Java 11（旧版备用）</SelectItem>
+                <SelectItem value="8">Java 8（MC ≤ 1.16）</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="secondary" size="sm" disabled={javaBusy} onClick={install}>
+              {javaBusy ? '安装中…' : '安装'}
+            </Button>
+          </div>
+        ) : null
+      }
+    >
+      {javaBusy && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+          正在安装 Java… {javaMsg && <span className="font-mono">{javaMsg}</span>}
+        </div>
+      )}
+
+      {info ? (
+        <div className="grid gap-2.5">
+          <InfoGrid
+            rows={[
+              [
+                '当前生效',
+                <span key="java" className={warn ? 'text-amber-600 dark:text-amber-400' : undefined}>
+                  {liveJava?.installed
+                    ? `${liveJava.major}（${liveJava.raw?.match(/"([^"]+)"/)?.[1] ?? liveJava.raw ?? ''}）`
+                    : '未安装（新版 MC 需 Java 21+，旧版 MC 需 8–17）'}
+                </span>,
+              ],
+            ]}
+          />
+
+          {/* 全部安装列表（托管 Temurin + 系统包）：勾选即生效；托管版本可卸载 */}
+          {loadErr ? (
+            <p className="text-[11px] text-muted-foreground">
+              {agentOutdated(server)
+                ? `版本列表需要更新的 Agent 支持——远端 v${server.info?.agentVersion ?? '旧版'} 将自动更新到 v${server.agentBundled ?? '?'}`
+                : `版本列表获取失败：${loadErr}`}
+            </p>
+          ) : javas && (javas.managed.length || javas.system) ? (
+            <div className="grid gap-1" role="radiogroup" aria-label="默认 Java 版本">
+              {[...javas.managed, ...(javas.system ? [javas.system] : [])].map((entry) => {
+                const sys = entry.path === 'system';
+                const ver = entry.raw?.match(/"([^"]+)"/)?.[1];
+                return (
+                  <div
+                    key={entry.path}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs',
+                      entry.active && 'border-emerald-500/40 bg-emerald-500/5',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={entry.active}
+                      disabled={acting || javaBusy}
+                      title={entry.active ? '当前生效' : '设为默认'}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      onClick={() => !entry.active && setDefault(entry.path, sys ? '系统 Java' : entry.name)}
+                    >
+                      <RadioDot checked={entry.active} />
+                      <span className="min-w-0 shrink-0 font-mono">{sys ? '系统包 Java' : entry.name}</span>
+                      <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                        {ver ? `Java ${entry.major} · ${ver}` : `Java ${entry.major}`}
+                      </span>
+                    </button>
+                    {entry.active ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> 使用中
+                      </span>
+                    ) : sys ? (
+                      <span className="shrink-0 text-[11px] text-muted-foreground">/usr/bin/java</span>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        disabled={acting || javaBusy}
+                        onClick={() => setConfirmTarget(entry)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> 卸载
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              服务器上没有发现可用的 Java——选择版本点「安装」，会下载 Temurin JRE 到 /opt/blocknexus-java 并设为默认；各版本独立目录，可随时切换或卸载。
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">等待 Agent 上线后自动获取。</p>
+      )}
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        onOpenChange={(v) => !v && setConfirmTarget(null)}
+        title={`卸载 ${confirmTarget?.name ?? ''}？`}
+        description={
+          confirmTarget?.active
+            ? '这是当前默认版本，卸载时会自动切换到其余版本或系统 Java。该操作不可恢复。'
+            : '将永久删除该版本的安装目录。该操作不可恢复。'
+        }
+        onConfirm={async () => {
+          if (confirmTarget) await doUninstall(confirmTarget);
+        }}
+      />
+    </SettingsCard>
+  );
+}
+
+/** 单选圆点：完整安装列表里「勾选生效」的指示器 */
+function RadioDot({ checked }: { checked: boolean }) {
+  return (
+    <span
+      className={cn(
+        'grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border',
+        checked ? 'border-emerald-500' : 'border-muted-foreground/40',
+      )}
+    >
+      {checked && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+    </span>
   );
 }
 

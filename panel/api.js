@@ -52,10 +52,10 @@ function semverGreater(a, b) {
   return false;
 }
 
-/** 检查更新；失败时保留旧缓存并在结果里带 error 字段 */
-async function checkLatestRelease(version) {
+/** 检查更新；失败时保留旧缓存并在结果里带 error 字段。force=true 跳过缓存（?refresh=1） */
+async function checkLatestRelease(version, force = false) {
   const fresh = Date.now() - versionCache.at < VERSION_CACHE_MS;
-  if (versionCache.data && fresh) return { ...versionCache.data, cached: true };
+  if (!force && versionCache.data && fresh) return { ...versionCache.data, cached: true };
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -565,8 +565,9 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   });
 
   // ---------- 版本与更新检查（登录后） ----------
+  // ?refresh=1 跳过 10 分钟缓存（前端「检查更新」按钮）
   router.get('/version', async (req, res) => {
-    const data = await checkLatestRelease(APP_VERSION);
+    const data = await checkLatestRelease(APP_VERSION, req.query.refresh === '1');
     res.json({ version: APP_VERSION, repoUrl: REPO_URL, ...data });
   });
 
@@ -2410,6 +2411,42 @@ function createApi(config, hub, bus, limiterOpts = {}) {
       // 安装是后台任务，这里只是「已受理」。真正装完由 Agent 的 java.updated 事件通知，
       // 同时起轮询兜底把最新的 sys.info 落到缓存，卡片就能立刻显示新版本。
       if (r && r.started) scheduleJavaRefresh(server.id);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Java 多版本管理：列表 / 切换默认 / 卸载（Agent 端锁定在 /opt/blocknexus-java 内）
+  router.get('/servers/:id/javas', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'java.list', {}, 20000));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/servers/:id/java-use', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      const r = await agent(server)('java.use', { target: (req.body || {}).target }, 60000);
+      res.json(r);
+      // 切换即时生效，但面板缓存里的 java 信息要等下一轮 sys.info；起轮询把缓存刷过去
+      scheduleJavaRefresh(server.id);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/servers/:id/java-uninstall', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      const r = await agent(server)('java.uninstall', { target: (req.body || {}).target }, 120000);
+      res.json(r);
+      scheduleJavaRefresh(server.id);
     } catch (e) {
       next(e);
     }

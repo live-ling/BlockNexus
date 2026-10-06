@@ -359,6 +359,41 @@ export function deleteMod(serverId: string, instance: string, file: string): Pro
   });
 }
 
+// ---------- Java 环境（多版本安装 / 切换 / 卸载，Temurin 落位 /opt/blocknexus-java） ----------
+
+/** /opt/blocknexus-java 下的一个托管 Java 目录（system 项为系统包 Java） */
+export interface JavaEntry {
+  /** 托管目录绝对路径；系统包 Java 固定为 'system' */
+  path: string;
+  /** 目录名，如 jdk-21.0.5+9；系统包 Java 为 'system' */
+  name: string;
+  major: number;
+  /** 是否为当前默认 java 指向的版本 */
+  active: boolean;
+  /** java -version 首行原文（仅系统包 Java 返回） */
+  raw?: string;
+}
+
+export interface JavaListResult {
+  active: JavaInfo;
+  managed: JavaEntry[];
+  /** 系统包 Java（/usr/bin/java，apt/dnf 装的）；不存在时为 null */
+  system: JavaEntry | null;
+}
+
+export function listJavas(serverId: string): Promise<JavaListResult> {
+  return api(`/servers/${serverId}/javas`);
+}
+
+/** target 为托管目录绝对路径，或 'system'（改用系统包 Java） */
+export function switchJava(serverId: string, target: string): Promise<{ java: JavaInfo }> {
+  return api(`/servers/${serverId}/java-use`, { method: 'POST', body: { target } });
+}
+
+export function uninstallJava(serverId: string, target: string): Promise<{ java: JavaInfo }> {
+  return api(`/servers/${serverId}/java-uninstall`, { method: 'POST', body: { target } });
+}
+
 // ---------- 封禁目录（banned-players / banned-ips） ----------
 
 export interface BanEntry {

@@ -7,7 +7,7 @@ const path = require('path');
 const state = require('./state.js');
 
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
-const AGENT_VERSION = '0.3.2';
+const AGENT_VERSION = '0.3.4';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
