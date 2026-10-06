@@ -101,11 +101,16 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 
 项目已由 **MCPan** 更名为 **BlockNexus**：品牌字符串、安装目录（`/opt/mcpan-agent` → `/opt/blocknexus-agent`）、systemd 服务名（`mcpan-agent` → `blocknexus-agent`）、环境变量前缀（`MCPAN_*` → `BLOCKNEXUS_*`）、登录 Cookie、上传临时文件后缀均已同步。
 
-> ⚠️ **更名兼容期已于 0.3.1 结束。** 加密通道的握手标识已从 `mcpan/*` 改为 `blocknexus/*`，
-> 因此**旧版 MCPan/BlockNexus Agent（`AGENT_VERSION` < 0.3.6）无法再与本面板建立加密连接**。
-> 面板会把这类 Agent 显示为离线，并在其上线后按版本号**自动推送更新**（见「Agent 版本与自动更新」）。
+> ⚠️ **更名兼容期已于 0.3.1 结束。** 加密通道的握手标识已从 `mcpan/*` 改为 `blocknexus/*`。
+> 由于握手证明（proof）在**建立连接时**就要校验，而旧 Agent 用的仍是旧标识，
+> 因此**旧 Agent（`AGENT_VERSION` < 0.3.6）无法与本面板建立连接**。
 >
-> 若某台服务器长期未上线导致没能自动更新，请在该服务器的设置页点「重装 Agent」重装一次。
+> **这意味着它也不能靠自动更新自救**——自动更新依赖 Agent 连上后上报 `hi` 事件，
+> 而它连握手都过不去。所以：**必须手动重装一次 Agent。**
+>
+> 重装方式：在该服务器的设置页点「重装 Agent」（走 SSH，面板会推送新的 `agent.js`）；
+> 或在服务器上 `curl` 面板的 `/agent.js` 手动替换后重启服务（见「手动安装 Agent」）。
+> 重装后面板即可正常管理。
 
 迁移要点：
 

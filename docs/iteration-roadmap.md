@@ -723,10 +723,16 @@ OPanel 用 `platform-modules.json` 作为**唯一模块事实源**，被三处�
 | 旧 systemd 服务 `mcpan-agent` 清理 | `panel/ssh.js` | ✅ 安装与卸载都只处理 `blocknexus-agent` |
 | README「从 MCPan 更名升级」整节 | `README.md` | ✅ 已改写为「兼容期已结束」并说明旧 Agent 不再能连、如何恢复 |
 
-**`AGENT_VERSION` 递增的含义（重要）**：远端 Agent 上线时会被面板比对版本并**自动更新**。
-但这是**破坏性协议变更**：`AGENT_VERSION < 0.3.6` 的旧 Agent 在更新完成前**无法建立加密连接**，
-面板会把它显示为离线，并在它上线后推送更新。已确认无生产旧 Agent，所以可接受；
-README 已明确写出这个行为与恢复手段（服务器设置页重装一次）。
+**`AGENT_VERSION` 递增的含义（重要，且与常规不同）**：通常远端 Agent 上线后会被面板比对版本并**自动更新**。
+但这次是**破坏性协议变更**，情况相反：
+
+- 握手证明在**建立连接时**校验（`panel/agentlink.js:113-114` 先 `deriveKeys` 再 `verifyProof`）；
+- 旧 Agent 用旧标签派生密钥 → proof 不匹配 → **握手直接失败**；
+- 因此旧 Agent **连不上**，也就**永远发不出 `hi` 事件**，而自动更新正是靠 `hi` 触发的——
+  **旧 Agent 无法靠自动更新自救**。
+
+**结论：必须手动重装一次 Agent**（服务器设置页「重装 Agent」走 SSH 推送新脚本，或手动 `curl` 面板的 `/agent.js` 替换）。
+已确认无生产旧 Agent，所以实际上只需保证：**今后新装的 Agent 一律是 ≥ 0.3.6 的版本**。
 
 ### 4.6 文档纪律
 
