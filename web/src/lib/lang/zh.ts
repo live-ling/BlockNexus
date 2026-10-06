@@ -213,4 +213,21 @@ export const zh = {
   'token.title': '服务器 Token',
   'token.description': 'Agent 与面板加密通道的共享密钥，请妥善保管。',
   'token.hint': '如怀疑泄露，可在「编辑」旁重置 token（需重新安装/更新远程 agent.json 后生效）。',
+
+  // ---------- 手动安装 Agent ----------
+  'manualInstall.title': '手动安装 Agent',
+  'manualInstall.description': '适用于 SSH 自动安装失败、或无 root 权限的环境。在目标服务器上执行：',
+  'manualInstall.loadFailed': '加载失败：{0}',
+  'manualInstall.localOnly.warn': '⚠ 面板当前只监听本机（127.0.0.1），上面第一条 curl 命令在远程服务器上无法访问面板。',
+  'manualInstall.localOnly.fix.pre': '请改用「安装 Agent（SSH）」自动部署，或把面板以 ',
+  'manualInstall.localOnly.fix.post': ' 启动后再用手工命令。',
+  'manualInstall.tls.warn.pre': 'TLS 已启用：请把安装时生成的 ',
+  'manualInstall.tls.warn.mid': ' / ',
+  'manualInstall.tls.warn.post': ' 放到工作目录，或用自动安装流程。',
+  'manualInstall.tokenWarn': 'token 等于服务器控制权，请勿泄露。生产环境建议用 systemd 托管（自动安装流程会自动配置）。',
+
+  // ---------- MSL 署名（MSL 使用条款要求注明来源） ----------
+  'msl.credit.pre': '部分核心镜像下载由 ',
+  'msl.credit.name': 'MSL 开服器',
+  'msl.credit.post': ' 提供（mslmc.cn）',
 } as const

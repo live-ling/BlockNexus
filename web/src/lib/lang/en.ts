@@ -206,4 +206,21 @@ export const en = {
   'token.title': 'Server token',
   'token.description': 'The shared secret for the encrypted channel between the Agent and the panel. Keep it safe.',
   'token.hint': 'If you suspect a leak, reset the token next to “Edit” (takes effect after reinstalling or updating the remote agent.json).',
+
+  // ---------- 手动安装 Agent ----------
+  'manualInstall.title': 'Manual Agent install',
+  'manualInstall.description': 'For environments where the automated SSH install fails or root is unavailable. Run this on the target server:',
+  'manualInstall.loadFailed': 'Failed to load: {0}',
+  'manualInstall.localOnly.warn': '⚠ The panel is currently listening on localhost only (127.0.0.1), so the first curl command above cannot reach it from a remote server.',
+  'manualInstall.localOnly.fix.pre': 'Use “Install Agent (SSH)” instead, or start the panel with ',
+  'manualInstall.localOnly.fix.post': ' and then run the manual commands.',
+  'manualInstall.tls.warn.pre': 'TLS is enabled: copy the generated ',
+  'manualInstall.tls.warn.mid': ' / ',
+  'manualInstall.tls.warn.post': ' into the working directory, or use the automated install.',
+  'manualInstall.tokenWarn': 'The token grants full control of the server — keep it secret. Use systemd in production (the automated install configures it for you).',
+
+  // ---------- MSL credit (required by the MSL terms of use) ----------
+  'msl.credit.pre': 'Some core mirror downloads are provided by ',
+  'msl.credit.name': 'MSL Launcher',
+  'msl.credit.post': ' (mslmc.cn)',
 } as const
