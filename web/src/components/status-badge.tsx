@@ -51,6 +51,22 @@ export function AgentBadge({ online, installing }: { online: boolean; installing
   );
 }
 
+/** 延迟徽章：仅文字，用于页头等紧凑位置（ServerLinkBadge 是带边框的胶囊版） */
+export function LatencyBadge({ latency }: { latency: number }) {
+  const tone = latencyTone(latency);
+  const cls =
+    tone === 'good'
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : tone === 'fair'
+        ? 'text-amber-600 dark:text-amber-400'
+        : 'text-destructive';
+  return (
+    <span className={`font-mono text-xs ${cls}`} title={$('badge.latency.tooltip')}>
+      {$('badge.latency', latency === 0 ? '<1' : latency)}
+    </span>
+  );
+}
+
 /** 首页服务器卡片徽章：在线显示实测延迟，离线显示红色「离线」，安装中显示进度 */
 export function ServerLinkBadge({
   online,
