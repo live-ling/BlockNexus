@@ -37,6 +37,7 @@ npm start           # 或 node panel/server.js
 node panel/server.js --host 0.0.0.0                  # 对外监听（此时必须开启登录保护）
 node panel/server.js --host 0.0.0.0   --tls-cert cert.pem --tls-key key.pem              # 顺带面板自身走 HTTPS
 # 等价的参数/环境变量：--port / BLOCKNEXUS_PORT，--host / BLOCKNEXUS_HOST，--tls-cert / BLOCKNEXUS_TLS_CERT，--tls-key / BLOCKNEXUS_TLS_KEY
+# 反向代理后：--trust-proxy 1（可信代理层数）；面板自身是 HTTP 但外部走 HTTPS 时再加 --secure-cookies
 ```
 
 **默认无密码**（本地服务，打开即用；此时顶栏不显示「退出登录」）。如需暴露给局域网/公网，可在面板右上角「设置」中开启登录保护：
@@ -415,6 +416,36 @@ GET  /agent.js                       (Agent 单文件下载，匿名)
 - 面板密码建议尽快用 `BLOCKNEXUS_PASSWORD` 替换初始密码；
 - 面板监听 `0.0.0.0` 是为了让远程 Agent 能回连，浏览器访问请尽量走本机或受信任网络；
 - Agent 以 systemd 默认身份（root）运行，MC 实例共享该权限——与绝大多数 MC 服务器运维习惯一致，但请知悉。
+
+### 反向代理部署（重要）
+
+面板放在反向代理后面时**必须加 `--trust-proxy <层数>`**，否则 `req.ip` 会恒为代理地址，
+登录与找回密码的 IP 限流会退化成**全局限流**——任一攻击者失败 5 次就能把所有人锁在门外 5 分钟。
+
+```bash
+# Nginx 单层反代（最常见）
+node panel/server.js --host 127.0.0.1 --trust-proxy 1
+
+# 反代本身还有一层（如 CDN → Nginx）
+node panel/server.js --host 127.0.0.1 --trust-proxy 2
+
+# 只信任本机回环代理
+node panel/server.js --trust-proxy loopback
+
+# 外部走 HTTPS、但面板自身是 HTTP（反代终止 TLS）→ 让会话 Cookie 带上 Secure
+node panel/server.js --host 127.0.0.1 --trust-proxy 1 --secure-cookies
+```
+
+- 等价环境变量：`BLOCKNEXUS_TRUST_PROXY`、`BLOCKNEXUS_SECURE_COOKIES=1`
+- 反代需传 `X-Forwarded-For`，Nginx 写法：`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+- **`--trust-proxy` 默认关闭**。面板若直连公网，**绝不能开**——`X-Forwarded-For` 可被伪造，反而绕过限流。
+- 用「层数」比用 IP 列表安全：`X-Forwarded-For` 由每层代理逐跳追加，express 取「从右往左第 N+1 个」，
+  因此攻击者预塞多少个伪造值都不起作用。
+- **验证方法**：用两台不同设备各输错 5 次密码。若第二台也被锁（提示带剩余秒数）→ `trust proxy` 没生效；
+  若第二台能正常尝试 → 生效。
+- `--secure-cookies` **仅在确实通过 HTTPS 访问时开启**：纯 HTTP 下浏览器会拒绝保存带 `Secure` 的 Cookie，
+  表现为「登录成功但立刻掉线」。面板自身以 `--tls-cert/--tls-key` 启动 HTTPS 时会自动带上，无需此参数。
+- 启动横幅会打印当前生效的「反代信任」与「安全 Cookie」状态，可据此确认配置。
 
 ## 路线图
 
