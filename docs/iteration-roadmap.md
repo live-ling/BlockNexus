@@ -275,6 +275,37 @@ P4-* 彼此独立，各自需单独里程碑评估
 
 ## P1-9 中英双语 i18n ⭐ 用户指定
 
+> **状态（2026-10-06）：🚧 引擎与端到端链路完成，文案搬迁分批进行（当前 2 个界面已接）。**
+>
+> **已完成**：
+> - `web/src/lib/i18n.ts`（~140 行，零依赖、同步取词）：`$()` / `localize` / `renderTemplate` /
+>   `getLanguage` / `setLanguage` / `initLanguage` / `LANGUAGE_LABELS`。
+> - `web/src/lib/lang/{zh,en}.ts`：**zh 是键集事实来源**；`TranslationKey = keyof typeof zh`，
+>   再用 `Record<TranslationKey, string>` 约束 en —— **漏翻一个键 `tsc` 直接报 TS2741**
+>   （已实测：删掉 `en['console.clear']` → `tsc exit=2`；还原 → `exit=0`）。
+> - **缺键回退返回键名本身**（可诊断）；`{0}` 占位，缺失参数保留占位符以便排查。
+> - **刻意不做富文本语法**：OPanel 的 `@b{ref}` 实现里两个 `while` 无边界检查，
+>   译文少一个花括号会让页面挂死；这里只输出纯文本，需要富文本请用组件组合。
+> - **后端 error 文案也已双语**：`panel/api.js` 的 `langOf(req)` 读 `Accept-Language`，
+>   前端 `api()` 每个请求都带上它（语言选择存在 localStorage，后端无从得知）。
+>   code 不随语言变化，认 code 的调用方仍可自行本地化。
+> - **语言切换**：`components/language-toggle.tsx`（登录页右上 + 登录后导航栏各一份，
+>   否则登录后无法再切）；切换后整页刷新 —— 最简、不会留下半翻译界面。
+> - 测试：`i18n.test.ts` **21 用例**（键集/占位符一致性/英文无残留中文/缺键回退/
+>   模板替换/持久化与存储不可用降级）；`api.test.ts` 增加 Accept-Language 与
+>   Content-Type 断言；`test-panel-security.js` 增加 5 条双语断言。
+>
+> **待搬文案**（机械但量大，按界面分批，每批可独立合并）：
+> `pages/servers.tsx`、`server-detail.tsx`、`instance-detail.tsx`、`server-settings.tsx`、
+> `panel-settings.tsx`、`about.tsx`、`login.tsx` 的**忘记密码/重置密码整段**
+> （含 `邮箱验证通过，为 X 设置新密码` 这类带变量文案，需先用 `{0}` 参数化）、
+> `components/{file-manager,mod-manager,dialogs,backup-*,auto-restart-dialog,
+> plugin-config-dialog,properties-dialog,spark-panel,ai-log-panel}.tsx`，
+> 以及 `lib/{api,sse,toast}.ts` 与 `lib/properties.ts` 里的字段标签/分组名。
+>
+> **注意**：`login.tsx` 目前只有**主登录卡片**是双语的，忘记密码那三步仍是中文——
+> 属**有意的半成品**（宁可留一块未翻，也不做半句中半句英的界面）。
+
 | 项 | 内容 |
 |---|---|
 | **问题** | **完全没有国际化**。68/122 个 `.ts/.tsx` 含硬编码中文，`pages/` 7/7；`<html lang="zh-CN">` 硬写 |
