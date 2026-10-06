@@ -1,4 +1,4 @@
-# 组装 Release 产物：便携版 zip + 纯外壳 zip（含 SHA256）
+﻿# 组装 Release 产物：便携版 zip + 纯外壳 zip（含 SHA256）
 #
 # 便携版（解压到任意目录双击 BlockNexus.exe 即用）：
 #   外壳运行件（exe/dll/runtimes）+ 内置 Node（runtime/node.exe，托盘 FindNode 的约定位置）
@@ -20,7 +20,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$raw = Get-Content (Join-Path $root 'package.json') -Raw
+if ($raw -notmatch '"version"\s*:\s*"([^"]+)"') { throw 'package.json missing version' }
+$version = $Matches[1]
 Write-Host "BlockNexus v$version"
 
 # ---------- 前置检查 ----------
@@ -61,7 +63,8 @@ function Copy-ShellRuntime($dest) {
 try {
   # ---------- 便携版 ----------
   if (-not $SkipPortable) {
-    $app = Join-Path $stage "BlockNexus-v$version-portable"
+    # 顶层目录名沿用 v0.2.0 约定（不带版本号），解压即得一个文件夹
+    $app = Join-Path $stage "BlockNexus-portable"
     New-Item -ItemType Directory -Force -Path $app, (Join-Path $app 'runtime'), (Join-Path $app 'agent'), (Join-Path $app 'scripts') | Out-Null
     Copy-ShellRuntime $app
     Copy-Item $nodeExe (Join-Path $app 'runtime\node.exe') -Force
@@ -71,7 +74,9 @@ try {
     foreach ($d in @('panel', 'images')) {
       if (Test-Path (Join-Path $root $d)) { Copy-Item (Join-Path $root $d) $app -Recurse -Force }
     }
-    Copy-Item (Join-Path $root 'web\dist') (Join-Path $app 'web\dist') -Recurse -Force
+    # PS5.1 的 Copy-Item 在目标上级目录不存在时会复制残缺，先建出 web/ 再拷
+    New-Item -ItemType Directory -Force -Path (Join-Path $app 'web') | Out-Null
+    Copy-Item (Join-Path $root 'web\dist') (Join-Path $app 'web') -Recurse -Force
     Copy-Item (Join-Path $root 'agent\agent.js') (Join-Path $app 'agent') -Force
     Copy-Item (Join-Path $root 'scripts\blocknexus-launcher.js') (Join-Path $app 'scripts') -Force
 
@@ -85,8 +90,13 @@ try {
       if ($LASTEXITCODE -ne 0) { throw 'npm ci 失败' }
     } finally { Pop-Location }
 
+    # 压缩前断言关键内容都在（PS5.1 的 Copy-Item 出过静默残缺）
+    foreach ($v in @('web\dist\index.html', 'runtime\node.exe', 'panel\server.js', 'agent\agent.js', 'node_modules\express\package.json')) {
+      if (-not (Test-Path (Join-Path $app $v))) { throw ('打包内容缺失: ' + $v) }
+    }
+
     $zip = Join-Path $OutDir "BlockNexus-v$version-portable.zip"
-    Compress-Archive -Path (Join-Path $app '*') -DestinationPath $zip -Force
+    Compress-Archive -Path $app -DestinationPath $zip -Force  # 打整个目录：保留顶层 BlockNexus-portable/
     Write-Host "便携版: $zip"
   }
 
