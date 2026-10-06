@@ -296,15 +296,23 @@ P4-* 彼此独立，各自需单独里程碑评估
 >   Content-Type 断言；`test-panel-security.js` 增加 5 条双语断言。
 >
 > **待搬文案**（机械但量大，按界面分批，每批可独立合并）：
-> `pages/servers.tsx`、`server-detail.tsx`、`instance-detail.tsx`、`server-settings.tsx`、
-> `panel-settings.tsx`、`about.tsx`、`login.tsx` 的**忘记密码/重置密码整段**
-> （含 `邮箱验证通过，为 X 设置新密码` 这类带变量文案，需先用 `{0}` 参数化）、
-> `components/{file-manager,mod-manager,dialogs,backup-*,auto-restart-dialog,
-> plugin-config-dialog,properties-dialog,spark-panel,ai-log-panel}.tsx`，
-> 以及 `lib/{api,sse,toast}.ts` 与 `lib/properties.ts` 里的字段标签/分组名。
+>
+> | 批次 | 内容 | 状态 |
+> |---|---|---|
+> | 1 | `lib/i18n.ts` 引擎 + 语言切换组件 + 登录主卡片 + 导航栏 + `console-panel` | ✅ |
+> | 2 | `pages/servers.tsx` + `components/status-badge.tsx` | ✅ |
+> | 3 | `pages/server-detail.tsx`、`instance-detail.tsx` | ⬜ |
+> | 4 | `pages/server-settings.tsx`、`panel-settings.tsx` | ⬜ |
+> | 5 | `pages/about.tsx`（含约 300 字的面板介绍长段落） | ⬜ |
+> | 6 | `pages/login.tsx` 的**忘记密码/重置密码整段**（含 `邮箱验证通过，为 X 设置新密码` 这类带变量文案，需先用 `{0}` 参数化） | ⬜ |
+> | 7 | `components/{file-manager,mod-manager,dialogs,backup-*,auto-restart-dialog,plugin-config-dialog,properties-dialog,spark-panel,ai-log-panel,log-viewer,ban-list-dialog,uninstall-dialog,upload-channel}.tsx` | ⬜ |
+> | 8 | `lib/{api,sse,toast}.ts` + `lib/properties.ts`（字段标签与分组名，62 键） | ⬜ |
 >
 > **注意**：`login.tsx` 目前只有**主登录卡片**是双语的，忘记密码那三步仍是中文——
-> 属**有意的半成品**（宁可留一块未翻，也不做半句中半句英的界面）。
+> 属**有意的半成品**（宁可留一块完整未翻，也不做半句中半句英的界面）。
+>
+> **命名说明**：实例状态文案的键现为 `console.status.*`，但 `status-badge.tsx` 也在用。
+> 名字不够贴切（它已不只属于控制台），若后续要重命名，记得同时改两处引用。
 
 | 项 | 内容 |
 |---|---|
