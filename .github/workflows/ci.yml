@@ -27,6 +27,12 @@ jobs:
         run: node agent/build.js --check
       - name: Agent 测试（零依赖，不需要面板与真实服务器）
         run: npm run test:agent
+      # 找回密码的端到端测试**刻意不放进 test:agent**：它要反复等限流冷却，
+      # 单跑约 10 分钟，塞进主的链会让本地与 CI 都快不起来。
+      # 但它必须**在 CI 里跑**——它覆盖 /forgot-password 与 /verify-reset-code
+      # 的完整状态机，此前因为没接入而长期无人执行（改这两条路径时不会被拦下）。
+      - name: 找回密码端到端测试（独立步骤，约 10 分钟）
+        run: npm run test:e2e
 
   frontend:
     name: 前端构建

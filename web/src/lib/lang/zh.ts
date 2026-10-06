@@ -982,8 +982,6 @@ export const zh = {
   'login.forgot.heading': '找回密码',
   'login.forgot.description': '输入管理员邮箱，面板会发送 6 位验证码（15 分钟有效）',
   'login.code.title': '输入验证码',
-  'login.code.sent.pre': '验证码已发往 ',
-  'login.code.sent.post': '，15 分钟内有效。',
   'login.code.sentGeneric': '如果该邮箱与面板设置一致，验证码已发出，15 分钟内有效。',
   'login.code.checkInbox': '请查收邮件（注意垃圾箱），验证通过后设置新密码。',
   'login.code.aria': '6 位邮箱验证码',

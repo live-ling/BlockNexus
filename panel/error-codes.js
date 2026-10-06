@@ -88,21 +88,21 @@ const ERROR_CODES = {
     zh: '请 {seconds} 秒后再试',
     en: 'Please wait {seconds} seconds',
   },
-  'auth.reset.code-expired': {
-    // 状态码一律沿用改造前的实现（这些路径原本都用 400），不借迁移之机改语义
+  // 验证码错误的**唯一**响应。
+  //
+  // 为什么把原先三条（code-expired / code-wrong / verify-too-many）合并成一条：
+  // 它们各自都是「此刻是否有一张验证码在途」的**预言机**，而未认证攻击者
+  // 可以用它反推管理员邮箱是否匹配：
+  //   ① POST /forgot-password 换候选邮箱 → 只有匹配时才会生成验证码
+  //   ② POST /verify-reset-code 发一个错码
+  //   ③ 响应若是 code-wrong（而非 code-expired），说明**确实有码在途** → 邮箱命中
+  // 同理 verify-too-many 只可能在「有码」时触发（无码时根本不会累加全局计数）。
+  // 合并后三者不可区分，且有码/无码、是否已作废都收敛到同一条文案。
+  // 状态码沿用改造前的 400，不借机改语义。
+  'auth.reset.code-invalid': {
     status: 400,
-    zh: '验证码已过期，请重新获取',
-    en: 'The verification code has expired. Request a new one',
-  },
-  'auth.reset.code-wrong': {
-    status: 400,
-    zh: '验证码不正确（还可尝试 {left} 次）',
-    en: 'Incorrect verification code ({left} attempts left)',
-  },
-  'auth.reset.verify-too-many': {
-    status: 400,
-    zh: '验证码尝试次数过多，请重新获取',
-    en: 'Too many verification attempts. Request a new code',
+    zh: '验证码不正确或已失效，请重新获取',
+    en: 'The verification code is incorrect or has expired. Request a new one',
   },
   'auth.reset.ticket-invalid': {
     status: 400,

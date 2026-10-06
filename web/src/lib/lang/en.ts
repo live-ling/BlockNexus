@@ -976,8 +976,6 @@ export const en = {
   'login.forgot.heading': 'Forgot password',
   'login.forgot.description': 'Enter the admin email and the panel will send a 6-digit code (valid for 15 minutes)',
   'login.code.title': 'Enter the code',
-  'login.code.sent.pre': 'A verification code has been sent to ',
-  'login.code.sent.post': ', valid for 15 minutes.',
   'login.code.sentGeneric': 'If this email matches the panel settings, the code has been sent and is valid for 15 minutes.',
   'login.code.checkInbox': 'Check your inbox (and spam folder); after the code is verified you can set a new password.',
   'login.code.aria': '6-digit email verification code',

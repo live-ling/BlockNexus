@@ -123,11 +123,27 @@ async function main() {
   const IP_RATE = '10.0.0.4'; // 发码限流
   const IP_MISC = '10.0.0.5'; // 其余（探活/登录/旧 token）
 
+  /**
+   * 等邮件到达（最多 timeoutMs）。
+   *
+   * 为什么需要它：/forgot-password **刻意不再 await 发信**——await 会让
+   * 「邮箱命中」的响应比「不命中」慢数秒 SMTP 握手，等于把答案写在响应耗时里，
+   * 构成管理员邮箱枚举通道。发信改为异步后，断言邮件就必须等它落地，
+   * 否则是**时序竞态**（时快时慢，本地通过、CI 偶发失败）。
+   */
+  async function waitForMail(n, timeoutMs = 4000) {
+    const t0 = Date.now();
+    while (mail.captured.length < n && Date.now() - t0 < timeoutMs) await sleep(25);
+    return mail.captured.length >= n;
+  }
+
   /** 发一封新验证码并返回 code（自动等过冷却） */
   async function freshCode(ip) {
     await sleep(LIMITS.cooldownMs + 80);
+    const want = mail.captured.length + 1;
     const r = await api('POST', '/forgot-password', { email: ADMIN_EMAIL }, ip);
     if (r.data.sent !== true) throw new Error('发码失败: ' + JSON.stringify(r.data));
+    if (!(await waitForMail(want))) throw new Error('等待验证码邮件超时');
     return codeFromMail(mail.captured);
   }
 
@@ -138,13 +154,16 @@ async function main() {
       report('T0 未登录访问受保护接口返回 401', r.status === 401, `status=${r.status}`);
     }
 
-    // T1 邮箱不匹配时同样返回成功（不泄露管理员邮箱），且不发信
+    // T1 邮箱不匹配时**响应与命中时完全一致**（sent 恒为 true），但实际不发信。
+    // 这正是防「管理员邮箱枚举」的关键：若 sent 在两条分支上取值不同，
+    // 未认证攻击者换个 email 打几次就能确认哪个是管理员邮箱。
+    // （旧断言是 sent===false —— 那本身就构成了枚举通道，已随之修正。）
     {
       const r = await api('POST', '/forgot-password', { email: 'nobody@example.com' }, IP_MISC);
       report(
-        'T1 邮箱不匹配返回成功且不发信',
-        r.status === 200 && r.data.sent === false && mail.captured.length === 0,
-        `sent=${r.data.sent} mails=${mail.captured.length}`,
+        'T1 邮箱不匹配：响应与命中时一致（sent 恒 true）但不发信',
+        r.status === 200 && r.data.sent === true && r.data.smtpReady === true && mail.captured.length === 0,
+        `sent=${r.data.sent} smtpReady=${r.data.smtpReady} mails=${mail.captured.length}`,
       );
     }
 
@@ -152,6 +171,7 @@ async function main() {
     let code;
     {
       const r = await api('POST', '/forgot-password', { email: ADMIN_EMAIL }, IP_MAIN);
+      await waitForMail(1); // 发信是异步的（见 waitForMail 的说明），必须等它落地
       const ok = r.status === 200 && r.data.sent === true && mail.captured.length === 1;
       if (!ok) {
         report('T2 发送验证码邮件', false, JSON.stringify(r.data));
@@ -269,9 +289,12 @@ async function main() {
       const cfg = JSON.parse(fs.readFileSync(path.join(TMP, 'config.json'), 'utf8'));
       report(
         'T11 单码试错超限后作废（正确码也不再可用）',
-        wrongs.every((w) => w.status === 400 && /不正确/.test(w.data.error || '')) &&
+        // 断言重点在**行为**：错码一律 400、正确码也被拒、resetCode 已被删除。
+        // 文案已统一为 code-invalid（不再有 verify-too-many）——那条 code 本身就是
+        // 「此刻是否有码在途」的预言机，可被用来反推管理员邮箱。
+        wrongs.every((w) => w.status === 400 && /不正确或已失效/.test(w.data.error || '')) &&
           blocked.status === 400 &&
-          /尝试次数过多/.test(blocked.data.error || '') &&
+          /不正确或已失效/.test(blocked.data.error || '') &&
           cfg.panel.resetCode === undefined,
         `last=${wrongs[wrongs.length - 1].data.error} blocked=${blocked.data.error}`,
       );
@@ -283,7 +306,13 @@ async function main() {
       config.data.panel.resetCode.expires = Date.now() - 1000;
       config.save();
       const r = await api('POST', '/verify-reset-code', { code: c }, IP_EXP);
-      report('T12 过期验证码被拒', r.status === 400 && /过期/.test(r.data.error || ''), r.data.error);
+      report(
+        'T12 过期验证码被拒',
+        // 文案与「错码」「已作废」统一（不再单独回 code-expired，
+        // 否则可据它区分「有没有码在途」）
+        r.status === 400 && /不正确或已失效/.test(r.data.error || ''),
+        r.data.error,
+      );
     }
 
     // T13 关闭登录保护时，已发出的验证码与票据立即失效
@@ -325,6 +354,7 @@ async function main() {
       const before = mail.captured.length;
       const first = await api('POST', '/forgot-password', { email: ADMIN_EMAIL }, IP_RATE);
       const burst = await api('POST', '/forgot-password', { email: ADMIN_EMAIL }, IP_RATE);
+      await waitForMail(before + 1); // first 的信是异步发的，等它落地再断言
       report(
         'T15 冷却期内重复发码被限流且不再发信',
         first.data.sent === true &&
@@ -361,8 +391,11 @@ async function main() {
       const locked = await api('POST', '/verify-reset-code', { code: c }, IP_LOCK);
       report(
         'T18 错码 5 次锁定 IP，锁定期内正确码也拒绝',
+        // 断言重点在**锁定行为**：第 4 次仍 400，第 5 次触发锁定 429，
+        // 锁定期内连正确码也 429。不再断言「还可尝试 N 次」文案——
+        // 那个计数提示随 code-invalid 统一去掉了（它同样是「有码在途」的弱信号）。
         last.status === 400 &&
-          /还可尝试/.test(last.data.error || '') &&
+          /不正确或已失效/.test(last.data.error || '') &&
           fifth.status === 429 &&
           locked.status === 429,
         `4th=${last.data.error} 5th=${fifth.status} lockedCorrect=${locked.status}`,
