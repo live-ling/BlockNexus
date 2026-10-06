@@ -551,35 +551,36 @@ export function ManualInstallDialog({
           ].join('\n'),
         );
       })
-      .catch((e) => setCmds('加载失败: ' + errText(e)));
+      .catch((e) => setCmds($('manualInstall.loadFailed', errText(e))));
   }, [open, server.id, panelPort]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-lg">
         <DialogHeader className="shrink-0">
-          <DialogTitle>手动安装 Agent</DialogTitle>
+          <DialogTitle>{$('manualInstall.title')}</DialogTitle>
           <DialogDescription>
-            适用于 SSH 自动安装失败、或无 root 权限的环境。在目标服务器上执行：
+            {$('manualInstall.description')}
           </DialogDescription>
         </DialogHeader>
         <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1 grid content-start gap-4">
         <pre className="overflow-x-auto rounded-md border bg-muted/50 p-3 font-mono text-xs text-primary">
-          {cmds || '加载中…'}
+          {cmds || $('common.loading')}
         </pre>
         {panelHostIsLocalOnly && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
-            ⚠ 面板当前只监听本机（127.0.0.1），上面第一条 curl 命令在远程服务器上无法访问面板。
-            请改用「安装 Agent（SSH）」自动部署，或把面板以 <code className="font-mono">--host 0.0.0.0</code> 启动后再用手工命令。
+            {$('manualInstall.localOnly.warn')}{' '}
+            {$('manualInstall.localOnly.fix.pre')}<code className="font-mono">--host 0.0.0.0</code>{$('manualInstall.localOnly.fix.post')}
           </p>
         )}
         {server.agent.tls && (
           <p className="text-xs text-muted-foreground">
-            TLS 已启用：请把安装时生成的 <code className="font-mono">cert.pem</code> /{' '}
-            <code className="font-mono">key.pem</code> 放到工作目录，或用自动安装流程。
+            {$('manualInstall.tls.warn.pre')}<code className="font-mono">cert.pem</code>
+            {$('manualInstall.tls.warn.mid')}
+            <code className="font-mono">key.pem</code>{$('manualInstall.tls.warn.post')}
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          token 等于服务器控制权，请勿泄露。生产环境建议用 systemd 托管（自动安装流程会自动配置）。
+          {$('manualInstall.tokenWarn')}
         </p>
         </div>
       </DialogContent>
@@ -593,16 +594,16 @@ export function ManualInstallDialog({
 function MslCredit() {
   return (
     <p className="text-[11px] leading-snug text-muted-foreground">
-      部分核心镜像下载由{' '}
+      {$('msl.credit.pre')}
       <a
         href="https://www.mslmc.cn"
         target="_blank"
         rel="noreferrer"
         className="underline underline-offset-2 hover:text-foreground"
       >
-        MSL 开服器
-      </a>{' '}
-      提供（mslmc.cn）
+        {$('msl.credit.name')}
+      </a>
+      {$('msl.credit.post')}
     </p>
   );
 }
