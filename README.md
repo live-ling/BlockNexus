@@ -96,6 +96,16 @@ node agent.js --panel ws://<面板地址>:3080 --token <服务器token> --id <�
 
 Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "...", "id": "..." }`。
 
+## 从 MCPan 更名升级
+
+项目已由 **MCPan** 更名为 **BlockNexus**，品牌字符串、安装目录（`/opt/mcpan-agent` → `/opt/blocknexus-agent`，仅新增服务器默认值）、systemd 服务名（`mcpan-agent` → `blocknexus-agent`）、环境变量前缀（`MCPAN_*` → `BLOCKNEXUS_*`）、登录 Cookie、上传临时文件后缀等已全部同步。升级注意：
+
+- **面板**：重启即生效（`data/config.json`、实例数据不动）；
+- **远程 Agent**：旧版 Agent **无需立即重装**——加密协议握手标识未变，新面板可继续管理旧 Agent；想换到新服务名时在服务器设置页点「重装 Agent」，安装器会自动清掉旧的 `mcpan-agent` 服务；卸载逻辑对新旧两个服务名都兼容；
+- **实例元数据**：`mcpan.json` → `blocknexus.json`，Agent 首次扫描实例目录时自动改名，无需手动处理；
+- **需要重新登录/选主题**：会话 Cookie 名与主题存储键随更名更换，更新后首次打开要重新登录、主题恢复默认；
+- **Windows 桌面外壳**：运行 `npm run build:exe` 生成 `BlockNexus.exe`，再 `npm run shortcut` 重建桌面快捷方式（旧 `MCPan.exe`、`MCPan.lnk` 可删除）。
+
 ## 加密通道设计
 
 - 每台服务器一个随机 256-bit token（只存面板 `data/config.json` 与远程 `agent.json`，**不随网络传输**）；
