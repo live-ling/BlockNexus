@@ -106,7 +106,9 @@ const path = require('path');
 const state = __require("src/state.js");
 
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
-const AGENT_VERSION = '0.3.5';
+// 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
+//        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
+const AGENT_VERSION = '0.3.6';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -4322,12 +4324,13 @@ function hkdf(ikm, salt, info, length = 32) {
 
 function deriveKeys(token, nonceA, nonceP) {
   const salt = Buffer.concat([nonceA, nonceP]);
-  // info 标签沿用 MCPan 时代的 'mcpan/*'：与 panel/crypto.js 两端必须一致，
-  // 改名会让旧 Agent 与新面板握手失败（解密互相踢），等统一弃用旧 Agent 再换
+  // info 标签：2026-10-06 由历史遗留的 'mcpan/*' 正式改为 'blocknexus/*'。
+  // 更名兼容期已结束（已确认无存量旧 Agent 在生产运行），因此不再保留旧标签。
+  // ⚠ 两端（agent/src/crypto.js 与 panel/crypto.js）必须逐字一致，否则握手会互相解密失败。
   return {
-    kA2P: hkdf(token, salt, 'mcpan/a2p'),
-    kP2A: hkdf(token, salt, 'mcpan/p2a'),
-    kProof: hkdf(token, salt, 'mcpan/proof'),
+    kA2P: hkdf(token, salt, 'blocknexus/a2p'),
+    kP2A: hkdf(token, salt, 'blocknexus/p2a'),
+    kProof: hkdf(token, salt, 'blocknexus/proof'),
   };
 }
 

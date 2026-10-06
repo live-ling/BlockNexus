@@ -43,8 +43,11 @@
 - ❌ 不引入任何新的 npm 依赖（面板依赖仅 `express/nodemailer/ssh2/ws`）。
 - ❌ 不改 `agent/src/**`（因此无需 `npm run build:agent`，也**不要**递增 `AGENT_VERSION`）。
 - ❌ 不改现有登录/限流的**阈值语义**（仍是「5 次失败 → 锁 5 分钟」）。OPanel 用 10 分钟，我们**保持 5 分钟**，避免顺手改行为导致用户困惑。
-- ❌ 不改 HKDF 的 `'mcpan/*'` info 标签（`panel/crypto.js:25-31`）——那是旧 Agent 兼容锚点，动了会让所有存量 Agent 失联。
 - ❌ 不改 `data/config.json` 的字段结构（本批不落盘任何新配置，全部走启动参数/环境变量）。
+- ~~❌ 不改 HKDF 的 `'mcpan/*'` info 标签~~ → **该禁令已于 2026-10-06 解除**：
+  用户确认**无存量旧 Agent 在生产运行**，可以进行一次更名迁移。
+  标签已改为 `'blocknexus/*'`（`AGENT_VERSION` 0.3.5 → 0.3.6），详见
+  `docs/iteration-roadmap.md` §4.5「更名迁移（mcpan → blocknexus）剩余项」。
 
 ### 0.3 基线验证结果（2026-10-06 实测）
 

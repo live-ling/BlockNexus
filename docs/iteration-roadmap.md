@@ -662,7 +662,10 @@ P4-* 彼此独立，各自需单独里程碑评估
 
 ### 4.2 不能碰的兼容锚点
 
-- **`panel/crypto.js:25-31` 的 HKDF info 标签 `'mcpan/a2p'`/`'mcpan/p2a'`/`'mcpan/proof'`**：改名会让所有存量 Agent 与新面板握手失败。文件里已有明确注释。**等哪天统一弃用旧 Agent 再换。**
+- ~~**`panel/crypto.js:25-31` 的 HKDF info 标签 `'mcpan/*'`**：改名会让所有存量 Agent 与新面板握手失败。~~
+  ✅ **已于 2026-10-06 解除**——已确认无存量旧 Agent，标签已改为 `'blocknexus/*'`（见 §4.5）。
+  但**新的约束成立**：`panel/crypto.js` 与 `agent/src/crypto.js` 的标签必须**逐字一致**，
+  且**任何改动都要同时递增 `AGENT_VERSION`**（否则远端不会自动更新，造成新旧混用握手失败）。
 - **`agent/build.js` 的模块 id 与打包格式**：`test-bundle-fresh.js` 逐字节比对产物，改格式要同步改测试。
 - **`AGENT_VERSION` 字面量的存在性**：面板用正则从产物文本提取它（`panel/api.js:26-32`），`test-bundle-fresh.js` 第 5 条专门守护这个正则。**改产物结构时不要把它包进无法被正则命中的形式。**
 
@@ -702,7 +705,34 @@ Agent 内存主要来自控制台环形缓冲、传输会话、实例元数据�
 
 OPanel 用 `platform-modules.json` 作为**唯一模块事实源**，被三处消费（构建 include、前端构建目标、CI 矩阵）且各自校验，新增一个游戏版本 = 加一条 JSON + 建一个目录。**BlockNexus 的对应痛点是「MC↔NeoForge 前缀映射表有两份重复拷贝」**（`panel/api.js:1082-1089` 与 `agent/src/catalog.js:53-75`）——这是同一类问题的雏形。**建议在 P1/P2 期间把这类的重复常量收敛到单一来源**（Agent 侧可通过打包器注入，或由面板在 `hi` 握手时下发）。
 
-### 4.5 文档纪律
+### 4.5 更名迁移（mcpan → blocknexus）与平台适配范围
+
+> **2026-10-06 用户确认：可以改。** 原话：mcpan 可以改了、**当前没有生产环境跑 agent**，
+> 因此可以做一次**破坏性更名迁移**——所有为兼容 MCPan 时代而保留的代码都可以清掉。
+>
+> **平台适配范围（同时确认）**：项目主要平台是 **Ubuntu 系（Linux，Agent 与面板都可能跑）**
+> 与 **Windows 系（仅作为桌面外壳）**。适配与测试以这两者为准。
+
+**遗留物清单（grep `mcpan|MCPan` 得 39 处，其中代码 11 处）**：
+
+| 项 | 位置 | 处理 |
+|---|---|---|
+| HKDF info 标签 `mcpan/a2p`·`mcpan/p2a`·`mcpan/proof` | `panel/crypto.js`、`agent/src/crypto.js` | ✅ **已改为 `blocknexus/*`**（`AGENT_VERSION` 0.3.5 → 0.3.6）；两端逐字核对一致，加密握手 e2e 全绿 |
+| 实例元数据 `mcpan.json` 自动改名回退 | `agent/src/instance/manager.js:48-50` | ⬜ 可删——不再存在 `mcpan.json` 的实例目录 |
+| 旧 Java 软链 `/opt/mcpan-java` 清洗 | `agent/src/instance/java.js:165-166`、`:305` | ⬜ 可删旧路径分支，只认 `blocknexus-java` |
+| 旧 systemd 服务 `mcpan-agent` 清理 | `panel/ssh.js:405-406`、`:452-453` | ⬜ 可删——安装/卸载只处理 `blocknexus-agent` |
+| README「从 MCPan 更名升级」整节 | `README.md:100-108` | ⬜ 可删或改为历史说明 |
+
+**执行注意**：这些都是**删除**操作，删前应确认没有真实的旧部署；按用户要求
+「危险操作先建副本」。建议一次性做完并用 `agent/e2e-panel-install.js`（覆盖安装链路）
+与 `test-fs-ops.js` 兜底。
+
+**`AGENT_VERSION` 已递增的含义**：远端 Agent 只要在线就会被面板比对版本并**自动更新**。
+由于这是破坏性协议变更，**新旧混用期间握手必然失败**——因此升级顺序上，
+面板需先更新（面板会主动推送新 Agent），未更新的旧 Agent 在更新完成前会短暂失联。
+既然已确认无生产旧 Agent，此风险可接受。
+
+### 4.6 文档纪律
 
 按 `AGENTS.md`：**README 是面向用户的主文档，新功能要在对应章节补一段并更新「API 一览」**。P0 的 `--trust-proxy`/`--secure-cookies` 就需要补。这条容易漏，建议并入每个工作项的验收标准。
 
