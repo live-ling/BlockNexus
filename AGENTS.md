@@ -1,6 +1,6 @@
 # AGENTS.md — BlockNexus 工作区说明（给 AI 助手/新会话的工作记忆）
 
-Minecraft 服务器管理面板：本地 Web 面板（Express + WebView2 外壳）+ SSH 部署到远程 Linux 的 Agent（零依赖单文件）。开源仓库即本仓库：github.com/live-ling/BlockNexus。
+Minecraft 服务器管理面板：本地 Web 面板（Express + WebView2 外壳）+ SSH 部署到远程 Linux 的 Agent（单文件产物，依赖需内联）。开源仓库即本仓库：github.com/live-ling/BlockNexus。
 
 ## 与 mcpan 旧工作区的关系（历史背景）
 
@@ -26,6 +26,25 @@ powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1   # 托盘外壳 
      「不允许出现 `node_modules` 路径或未内联的裸模块名」，**不能直接删掉这条防护**。
 - **内存占用必须尽量小**（Agent 跑在 MC 服务器上，与游戏争资源）。给按实例/按会话增长的 Map 加上限，
   参照 `loginFails` 那次的「表满淘汰最旧而非拒绝服务」思路。
+
+## 平台适配范围（2026-10-06 确认）
+
+- **主要平台：Ubuntu 系（Linux）** —— Agent 与面板都可能跑在这里。
+- **Windows 系**：仅作为**桌面外壳**（WebView2 托盘程序）。
+- 适配与测试以这两者为准则；勿为其他平台引入额外复杂度。
+
+## 更名迁移（mcpan → blocknexus）
+
+**兼容期已结束**：已确认**无存量旧 Agent 在生产运行**，因此所有为兼容 MCPan 时代而保留的代码都可清理。
+
+- ✅ **HKDF info 标签已改为 `'blocknexus/*'`**（原先刻意保留 `'mcpan/*'` 作兼容锚点，现已解除）。
+  `AGENT_VERSION` 已随之 0.3.5 → 0.3.6（**破坏性协议变更，必须靠版本号驱动远端自动更新**）。
+  ⚠ `panel/crypto.js` 与 `agent/src/crypto.js` 的标签必须**逐字一致**，改动后务必递增 `AGENT_VERSION`。
+- ⬜ 待清理的遗留兼容代码（均为删除操作，删前建副本）：
+  `agent/src/instance/manager.js` 的 `mcpan.json` 改名回退、
+  `agent/src/instance/java.js` 的 `/opt/mcpan-java` 旧软链分支、
+  `panel/ssh.js` 的 `mcpan-agent` 旧 systemd 服务清理、`README.md` 的「从 MCPan 更名升级」整节。
+- 清单与执行注意见 `docs/iteration-roadmap.md` §4.5。
 
 ## 发版流程
 

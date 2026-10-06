@@ -20,12 +20,13 @@ function hkdf(ikm, salt, info, length = 32) {
 
 function deriveKeys(token, nonceA, nonceP) {
   const salt = Buffer.concat([nonceA, nonceP]);
-  // info 标签沿用 MCPan 时代的 'mcpan/*'：与 panel/crypto.js 两端必须一致，
-  // 改名会让旧 Agent 与新面板握手失败（解密互相踢），等统一弃用旧 Agent 再换
+  // info 标签：2026-10-06 由历史遗留的 'mcpan/*' 正式改为 'blocknexus/*'。
+  // 更名兼容期已结束（已确认无存量旧 Agent 在生产运行），因此不再保留旧标签。
+  // ⚠ 两端（agent/src/crypto.js 与 panel/crypto.js）必须逐字一致，否则握手会互相解密失败。
   return {
-    kA2P: hkdf(token, salt, 'mcpan/a2p'),
-    kP2A: hkdf(token, salt, 'mcpan/p2a'),
-    kProof: hkdf(token, salt, 'mcpan/proof'),
+    kA2P: hkdf(token, salt, 'blocknexus/a2p'),
+    kP2A: hkdf(token, salt, 'blocknexus/p2a'),
+    kProof: hkdf(token, salt, 'blocknexus/proof'),
   };
 }
 
