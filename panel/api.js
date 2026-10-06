@@ -16,6 +16,17 @@ const SESSION_TTL = 7 * 24 * 3600 * 1000;
 // 勾选「记住我」：Cookie 与会话有效期都放宽到 30 天（滑动续期），关浏览器仍保持登录
 const REMEMBER_TTL = 30 * 24 * 3600 * 1000;
 
+// ---------- 测试钩子 ----------
+// 限流表的容量上限、Cookie 的 Secure 标志这类行为，只能从实例内部观察。
+// 为了不为了「可测」而对外暴露生产接口，这里放一个一次性投递箱：
+// 只有测试显式注册过的实例才会写钩子，生产进程里恒为 null、无任何副作用。
+let pendingTestHook = null;
+
+/** 仅供测试：让「下一个」createApi 实例把内部状态交给 hook。生产代码不要调用。 */
+function __setTestHook(hook) {
+  pendingTestHook = hook;
+}
+
 // 面板版本：读 package.json（/api/me、/api/version 共用）
 const APP_VERSION = (() => {
   try { return require('../package.json').version || '0.0.0'; } catch { return '0.0.0'; }
@@ -82,11 +93,16 @@ async function checkLatestRelease(version, force = false) {
   }
 }
 
-function createApi(config, hub, bus, limiterOpts = {}) {
+function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const router = express.Router();
   const sessions = new Map(); // sid -> expires
   const sseClients = new Set();
   const installing = new Set(); // serverId 防并发安装
+
+  // Cookie 的 Secure 标志：TLS 直连、或显式声明强制加时开启。
+  // 请求本身是否加密（req.secure）在 cookieAttrs 里另外判定——面板可能同时通过
+  // http://127.0.0.1 与 https://反代域名 访问，按请求判定才能两边都正确。
+  const FORCE_SECURE_COOKIE = opts.secureCookies === true;
 
   // ---------- 任务日志：留存最近一批，供页面刷新后重放 ----------
   // 纯广播的日志一刷新就丢，而 SSH 装 Node 动辄几分钟，用户很可能中途刷新，
@@ -310,10 +326,39 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     return null;
   }
 
-  // 简单 CSRF 防护：所有 POST 必须是 application/json（跨域表单无法伪造）
-  // 例外：SFTP 直传走二进制流（application/octet-stream），同样无法被跨域表单伪造
+  // 会话 Cookie 的附加属性。Secure 的判定：
+  //   FORCE_SECURE_COOKIE（TLS 直连或 --secure-cookies 显式开启）→ 一定加；
+  //   否则看这次请求本身是否加密（反代下依赖 trust proxy 正确配置）。
+  // 为什么不只用全局开关：面板可能同时经由 http://127.0.0.1 和 https://反代域名 访问，
+  // 全局判定会让其中一边漏掉 Secure——正是本次要修的洞。
+  function cookieAttrs(req) {
+    return FORCE_SECURE_COOKIE || (req && req.secure) ? '; Secure' : '';
+  }
+
+  // 写请求的 CSRF 纵深防御：带 body 的写请求只接受 JSON 或表单编码。
+  // ⚠ 真正的防线是 SameSite=Lax Cookie + 全库无 CORS 中间件，本检查是第二层，不是主防线。
+  // 跨域 HTML 表单只能发出 CORS 安全列表内的 Content-Type；PUT/PATCH/DELETE 与
+  // application/json 都会触发预检，因此在浏览器里无法被跨站表单伪造。
+  const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  const CSRF_SAFE_TYPES = ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data'];
+
+  /**
+   * 请求是否带 body。用 content-length / transfer-encoding 判定，不依赖 Content-Type。
+   * 为什么必须区分「无 body」：前端只在有 body 时才设 Content-Type
+   * （web/src/lib/api.ts:571），而 DELETE /servers/:id 是无 body 的
+   * （web/src/pages/server-settings.tsx:503）——若不放行无 body 请求，
+   * 「删除服务器」会立刻 415 失败。
+   */
+  function hasRequestBody(req) {
+    if (req.headers['transfer-encoding'] !== undefined) return true; // 分块传输
+    return Number(req.headers['content-length'] || 0) > 0;
+  }
+
   router.use((req, res, next) => {
-    if (req.method === 'POST' && !req.is('application/json')) {
+    if (!WRITE_METHODS.has(req.method)) return next();
+    if (!hasRequestBody(req)) return next(); // 无 body 无可伪造载荷
+    if (!CSRF_SAFE_TYPES.some((t) => req.is(t))) {
+      // 例外：SFTP 直传走二进制流，同样无法被跨域表单伪造
       if (req.path.endsWith('/files/upload/sftp')) return next();
       return res.status(415).json({ error: '需要 application/json' });
     }
@@ -322,9 +367,24 @@ function createApi(config, hub, bus, limiterOpts = {}) {
 
   // 公开接口：登录 / 登出 / 面板信息
   // 登录限流：同一来源连续失败 5 次锁定 5 分钟，缓解爆破
-  const LOGIN_MAX_FAILS = 5;
-  const LOGIN_LOCK_MS = 5 * 60 * 1000;
-  const loginFails = new Map(); // ip -> { count, until }
+  const LOGIN_MAX_FAILS = Number(limiterOpts.maxFails) || 5;
+  const LOGIN_LOCK_MS = Number(limiterOpts.lockMs) || 5 * 60 * 1000;
+  // 限流记录上限：loginFails 按来源 IP 建键，公网暴露时可被外部驱动无限增长。
+  // 表满时淘汰最早的记录而非拒绝请求——拒绝等于顺手做出拒绝服务。
+  const LOGIN_MAX_TRACKED = Number(limiterOpts.maxTracked) || 10000;
+  const loginFails = new Map(); // ip -> { count, until, at }
+
+  /**
+   * 清掉锁定期已过、且久未再尝试的记录。
+   * 判定用「最后一次尝试时刻 + 锁定窗口」而不是「现在距最后一次尝试」——
+   * 后者要等到锁定结束后再等满一个窗口才清，等于最多留 2×LOCK_MS。
+   * 锁定窗口是从触发锁定的那一刻起算的，所以 at + LOCK_MS 之后记录即无用。
+   */
+  function pruneLoginFails(now) {
+    for (const [ip, r] of loginFails) {
+      if ((r.until || 0) <= now && now >= (r.at || 0) + LOGIN_LOCK_MS) loginFails.delete(ip);
+    }
+  }
 
   router.post('/login', (req, res) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -336,13 +396,25 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     const { username, password, remember } = req.body || {};
     if (!config.verifyCredentials(username, password)) {
       const count = (rec && rec.until === 0 ? rec.count : 0) + 1;
+      const now = Date.now();
+      // 表满且是新 IP：先清过期记录，仍满则淘汰最早的一条（Map 保持插入序）
+      if (!loginFails.has(ip) && loginFails.size >= LOGIN_MAX_TRACKED) {
+        pruneLoginFails(now);
+        if (loginFails.size >= LOGIN_MAX_TRACKED) {
+          const oldest = loginFails.keys().next().value;
+          if (oldest !== undefined) loginFails.delete(oldest);
+        }
+      }
       loginFails.set(ip, {
         count,
         until: count >= LOGIN_MAX_FAILS ? Date.now() + LOGIN_LOCK_MS : 0,
+        at: now, // 供 GC 判断「最后一次尝试」的时间
       });
       const left = LOGIN_MAX_FAILS - count;
       return res.status(403).json({
-        error: count >= LOGIN_MAX_FAILS ? '尝试次数过多，已锁定 5 分钟' : `用户名或密码错误${left <= 2 ? `（还可尝试 ${left} 次）` : ''}`,
+        error: count >= LOGIN_MAX_FAILS
+          ? `尝试次数过多，已锁定 ${Math.round(LOGIN_LOCK_MS / 60000)} 分钟`
+          : `用户名或密码错误${left <= 2 ? `（还可尝试 ${left} 次）` : ''}`,
       });
     }
     loginFails.delete(ip);
@@ -353,14 +425,14 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     const ttl = rememberOn ? REMEMBER_TTL : SESSION_TTL;
     sessions.set(sid, { exp: Date.now() + ttl, remember: rememberOn });
     const maxAge = rememberOn ? `; Max-Age=${Math.floor(REMEMBER_TTL / 1000)}` : '';
-    res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/${maxAge}`);
+    res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/${maxAge}${cookieAttrs(req)}`);
     res.json({ ok: true });
   });
 
   router.post('/logout', (req, res) => {
     const sid = getSid(req);
     if (sid) sessions.delete(sid);
-    res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+    res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${cookieAttrs(req)}`);
     res.json({ ok: true });
   });
 
@@ -536,7 +608,7 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     res.json({ ok: true });
   });
 
-  // 清理过期的发码记录 / 试错记录 / 改密票据，避免内存随访问量缓慢增长
+  // 清理过期的发码记录 / 试错记录 / 改密票据 / 登录失败记录，避免内存随访问量缓慢增长
   setInterval(() => {
     const now = Date.now();
     for (const [ip, r] of forgotSent) {
@@ -548,7 +620,22 @@ function createApi(config, hub, bus, limiterOpts = {}) {
     for (const [t, exp] of resetTickets) {
       if (exp <= now) resetTickets.delete(t);
     }
+    // loginFails 原先漏在这张清单之外：锁定到期后记录会永久驻留
+    pruneLoginFails(now);
   }, 60e3).unref();
+
+  // ---------- 测试钩子（放在所有内部状态声明之后）----------
+  // 仅当测试显式注册过才生效；生产进程里 pendingTestHook 恒为 null，无任何副作用。
+  if (typeof pendingTestHook === 'function') {
+    const hook = pendingTestHook;
+    pendingTestHook = null; // 一次性投递
+    hook({
+      loginFails,
+      sessions,
+      limits: { LOGIN_MAX_FAILS, LOGIN_LOCK_MS, LOGIN_MAX_TRACKED },
+      pruneLoginFails,
+    });
+  }
 
   // 密码保护可开关：关闭时（默认，本地服务）其余接口直接放行；开启时需要会话
   router.use((req, res, next) => {
@@ -622,7 +709,7 @@ function createApi(config, hub, bus, limiterOpts = {}) {
         config.save();
         const sid = crypto.randomBytes(24).toString('hex');
         sessions.set(sid, { exp: Date.now() + SESSION_TTL, remember: false });
-        res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 3600}`);
+        res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 3600}${cookieAttrs(req)}`);
       } else {
         // 关闭登录时也允许顺带改用户名（面板此时本身免密，无泄露面）
         if (b.username !== undefined && String(b.username).trim()) {
@@ -2925,4 +3012,4 @@ function createApi(config, hub, bus, limiterOpts = {}) {
   return router;
 }
 
-module.exports = { createApi };
+module.exports = { createApi, __setTestHook };

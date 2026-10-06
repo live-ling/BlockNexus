@@ -11,6 +11,7 @@ const { EventEmitter } = require('events');
 const { Config } = require('./config');
 const { AgentHub } = require('./agentlink');
 const { createApi } = require('./api');
+const { parseTrustProxy } = require('./net');
 
 // ---------- 启动参数（命令行优先，其次环境变量）----------
 function argOf(name) {
@@ -23,6 +24,33 @@ const HOST = argOf('host') || process.env.BLOCKNEXUS_HOST || '127.0.0.1';
 const PORT = Number(argOf('port') || process.env.BLOCKNEXUS_PORT) || 3080;
 const TLS_CERT = argOf('tls-cert') || process.env.BLOCKNEXUS_TLS_CERT || null;
 const TLS_KEY = argOf('tls-key') || process.env.BLOCKNEXUS_TLS_KEY || null;
+
+// ---------- 反向代理信任（决定 req.ip，从而决定所有限流按谁分桶）----------
+// 面板放在反向代理后面时，req.ip 会恒为代理地址（通常是 127.0.0.1），于是
+// 登录/找回密码的 IP 限流退化成「全局限流」：任一攻击者失败几次就能把所有人锁在门外。
+// 这里显式声明「我前面有几层可信代理」，让 express 从 X-Forwarded-For 右往左取真实客户端。
+//
+// 默认关闭 = 默认安全：不配就完全不信任转发头。
+// ⚠ 面板若直连公网，绝不能开——否则攻击者可伪造 X-Forwarded-For 绕过限流。
+//
+// 取值：
+//   '1' / '2' …        可信代理层数（推荐）。X-Forwarded-For 是每层代理逐跳追加的，
+//                      express 取「从右往左第 N+1 个」，因此攻击者预塞伪造值无效。
+//   'loopback'         仅信任本机回环代理（express 预设，等价于信任 127.0.0.1/::1）
+//   'linklocal' / 'uniquelocal'   其余 express 预设
+// 取值解析见 panel/net.js（单独成模块以便单测）
+const TRUST_PROXY = parseTrustProxy(argOf('trust-proxy') || process.env.BLOCKNEXUS_TRUST_PROXY);
+
+// ---------- 会话 Cookie 的 Secure 标志 ----------
+// 面板自身走 HTTPS 时自动带上；放在反向代理后面（面板本身是 HTTP）时，用 --secure-cookies 显式开启。
+// ⚠ 仅在确实通过 HTTPS 访问时开启：纯 HTTP 下浏览器会拒绝保存带 Secure 的 Cookie，表现为「登录成功但立刻掉线」。
+const SECURE_COOKIE = argOf('secure-cookies') !== null || process.env.BLOCKNEXUS_SECURE_COOKIES === '1';
+
+// 面板自身是否以 HTTPS 对外（自签或正式证书）。
+// 提前判定：下面注册 /api 时要把「是否 https」告诉 createApi，由它决定会话 Cookie 是否带 Secure。
+// 放在反代后面时面板自身是 HTTP，此时应改用 --secure-cookies。
+const tlsOn = !!(TLS_CERT && TLS_KEY);
+
 const CONFIG_FILE = path.join(__dirname, '..', 'data', 'config.json');
 
 const config = new Config(CONFIG_FILE);
@@ -43,6 +71,8 @@ if (process.env.BLOCKNEXUS_PASSWORD) {
 
 const app = express();
 app.disable('x-powered-by');
+// 反代信任必须在任何读取 req.ip 的中间件之前设置（登录/找回密码的限流都依赖它）
+if (TRUST_PROXY !== null) app.set('trust proxy', TRUST_PROXY);
 app.use(express.json({ limit: '1mb' }));
 // agent.js 匿名下载（手动安装用，文件不含密钥）：根路径方便 curl，
 // README 与前端手动安装命令都指向这里；api.js 里的 /api/agent.js 保留兼容
@@ -56,7 +86,7 @@ app.use(express.static(path.join(__dirname, '..', 'web', 'dist'), {
     if (String(filePath).endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
   },
 }));
-app.use('/api', createApi(config, hub, bus));
+app.use('/api', createApi(config, hub, bus, {}, { secureCookies: tlsOn || SECURE_COOKIE }));
 
 // SPA history 路由回退：/settings、/server/... 等路径直达时返回 index.html。
 // API 与带扩展名的资源路径不回退（缺失照常 404）
@@ -68,12 +98,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// 面板自身也可上 HTTPS（自签或正式证书）；放在反代后面时用不到
-let tlsOn = false;
+// 面板自身也可上 HTTPS；tlsOn 已在上方判定（createApi 注册时会用到）
 let server;
-if (TLS_CERT && TLS_KEY) {
+if (tlsOn) {
   server = https.createServer({ cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) }, app);
-  tlsOn = true;
 } else {
   server = http.createServer(app);
 }
@@ -104,6 +132,16 @@ server.listen(PORT, HOST, () => {
   }
   console.log('  连接方式:   默认「面板连接 Agent」——面板主动连到各服务器上 Agent 监听的端口');
   console.log(`              也支持「Agent 连接面板」：Agent 回连 ws://<本机可达地址>:${PORT}/agent/ws`);
+  if (TRUST_PROXY === null) {
+    console.log('  反代信任:   未启用（按直连地址限流）');
+    if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+      console.log('              若面板在反向代理后面，请加 --trust-proxy 1，否则登录限流会变成全局限流');
+    }
+  } else {
+    console.log(`  反代信任:   已启用（${JSON.stringify(TRUST_PROXY)}）`);
+    console.log('              ⚠ 请确认面板不直连公网，否则 X-Forwarded-For 可被伪造绕过限流');
+  }
+  console.log(`  安全 Cookie: ${tlsOn || SECURE_COOKIE ? 'Secure 已启用' : '未启用（纯 HTTP 访问时正常）'}`);
   console.log('');
   console.log('  配置文件:   ' + CONFIG_FILE);
   console.log('');
