@@ -2,7 +2,7 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
@@ -12,6 +12,7 @@ import { BanListDialog } from '@/components/ban-list-dialog';
 import { ModManagerDialog } from '@/components/mod-manager';
 import { AutoRestartDialog } from '@/components/auto-restart-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
+import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
 import { InstanceStatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -68,6 +69,9 @@ export function InstanceDetailPage({
   const [backupOpen, setBackupOpen] = useState(false);
   const [watchdogOpen, setWatchdogOpen] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
+  const [plugCfgOpen, setPlugCfgOpen] = useState(false);
+  // 是否存在 plugins/ 或 config/ 目录：vanilla 实例不显示「插件配置」入口
+  const [hasConfigDirs, setHasConfigDirs] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [reinstallOpen, setReinstallOpen] = useState(false);
@@ -114,6 +118,23 @@ export function InstanceDetailPage({
     loadInstance();
     loadPlayers();
   }, [loadServer, loadInstance, loadPlayers]);
+
+  // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
+  useEffect(() => {
+    let alive = true;
+    api<{ name: string; type: 'dir' | 'file' }[]>(
+      `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/files?path=`,
+    )
+      .then((entries) => {
+        if (alive) {
+          setHasConfigDirs(entries.some((e) => e.type === 'dir' && (e.name === 'plugins' || e.name === 'config')));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [serverId, instanceName]);
 
   // 运行中：每 20 秒刷新在线人数；启动中不查询（服务端还没开始监听）
   const running = instance?.status === 'running';
@@ -410,6 +431,11 @@ export function InstanceDetailPage({
               <Button size="lg" variant="outline" onClick={() => setPropsOpen(true)}>
                 <Settings2 className="h-4 w-4" /> 配置设置
               </Button>
+              {hasConfigDirs && (
+                <Button size="lg" variant="outline" onClick={() => setPlugCfgOpen(true)}>
+                  <SlidersHorizontal className="h-4 w-4" /> 插件配置
+                </Button>
+              )}
               <Button size="lg" variant="outline" onClick={() => setWatchdogOpen(true)}>
                 <RotateCw className="h-4 w-4" /> 自动重启
                 {watchdogOn && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />}
@@ -615,6 +641,13 @@ export function InstanceDetailPage({
         open={propsOpen}
         onOpenChange={setPropsOpen}
         onSaved={loadInstance}
+        onRestart={() => op('restart')}
+      />
+      <PluginConfigDialog
+        server={server}
+        instance={instance}
+        open={plugCfgOpen}
+        onOpenChange={setPlugCfgOpen}
         onRestart={() => op('restart')}
       />
       <AutoRestartDialog
