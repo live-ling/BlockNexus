@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { CardField } from '@/components/card-field';
 import { api, errText, fmtDiskGB, fmtMB, fmtUptime, timeago, type Me, type ServerSummary } from '@/lib/api';
+import { $ } from '@/lib/i18n';
 import { MaskedText } from '@/components/masked-text';
 
 export function ServersPage({
@@ -68,24 +69,24 @@ export function ServersPage({
       await api('/servers/reorder', { method: 'POST', body: { ids: order } });
     } catch (e) {
       onReorder(servers.map((s) => s.id)); // 失败回滚为服务端顺序
-      console.error('排序保存失败：' + errText(e));
+      console.error($('servers.error.reorder') + errText(e));
     }
   }, [order, onReorder, servers]);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-5 pb-28 pt-7">
       <div className="flex items-center">
-        <h2 className="text-lg font-semibold">我的服务器</h2>
+        <h2 className="text-lg font-semibold">{$('servers.title')}</h2>
         <Button className="ml-auto" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" /> 添加服务器
+          <Plus className="h-4 w-4" /> {$('servers.add')}
         </Button>
       </div>
 
       {servers.length === 0 ? (
         <div className="mt-5 rounded-xl border border-dashed py-16 text-center text-sm text-muted-foreground">
-          还没有服务器
+          {$('servers.empty.title')}
           <br />
-          <span className="text-xs">点击右上角「添加服务器」，面板会通过 SSH 自动安装 Agent</span>
+          <span className="text-xs">{$('servers.empty.hint')}</span>
         </div>
       ) : (
         <div className="mt-5 grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
@@ -138,7 +139,7 @@ export function ServersPage({
                     </span>
                     <span
                       className="shrink-0 cursor-grab self-start text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
-                      title="拖动排序"
+                      title={$('servers.drag.tooltip')}
                       aria-hidden
                     >
                       <GripVertical className="h-4 w-4" />
@@ -154,14 +155,14 @@ export function ServersPage({
                   {/* 系统信息：两列网格 + 定宽标签对齐；内存/磁盘占用来自面板后台拉取的资源快照 */}
                   {s.info ? (
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                      <CardField label="主机" value={s.info.hostname} className="col-span-2" />
+                      <CardField label={$('servers.field.hostname')} value={s.info.hostname} className="col-span-2" />
                       <CardField
-                        label="系统"
+                        label={$('servers.field.system')}
                         value={`${s.info.os} · ${s.info.arch}`}
                         className="col-span-2"
                       />
                       <CardField
-                        label="内存"
+                        label={$('servers.field.memory')}
                         value={
                           s.stats
                             ? `${fmtMB(s.stats.memUsedMB)} / ${fmtMB(s.stats.memTotalMB)}`
@@ -170,7 +171,7 @@ export function ServersPage({
                         className="col-span-2"
                       />
                       <CardField
-                        label="磁盘"
+                        label={$('servers.field.disk')}
                         value={
                           s.stats?.disk
                             ? fmtDiskGB(s.stats.disk.totalGB - s.stats.disk.freeGB, s.stats.disk.totalGB)
@@ -180,18 +181,18 @@ export function ServersPage({
                       />
                       <CardField
                         label="Java"
-                        value={s.info.java.installed ? String(s.info.java.major) : '未安装'}
+                        value={s.info.java.installed ? String(s.info.java.major) : $('servers.java.notInstalled')}
                         tone={s.info.java.installed ? undefined : 'warn'}
                       />
                       <CardField label="Node" value={s.info.node.replace('v', '')} />
                       <CardField
-                        label="在线"
+                        label={$('servers.field.online')}
                         value={
                           s.online && s.onlineSince
-                            ? `已在线 ${fmtUptime(s.onlineSince)}`
+                            ? $('servers.uptime', fmtUptime(s.onlineSince))
                             : s.lastSeen
-                              ? `最近活跃 ${timeago(s.lastSeen)}`
-                              : '从未上线'
+                              ? $('servers.lastSeen', timeago(s.lastSeen))
+                              : $('servers.neverOnline')
                         }
                         tone={s.online ? 'good' : undefined}
                         className="col-span-2"
@@ -199,7 +200,7 @@ export function ServersPage({
                     </div>
                   ) : (
                     <div className="text-xs text-muted-foreground">
-                      {s.installing ? 'Agent 安装中…' : 'Agent 离线，暂无系统信息'}
+                      {s.installing ? $('servers.agent.installing') : $('servers.agent.offline')}
                     </div>
                   )}
                 </CardContent>

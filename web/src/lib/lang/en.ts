@@ -79,4 +79,31 @@ export const en = {
 
   // ---------- 关于页 ----------
   'about.title': 'About',
-}
+
+  // ---------- 服务器列表页 ----------
+  'servers.title': 'My servers',
+  'servers.add': 'Add server',
+  'servers.empty.title': 'No servers yet',
+  'servers.empty.hint': 'Click “Add server” in the top right; the panel will install the Agent over SSH',
+  'servers.drag.tooltip': 'Drag to reorder',
+  'servers.field.hostname': 'Host',
+  'servers.field.system': 'System',
+  'servers.field.memory': 'Memory',
+  'servers.field.disk': 'Disk',
+  'servers.field.online': 'Online',
+  'servers.java.notInstalled': 'Not installed',
+  'servers.uptime': 'Up {0}',
+  'servers.lastSeen': 'Last seen {0}',
+  'servers.neverOnline': 'Never online',
+  'servers.agent.installing': 'Installing Agent…',
+  'servers.agent.offline': 'Agent offline, no system information',
+  'servers.error.reorder': 'Failed to save order: ',
+
+  // ---------- 状态徽章 ----------
+  'badge.installing': 'Installing',
+  'badge.agent.online': 'Agent online',
+  'badge.offline': 'Offline',
+  'badge.online': 'Online',
+  'badge.latency.tooltip': 'Measured panel → server round-trip latency',
+  'badge.latency': 'Latency {0}ms',
+} as const
