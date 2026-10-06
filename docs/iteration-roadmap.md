@@ -301,12 +301,19 @@ P4-* 彼此独立，各自需单独里程碑评估
 > |---|---|---|
 > | 1 | `lib/i18n.ts` 引擎 + 语言切换组件 + 登录主卡片 + 导航栏 + `console-panel` | ✅ |
 > | 2 | `pages/servers.tsx` + `components/status-badge.tsx` | ✅ |
-> | 3 | `pages/server-detail.tsx`、`instance-detail.tsx` | ⬜ |
-> | 4 | `pages/server-settings.tsx`、`panel-settings.tsx` | ⬜ |
-> | 5 | `pages/about.tsx`（含约 300 字的面板介绍长段落） | ⬜ |
-> | 6 | `pages/login.tsx` 的**忘记密码/重置密码整段**（含 `邮箱验证通过，为 X 设置新密码` 这类带变量文案，需先用 `{0}` 参数化） | ⬜ |
-> | 7 | `components/{file-manager,mod-manager,dialogs,backup-*,auto-restart-dialog,plugin-config-dialog,properties-dialog,spark-panel,ai-log-panel,log-viewer,ban-list-dialog,uninstall-dialog,upload-channel}.tsx` | ⬜ |
-> | 8 | `lib/{api,sse,toast}.ts` + `lib/properties.ts`（字段标签与分组名，62 键） | ⬜ |
+> | 3 | `pages/server-detail.tsx`（顺带抽出 `LatencyBadge` 消除页头重复实现） | ✅ |
+> | 4 | `pages/instance-detail.tsx`、`server-settings.tsx`、`panel-settings.tsx` | ⬜ |
+> | 5 | `components/dialogs.tsx`（176 行，单文件最大） | ⬜ |
+> | 6 | `pages/about.tsx`（含约 300 字的面板介绍长段落） | ⬜ |
+> | 7 | `pages/login.tsx` 的**忘记密码/重置密码整段**（含 `邮箱验证通过，为 X 设置新密码` 这类带变量文案，需先用 `{0}` 参数化） | ⬜ |
+> | 8 | `components/{file-manager,mod-manager,backup-*,auto-restart-dialog,plugin-config-dialog,properties-dialog,spark-panel,ai-log-panel,log-viewer,ban-list-dialog,uninstall-dialog,upload-channel}.tsx` | ⬜ |
+> | 9 | `lib/{api,sse,toast,upload,plugin-config}.ts` | ⬜ |
+> | 10 | `lib/properties.ts`（62 个 server.properties 字段的标签/hint/分组/选项说明，**需结构性重构**：建议把可翻译元数据抽到独立模块，否则语言包会涨到 200+ 键） | ⬜ |
+>
+> **进度快照**：待搬 954 行 / 31 个文件（截至第 3 批）。测量口径：排除注释行、`{/* */}` JSX 注释、
+> 以及已用 `$()` 包裹的行——因此数字里仍混有少量中文注释噪音，实际略少。
+>
+> **最大三块**：`dialogs.tsx` 176、`panel-settings.tsx` 111、`server-settings.tsx` 99。
 >
 > **注意**：`login.tsx` 目前只有**主登录卡片**是双语的，忘记密码那三步仍是中文——
 > 属**有意的半成品**（宁可留一块完整未翻，也不做半句中半句英的界面）。
