@@ -45,13 +45,6 @@ class InstanceManager {
     for (const name of names) {
       if (this.map.has(name)) continue;
       const metaFile = path.join(this.dir, name, 'blocknexus.json');
-      // 更名迁移：MCPan 时代的实例元数据叫 mcpan.json，首次扫到时改名升级
-      if (!fs.existsSync(metaFile)) {
-        const legacy = path.join(this.dir, name, 'mcpan.json');
-        try {
-          if (fs.existsSync(legacy)) fs.renameSync(legacy, metaFile);
-        } catch {}
-      }
       try {
         const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
         this.map.set(name, { meta, proc: null, startedAt: null, buf: [], pending: [], flushTimer: null });

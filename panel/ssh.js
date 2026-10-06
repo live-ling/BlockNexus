@@ -401,9 +401,6 @@ async function installAgent(server, log) {
     if (hasSystemd) {
       log('注册 systemd 服务 blocknexus-agent …\n');
       await sftpWrite(sftp, '/etc/systemd/system/blocknexus-agent.service', UNIT.replaceAll('{DIR}', dir));
-      // 更名迁移：清掉 MCPan 时代的旧服务，避免同一目录被两份 unit 拉起互抢
-      await run(conn, `${sudo}systemctl disable --now mcpan-agent 2>&1 || true`);
-      await run(conn, `${sudo}rm -f /etc/systemd/system/mcpan-agent.service`);
       await runChecked(conn, `${sudo}systemctl daemon-reload`, log);
       await runChecked(conn, `${sudo}systemctl enable --now blocknexus-agent`, log);
       await runChecked(conn, `${sudo}systemctl restart blocknexus-agent`, log);
@@ -449,11 +446,8 @@ async function uninstallAgent(server, log) {
       (await run(conn, '[ -d /run/systemd/system ] && echo yes || echo no')).out.trim() === 'yes';
     if (hasSystemd) {
       log('停止并禁用 systemd 服务 blocknexus-agent …\n');
-      // 新旧服务名都清一遍：更名前安装的旧 Agent 服务叫 mcpan-agent
-      for (const name of ['blocknexus-agent', 'mcpan-agent']) {
-        await run(conn, `${sudo}systemctl disable --now ${name} 2>&1 || true`, (c) => log(c, true));
-        await run(conn, `${sudo}rm -f /etc/systemd/system/${name}.service`);
-      }
+      await run(conn, `${sudo}systemctl disable --now blocknexus-agent 2>&1 || true`, (c) => log(c, true));
+      await run(conn, `${sudo}rm -f /etc/systemd/system/blocknexus-agent.service`);
       await run(conn, `${sudo}systemctl daemon-reload`);
     } else {
       log('停止 nohup 进程 …\n');

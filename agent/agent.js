@@ -237,13 +237,6 @@ class InstanceManager {
     for (const name of names) {
       if (this.map.has(name)) continue;
       const metaFile = path.join(this.dir, name, 'blocknexus.json');
-      // 更名迁移：MCPan 时代的实例元数据叫 mcpan.json，首次扫到时改名升级
-      if (!fs.existsSync(metaFile)) {
-        const legacy = path.join(this.dir, name, 'mcpan.json');
-        try {
-          if (fs.existsSync(legacy)) fs.renameSync(legacy, metaFile);
-        } catch {}
-      }
       try {
         const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
         this.map.set(name, { meta, proc: null, startedAt: null, buf: [], pending: [], flushTimer: null });
@@ -3760,8 +3753,8 @@ module.exports = {
         let canLink = true;
         try {
           const cur = fs.readlinkSync(linkPath);
-          // 只覆盖我们自己建的链接（含 MCPan 时代旧路径 /opt/mcpan-java）
-          canLink = cur.includes('blocknexus-java') || cur.includes('mcpan-java');
+          // 只覆盖我们自己建的链接（指向本 Agent 的 JAVA_ROOT）
+          canLink = cur.includes(JAVA_ROOT);
         } catch {
           canLink = true; // 不存在
         }
@@ -3900,7 +3893,7 @@ module.exports = {
       } catch {
         // 链接不存在 → 已在用系统 java
       }
-      if (cur && (cur.includes('blocknexus-java') || cur.includes('mcpan-java'))) {
+      if (cur && cur.includes(JAVA_ROOT)) {
         await this.runSh(`${sudo}rm -f ${JAVA_LINK}`, sudo, 60000);
       }
       this._javaCmd = null;
