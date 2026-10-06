@@ -46,7 +46,7 @@ import {
   type PlayersSnapshot,
   type ServerSummary,
 } from '@/lib/api';
-import { $ } from '@/lib/i18n';
+import { $, getLanguage } from '@/lib/i18n';
 import { subscribeServer } from '@/lib/sse';
 import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
@@ -104,7 +104,7 @@ export function InstanceDetailPage({
         if (hit) setInstance(hit);
         else setNotFound(true);
       })
-      .catch((e) => error('实例信息获取失败', errText(e)));
+      .catch((e) => error($('instanceDetail.error.load'), errText(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, instanceName]);
 
@@ -408,51 +408,51 @@ export function InstanceDetailPage({
                   disabled={busy}
                   onClick={() => op('stop')}
                 >
-                  <Square className="h-4 w-4" /> {starting ? '停止启动' : '停止'}
+                  <Square className="h-4 w-4" /> {starting ? $('instanceDetail.op.stopStarting') : $('instanceDetail.op.stop')}
                 </Button>
                 <Button
                   size="lg"
                   variant="secondary"
                   disabled={busy || starting}
-                  title={starting ? '服务器启动完成后可重启' : undefined}
+                  title={starting ? $('instanceDetail.op.restart.disabled') : undefined}
                   onClick={() => op('restart')}
                 >
-                  <RotateCw className="h-4 w-4" /> 重启
+                  <RotateCw className="h-4 w-4" /> {$('instanceDetail.op.restart')}
                 </Button>
               </>
             ) : (
               <Button size="lg" disabled={busy || instance.status !== 'stopped'} onClick={() => op('start')}>
-                <Play className="h-4 w-4" /> 启动
+                <Play className="h-4 w-4" /> {$('instanceDetail.op.start')}
               </Button>
             )}
             <div className="grid grid-cols-2 gap-1.5">
               <Button size="lg" variant="outline" onClick={() => setFilesOpen(true)}>
-                <FolderOpen className="h-4 w-4" /> 文件
+                <FolderOpen className="h-4 w-4" /> {$('instanceDetail.files')}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setBackupOpen(true)}>
-                <Archive className="h-4 w-4" /> 备份
+                <Archive className="h-4 w-4" /> {$('instanceDetail.backups')}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setBackupScheduleOpen(true)}>
-                <CalendarClock className="h-4 w-4" /> 定时备份
+                <CalendarClock className="h-4 w-4" /> {$('instanceDetail.backupSchedule')}
                 {backupOn && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setModsOpen(true)}>
-                <Puzzle className="h-4 w-4" /> Mod 管理
+                <Puzzle className="h-4 w-4" /> {$('instanceDetail.mods')}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setPropsOpen(true)}>
-                <Settings2 className="h-4 w-4" /> 配置设置
+                <Settings2 className="h-4 w-4" /> {$('instanceDetail.serverProperties')}
               </Button>
               {hasConfigDirs && (
                 <Button size="lg" variant="outline" onClick={() => setPlugCfgOpen(true)}>
-                  <SlidersHorizontal className="h-4 w-4" /> 插件配置
+                  <SlidersHorizontal className="h-4 w-4" /> {$('instanceDetail.pluginConfig')}
                 </Button>
               )}
               <Button size="lg" variant="outline" onClick={() => setWatchdogOpen(true)}>
-                <RotateCw className="h-4 w-4" /> 自动重启
+                <RotateCw className="h-4 w-4" /> {$('instanceDetail.watchdog')}
                 {watchdogOn && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setEditOpen(true)}>
-                <Pencil className="h-4 w-4" /> 编辑
+                <Pencil className="h-4 w-4" /> {$('instanceDetail.edit')}
               </Button>
               {instance.status === 'failed' && (
                 <>
@@ -461,10 +461,10 @@ export function InstanceDetailPage({
                       size="lg"
                       variant="outline"
                       disabled={busy}
-                      title="服务器拉不动核心站点时，由面板下载后经加密通道传到服务器"
+                      title={$('instanceDetail.panelInstall.tooltip')}
                       onClick={panelInstall}
                     >
-                      <CloudDownload className="h-4 w-4" /> 面板代下
+                      <CloudDownload className="h-4 w-4" /> {$('instanceDetail.panelInstall')}
                     </Button>
                   )}
                   <Button
@@ -473,7 +473,7 @@ export function InstanceDetailPage({
                     className="border-amber-600/60 text-amber-700 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-400"
                     onClick={() => setReinstallOpen(true)}
                   >
-                    <RotateCw className="h-4 w-4" /> 重装核心
+                    <RotateCw className="h-4 w-4" /> {$('instanceDetail.reinstall')}
                   </Button>
                 </>
               )}
@@ -483,7 +483,7 @@ export function InstanceDetailPage({
                 className="col-span-2 border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => setDeleteOpen(true)}
               >
-                <Trash2 className="h-4 w-4" /> 删除实例
+                <Trash2 className="h-4 w-4" /> {$('instanceDetail.delete')}
               </Button>
             </div>
           </div>
@@ -497,14 +497,14 @@ export function InstanceDetailPage({
               variant={mainView === 'console' ? 'secondary' : 'ghost'}
               onClick={() => setMainView('console')}
             >
-              <Terminal className="h-3.5 w-3.5" /> 终端
+              <Terminal className="h-3.5 w-3.5" /> {$('instanceDetail.tab.console')}
             </Button>
             <Button
               size="sm"
               variant={mainView === 'ai' ? 'secondary' : 'ghost'}
               onClick={() => setMainView('ai')}
             >
-              <Sparkles className="h-3.5 w-3.5" /> AI 分析
+              <Sparkles className="h-3.5 w-3.5" /> {$('instanceDetail.tab.ai')}
             </Button>
             {/* 未装 spark 不显示标签（装了之后 Mod 管理变更会刷新实例信息把它带出来） */}
             {instance.sparkInstalled && (
@@ -552,7 +552,7 @@ export function InstanceDetailPage({
           <aside className="rounded-xl border bg-card p-3 lg:col-span-2 xl:col-span-1">
             <div className="flex items-center gap-2">
               <Users className="h-3.5 w-3.5 text-muted-foreground" />
-              <b className="text-sm">在线玩家</b>
+              <b className="text-sm">{$('instanceDetail.players')}</b>
               <span className="ml-auto font-mono text-xs text-muted-foreground">
                 {players ? `${players.online ?? '—'}/${players.max}` : `—/${instance.maxPlayers}`}
               </span>
@@ -573,28 +573,28 @@ export function InstanceDetailPage({
                             variant="ghost"
                             size="icon"
                             className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-                            aria-label={`管理玩家 ${name}`}
-                            title="玩家管理"
+                            aria-label={$('instanceDetail.player.manageAria', name)}
+                            title={$('instanceDetail.player.manage')}
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40 font-sans">
                           <DropdownMenuItem onClick={() => setPlayerAction({ name, kind: 'kick' })}>
-                            <LogOut className="h-3.5 w-3.5" /> 踢出
+                            <LogOut className="h-3.5 w-3.5" /> {$('instanceDetail.player.kick')}
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setPlayerAction({ name, kind: 'ban' })}>
-                            <Ban className="h-3.5 w-3.5" /> 封禁
+                            <Ban className="h-3.5 w-3.5" /> {$('instanceDetail.player.ban')}
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setPlayerAction({ name, kind: 'ban-ip' })}>
-                            <Ban className="h-3.5 w-3.5" /> 封禁其 IP
+                            <Ban className="h-3.5 w-3.5" /> {$('instanceDetail.player.banIp')}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`op ${name}`, `${name} 已设为管理员`)}>
-                            <ShieldCheck className="h-3.5 w-3.5" /> 设为管理员
+                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`op ${name}`, $('instanceDetail.player.opDone', name))}>
+                            <ShieldCheck className="h-3.5 w-3.5" /> {$('instanceDetail.player.op')}
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`deop ${name}`, `已取消 ${name} 的管理员`)}>
-                            <ShieldOff className="h-3.5 w-3.5" /> 取消管理员
+                          <DropdownMenuItem onClick={() => void sendPlayerCmd(`deop ${name}`, $('instanceDetail.player.deopDone', name))}>
+                            <ShieldOff className="h-3.5 w-3.5" /> {$('instanceDetail.player.deop')}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -604,12 +604,12 @@ export function InstanceDetailPage({
               ) : (
                 <p className="px-1 py-3 text-xs text-muted-foreground">
                   {!players
-                    ? '查询中…'
+                    ? $('instanceDetail.players.querying')
                     : players.unreachable
-                      ? '服务器尚未响应（启动中？）'
+                      ? $('instanceDetail.players.noResponse')
                       : (players.online ?? 0) > 0
-                        ? '服务端未提供玩家名单'
-                        : '暂无玩家在线'}
+                        ? $('instanceDetail.players.noList')
+                        : $('instanceDetail.players.none')}
                 </p>
               )}
             </div>
@@ -620,7 +620,7 @@ export function InstanceDetailPage({
                 className="w-full text-muted-foreground hover:text-foreground"
                 onClick={() => setBansOpen(true)}
               >
-                <Ban className="h-3.5 w-3.5" /> 封禁目录
+                <Ban className="h-3.5 w-3.5" /> {$('instanceDetail.banList')}
               </Button>
             </div>
           </aside>
@@ -692,14 +692,13 @@ export function InstanceDetailPage({
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title={`删除实例「${instance.name}」？`}
+        title={$('instanceDetail.delete.title', instance.name)}
         description={
           <div>
-            实例目录（含存档）将被永久删除。
+            {$('instanceDetail.delete.desc')}
             {isFailed ? (
               <p className="mt-2 text-xs text-muted-foreground">
-                该实例上次安装失败，目录里只有半成品残留；将跳过备份直接清理
-                （强行删除，无需等待备份完成）。
+                {$('instanceDetail.delete.failedDesc')}
               </p>
             ) : (
               <label className="mt-3 flex items-center gap-2 text-sm font-normal text-foreground">
@@ -707,7 +706,7 @@ export function InstanceDetailPage({
                   checked={backupBeforeDelete}
                   onCheckedChange={(v) => setBackupBeforeDelete(v === true)}
                 />
-                删除前自动创建备份（保留在服务器 .backups 目录，可事后恢复或下载）
+                {$('instanceDetail.delete.backupFirst')}
               </label>
             )}
           </div>
@@ -719,7 +718,11 @@ export function InstanceDetailPage({
               ? { backupFirst: false, force: true }
               : { backupFirst: backupBeforeDelete },
           });
-          success(isFailed ? '已强制删除' : backupBeforeDelete ? '已删除（备份已保留）' : '已删除');
+          success(isFailed
+            ? $('instanceDetail.delete.forced')
+            : backupBeforeDelete
+              ? $('instanceDetail.delete.doneBackup')
+              : $('instanceDetail.delete.done'));
           onBack();
         }}
       />
@@ -785,7 +788,7 @@ function CopyRow({
         <button
           type="button"
           onClick={() => onCopy(value)}
-          title="点击复制"
+          title={$('instanceDetail.copied.tooltip')}
           className="min-w-0 rounded break-words px-0.5 text-left font-mono text-foreground underline decoration-muted-foreground/40 decoration-dotted underline-offset-4 hover:bg-muted hover:decoration-foreground"
         >
           {value}
@@ -797,8 +800,12 @@ function CopyRow({
   );
 }
 
-/** 标签格式化：统一加「：」；不足 4 字的标题中间补空格，使各行列对齐 */
+/**
+ * 标签格式化：加冒号；中文下不足 4 字的标题中间补空格，使各行列对齐。
+ * ⚠ 分隔符必须随语言变化：中文用全角「：」，英文用 ":"（否则会渲染成 "Note：" 这种混排）。
+ */
 function fmtLabel(text: string): string {
+  if (getLanguage() === 'en') return text + ':';
   const pad = text.length === 2 ? text[0] + ' ' + text[1] : text;
   return pad + '：';
 }
@@ -817,7 +824,7 @@ function JavaInstallRow({ serverId, onDone }: { serverId: string; onDone: () => 
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="21">Java 21（推荐）</SelectItem>
+          <SelectItem value="21">{$('instanceDetail.java.recommended', 21)}</SelectItem>
           <SelectItem value="17">Java 17</SelectItem>
         </SelectContent>
       </Select>
@@ -833,7 +840,9 @@ function JavaInstallRow({ serverId, onDone }: { serverId: string; onDone: () => 
               method: 'POST',
               body: { major: Number(major) },
             });
-            success(r.busy ? 'Java 安装已在进行中' : `Java ${major} 安装任务已下发`, '完成后系统信息自动更新');
+            success(r.busy
+              ? $('instanceDetail.java.installing')
+              : $('instanceDetail.java.queued', major), $('instanceDetail.java.queuedDetail'));
           } catch (e) {
             error(errText(e));
           } finally {
@@ -842,7 +851,7 @@ function JavaInstallRow({ serverId, onDone }: { serverId: string; onDone: () => 
           }
         }}
       >
-        {busy ? '安装中…' : '安装'}
+        {busy ? $('instanceDetail.java.installing.btn') : $('instanceDetail.java.install')}
       </Button>
     </div>
   );
@@ -875,28 +884,28 @@ function PlayerActionDialog({
   const [busy, setBusy] = useState(false);
   const meta = {
     kick: {
-      title: `踢出玩家 ${target.name}`,
+      title: $('instanceDetail.ban.kickTitle', target.name),
       cmd: `kick ${target.name}`,
-      hint: '玩家会立即断开连接，可随时重新加入。',
+      hint: $('instanceDetail.ban.kickHint'),
     },
     ban: {
-      title: `封禁玩家 ${target.name}`,
+      title: $('instanceDetail.ban.banTitle', target.name),
       cmd: `ban ${target.name}`,
-      hint: '封禁后该玩家无法进入服务器；可在控制台用 pardon 解除。',
+      hint: $('instanceDetail.ban.banHint'),
     },
     'ban-ip': {
-      title: `封禁 ${target.name} 的 IP`,
+      title: $('instanceDetail.ban.banIpTitle', target.name),
       cmd: `ban-ip ${target.name}`,
-      hint: '同一 IP 的所有玩家都会被拦截；可在控制台用 pardon-ip 解除。',
+      hint: $('instanceDetail.ban.banIpHint'),
     },
   }[target.kind];
   const cmd = reason.trim() ? `${meta.cmd} ${reason.trim()}` : meta.cmd;
   const okText =
     target.kind === 'kick'
-      ? `已踢出 ${target.name}`
+      ? $('instanceDetail.ban.kicked', target.name)
       : target.kind === 'ban'
-        ? `已封禁 ${target.name}`
-        : `已封禁 ${target.name} 的 IP`;
+        ? $('instanceDetail.ban.banned', target.name)
+        : $('instanceDetail.ban.bannedIp', target.name);
 
   const submit = async () => {
     setBusy(true);
@@ -915,16 +924,15 @@ function PlayerActionDialog({
           <AlertDialogTitle>{meta.title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div>
-              将向控制台发送{' '}
               <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{cmd}</code>
-              。{meta.hint}
+              <span className="mt-1 block">{meta.hint}</span>
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <Input
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          placeholder="原因（可选，将随指令下发给服务端）"
+          placeholder={$('instanceDetail.ban.reasonPlaceholder')}
           maxLength={100}
           disabled={busy}
           onKeyDown={(e) => {
@@ -935,7 +943,7 @@ function PlayerActionDialog({
           }}
         />
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{$('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction
             disabled={busy}
             onClick={async (e) => {
@@ -943,7 +951,7 @@ function PlayerActionDialog({
               await submit();
             }}
           >
-            {busy ? '执行中…' : '确认'}
+            {busy ? $('instanceDetail.busy') : $('confirm.ok')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
