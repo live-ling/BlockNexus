@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/select';
 import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary, type SshCheckResult } from '@/lib/api';
 import { uploadFile, uploadFileViaSftp } from '@/lib/upload';
+import { $ } from '@/lib/i18n';
 import { UploadChannelSelect, type UploadChannel } from '@/components/upload-channel';
 import { useToastHelpers } from '@/lib/toast';
 import { FileUpload, type FileUploadItem } from '@/components/motion/file-upload';
@@ -93,15 +94,15 @@ export function AddServerDialog({
     const val = (id: string) => (document.getElementById(id) as HTMLInputElement)?.value ?? '';
     const host = val('add-host').trim();
     if (!host) {
-      error('请填写 SSH 主机');
+      error($('addServer.error.hostRequired'));
       return;
     }
     if (auth === 'password' && !val('add-pass')) {
-      error('请填写 SSH 密码');
+      error($('addServer.error.passwordRequired'));
       return;
     }
     if (auth === 'key' && !val('add-key').trim()) {
-      error('请填写私钥路径或私钥内容');
+      error($('addServer.error.keyRequired'));
       return;
     }
     setChecking(true);
@@ -130,9 +131,9 @@ export function AddServerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader className="shrink-0">
-          <DialogTitle>添加服务器</DialogTitle>
+          <DialogTitle>{$('addServer.title')}</DialogTitle>
           <DialogDescription>
-            填好主机与 SSH 账号后先点「验证连接」，通过后再保存；保存后进入详情页可一键安装 Agent。
+            {$('addServer.description')}
           </DialogDescription>
         </DialogHeader>
         {/* 表单区自身滚动（no-scrollbar 隐藏滚动条）：未溢出贴合内容，超出即滚，底栏固定可见 */}
@@ -140,28 +141,28 @@ export function AddServerDialog({
         {/* 双列紧凑排布：主机/端口、用户/认证方式成对，密码与私钥独占整行 */}
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
           <div className="grid gap-1.5 sm:col-span-2">
-            <Label htmlFor="add-name">名称</Label>
-            <Input id="add-name" className="sm:max-w-sm" placeholder="例如：香港 1 号机" />
+            <Label htmlFor="add-name">{$('addServer.name')}</Label>
+            <Input id="add-name" className="sm:max-w-sm" placeholder={$('addServer.name.placeholder')} />
           </div>
 
           {/* 主机占满剩余宽度，端口按内容收敛为固定窄列 */}
           <div className="flex items-end gap-3 sm:col-span-2">
             <div className="grid min-w-0 flex-1 gap-1.5">
-              <Label htmlFor="add-host">SSH 主机</Label>
+              <Label htmlFor="add-host">{$('addServer.sshHost')}</Label>
               <Input id="add-host" placeholder="1.2.3.4" onChange={invalidate} />
             </div>
             <div className="grid w-[110px] shrink-0 gap-1.5">
-              <Label htmlFor="add-port">SSH 端口</Label>
+              <Label htmlFor="add-port">{$('addServer.sshPort')}</Label>
               <Input id="add-port" defaultValue="22" onChange={invalidate} />
             </div>
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="add-user">SSH 用户（建议 root）</Label>
+            <Label htmlFor="add-user">{$('addServer.sshUser')}</Label>
             <Input id="add-user" defaultValue="root" onChange={invalidate} />
           </div>
           <div className="grid gap-1.5">
-            <Label>认证方式</Label>
+            <Label>{$('addServer.auth')}</Label>
             <Select
               value={auth}
               onValueChange={(v) => {
@@ -173,14 +174,14 @@ export function AddServerDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="password">密码</SelectItem>
-                <SelectItem value="key">私钥</SelectItem>
+                <SelectItem value="password">{$('addServer.auth.password')}</SelectItem>
+                <SelectItem value="key">{$('addServer.auth.key')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           {auth === 'password' ? (
             <div className="grid gap-1.5 sm:col-span-2">
-              <Label htmlFor="add-pass">SSH 密码</Label>
+              <Label htmlFor="add-pass">{$('addServer.sshPassword')}</Label>
               <Input
                 id="add-pass"
                 type="password"
@@ -190,11 +191,11 @@ export function AddServerDialog({
             </div>
           ) : (
             <div className="grid gap-1.5 sm:col-span-2">
-              <Label htmlFor="add-key">私钥路径（本机文件）或直接粘贴私钥内容</Label>
+              <Label htmlFor="add-key">{$('addServer.keyPath')}</Label>
               <Textarea
                 id="add-key"
                 rows={3}
-                placeholder="C:\Users\you\.ssh\id_ed25519 或 -----BEGIN OPENSSH PRIVATE KEY-----"
+                placeholder={$('addServer.keyPath.placeholder')}
                 onChange={invalidate}
               />
             </div>
@@ -203,21 +204,28 @@ export function AddServerDialog({
           {/* 验证结果：连接成功展示环境预检，失败展示原因 */}
           {check && !check.ok && (
             <p className="rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-xs text-destructive sm:col-span-2">
-              ✗ 验证失败：{check.error || '无法连接'}
+              {$('addServer.check.failed', check.error || $('dialog.cannotConnect'))}
             </p>
           )}
           {check?.ok && (
             <div className="grid gap-1.5 rounded-md border bg-muted/40 px-3 py-2.5 text-xs sm:col-span-2">
               {check.local ? (
-                <span className="text-primary">✓ 本机服务器：保存后由面板直接托管 Agent，无需 SSH</span>
+                <span className="text-primary">{$('addServer.check.local')}</span>
               ) : (
                 <>
-                  <span className="text-primary">✓ SSH 连接成功（{check.user}）</span>
-                  <span className="text-muted-foreground">系统：{check.os || '未知'} · {check.arch || '—'}</span>
+                  <span className="text-primary">{$('addServer.check.ok', check.user ?? '')}</span>
                   <span className="text-muted-foreground">
-                    权限：{check.isRoot ? 'root' : check.sudoOk ? '普通用户（免密 sudo）' : '普通用户'}
-                    {' · '}Node：{check.node || '未安装'}
-                    {' · '}Java：{check.javaMajor ? `Java ${check.javaMajor}` : '未安装'}
+                    {$('addServer.check.system', check.os || $('dialog.unknown'), check.arch || '—')}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {$('addServer.check.privilege',
+                      check.isRoot
+                        ? $('addServer.check.root')
+                        : check.sudoOk
+                          ? $('addServer.check.sudo')
+                          : $('addServer.check.user'))}
+                    {' · '}{$('addServer.check.node', check.node || $('dialog.notInstalled'))}
+                    {' · '}{$('addServer.check.java', check.javaMajor ? `Java ${check.javaMajor}` : $('dialog.notInstalled'))}
                   </span>
                 </>
               )}
@@ -232,23 +240,23 @@ export function AddServerDialog({
           {mode === 'outbound' ? (
             <>
               <div className="grid gap-1.5">
-                <Label>连接方式</Label>
+                <Label>{$('addServer.mode')}</Label>
                 <Select value={mode} onValueChange={(v) => setMode(v as 'outbound' | 'inbound')}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="outbound">面板连接 Agent（推荐，Agent 在公网）</SelectItem>
-                    <SelectItem value="inbound">Agent 连接面板（面板有公网地址时）</SelectItem>
+                    <SelectItem value="outbound">{$('addServer.mode.outbound')}</SelectItem>
+                    <SelectItem value="inbound">{$('addServer.mode.inbound')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="grid w-[110px] gap-1.5">
-                <Label htmlFor="add-aPort">Agent 端口</Label>
+                <Label htmlFor="add-aPort">{$('addServer.agentPort')}</Label>
                 <Input id="add-aPort" defaultValue={AGENT_PORT} />
               </div>
               <p className="text-[11px] leading-snug text-muted-foreground sm:col-span-2">
-                Agent 会在服务器上监听该端口，面板主动连入；请在服务器安全组/防火墙放行此端口（TCP）。
+                {$('addServer.agentPort.hint')}
               </p>
               <label className="flex items-start gap-2 text-sm sm:col-span-2">
                 <Checkbox
@@ -257,9 +265,9 @@ export function AddServerDialog({
                   onCheckedChange={(v) => setUseTls(v === true)}
                 />
                 <span>
-                  使用 TLS 加密（wss）
+                  {$('addServer.tls')}
                   <span className="block text-xs text-muted-foreground">
-                    安装时在服务器上用 openssl 生成自签证书，面板固定其指纹防中间人；应用层本身已有 token 加密，此项用于隐藏传输元数据。
+                    {$('addServer.tls.hint')}
                   </span>
                 </span>
               </label>
@@ -267,23 +275,23 @@ export function AddServerDialog({
           ) : (
             <>
               <div className="grid gap-1.5">
-                <Label>连接方式</Label>
+                <Label>{$('addServer.mode')}</Label>
                 <Select value={mode} onValueChange={(v) => setMode(v as 'outbound' | 'inbound')}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="outbound">面板连接 Agent（推荐，Agent 在公网）</SelectItem>
-                    <SelectItem value="inbound">Agent 连接面板（面板有公网地址时）</SelectItem>
+                    <SelectItem value="outbound">{$('addServer.mode.outbound')}</SelectItem>
+                    <SelectItem value="inbound">{$('addServer.mode.inbound')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="add-panel">面板地址（Agent 回连用）</Label>
+                <Label htmlFor="add-panel">{$('addServer.panelUrl')}</Label>
                 <Input id="add-panel" defaultValue={defaultPanel} />
               </div>
               <p className="text-[11px] leading-snug text-amber-500/90 sm:col-span-2">
-                ⚠ 必须是远程服务器能访问到本面板的地址；面板在 NAT 后时请填公网地址（frp / Tailscale 等）。
+                {$('addServer.panelUrl.hint')}
               </p>
             </>
           )}
@@ -291,20 +299,20 @@ export function AddServerDialog({
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button variant="secondary" disabled={checking || busy} onClick={doCheck}>
-            {checking ? '验证中…' : check?.ok ? '重新验证' : '验证连接'}
+            {checking ? $('addServer.verifying') : check?.ok ? $('addServer.reverify') : $('addServer.verify')}
           </Button>
           <Button
             disabled={busy || checking || !check?.ok}
-            title={check?.ok ? undefined : '请先通过「验证连接」'}
+            title={check?.ok ? undefined : $('addServer.verify.first')}
             onClick={async () => {
               setBusy(true);
               try {
                 const val = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
                 const body = {
-                  name: val('add-name') || '未命名',
+                  name: val('add-name') || $('dialog.unnamed'),
                   host: val('add-host').trim(),
                   sshPort: val('add-port'),
                   sshUser: val('add-user').trim(),
@@ -316,18 +324,18 @@ export function AddServerDialog({
                   agentTls: mode === 'outbound' && useTls,
                   panelUrl: mode === 'inbound' ? val('add-panel').trim() : '',
                 };
-                if (!body.host) throw new Error('请填写 SSH 主机');
+                if (!body.host) throw new Error($('addServer.error.hostRequired'));
                 const s = await api<ServerSummary>('/servers', { method: 'POST', body });
                 onOpenChange(false);
                 onCreated(s);
               } catch (e) {
-                error('添加失败', errText(e));
+                error($('addServer.error.addFailed'), errText(e));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            保存
+            {$('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -358,60 +366,60 @@ export function EditServerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader className="shrink-0">
-          <DialogTitle>编辑服务器</DialogTitle>
+          <DialogTitle>{$('editServer.title')}</DialogTitle>
         </DialogHeader>
         {/* 表单区自身滚动，底栏固定（与添加弹窗一致） */}
         <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         {/* 与添加弹窗一致：双列紧凑排布，端口等短字段按内容收敛宽度 */}
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
           <div className="grid gap-1.5 sm:col-span-2">
-            <Label htmlFor="e-name">名称</Label>
+            <Label htmlFor="e-name">{$('addServer.name')}</Label>
             <Input id="e-name" className="sm:max-w-sm" defaultValue={server.name} />
           </div>
           {/* 主机占满剩余宽度，端口按内容收敛为固定窄列 */}
           <div className="flex items-end gap-3 sm:col-span-2">
             <div className="grid min-w-0 flex-1 gap-1.5">
-              <Label htmlFor="e-host">SSH 主机</Label>
+              <Label htmlFor="e-host">{$('addServer.sshHost')}</Label>
               <Input id="e-host" defaultValue={server.host} />
             </div>
             <div className="grid w-[110px] shrink-0 gap-1.5">
-              <Label htmlFor="e-port">SSH 端口</Label>
+              <Label htmlFor="e-port">{$('addServer.sshPort')}</Label>
               <Input id="e-port" defaultValue={String(server.ssh.port)} />
             </div>
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="e-user">SSH 用户</Label>
+            <Label htmlFor="e-user">{$('addServer.sshUser')}</Label>
             <Input id="e-user" defaultValue={server.ssh.user} />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="e-pass">SSH 密码（留空不修改）</Label>
+            <Label htmlFor="e-pass">{$('editServer.sshPassword')}</Label>
             <Input id="e-pass" type="password" placeholder="••••••" />
           </div>
           <div className="grid gap-1.5">
-            <Label>连接方式</Label>
+            <Label>{$('addServer.mode')}</Label>
             <Select value={server.agent.mode || 'outbound'} disabled>
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="outbound">面板连接 Agent</SelectItem>
-                <SelectItem value="inbound">Agent 连接面板</SelectItem>
+                <SelectItem value="outbound">{$('editServer.mode.outbound')}</SelectItem>
+                <SelectItem value="inbound">{$('editServer.mode.inbound')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           {(server.agent.mode || 'outbound') === 'inbound' ? (
             <div className="grid gap-1.5">
-              <Label htmlFor="e-panel">面板地址（Agent 回连）</Label>
+              <Label htmlFor="e-panel">{$('addServer.panelUrl')}</Label>
               <Input id="e-panel" defaultValue={server.agent.panelUrl} />
             </div>
           ) : (
             <div className="grid w-[110px] gap-1.5">
-              <Label htmlFor="e-aPort">Agent 端口</Label>
+              <Label htmlFor="e-aPort">{$('addServer.agentPort')}</Label>
               <Input id="e-aPort" defaultValue={String(server.agent.port || 3099)} />
             </div>
           )}
           <p className="text-[11px] leading-snug text-muted-foreground sm:col-span-2">
-            连接方式建好后不可改；如需更换请删除后重新添加。
+            {$('editServer.mode.hint')}
           </p>
           {(server.agent.mode || 'outbound') === 'outbound' && (
             <label className="flex items-start gap-2 text-sm sm:col-span-2">
@@ -421,9 +429,9 @@ export function EditServerDialog({
                 onCheckedChange={(v) => setEditTls(v === true)}
               />
               <span>
-                使用 TLS 加密（wss）
+                {$('addServer.tls')}
                 <span className="block text-xs text-muted-foreground">
-                  改动后需重新安装 Agent 才会生效（安装时生成证书并记录指纹）。
+                  {$('editServer.tls.hint')}
                 </span>
               </span>
             </label>
@@ -432,7 +440,7 @@ export function EditServerDialog({
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {$('common.cancel')}
           </Button>
           <Button
             disabled={busy}
@@ -454,16 +462,16 @@ export function EditServerDialog({
                 if (pass) body.sshPassword = pass;
                 await api(`/servers/${server.id}`, { method: 'PUT', body });
                 onOpenChange(false);
-                success('已保存');
+                success($('common.saved'));
                 onSaved();
               } catch (e) {
-                error('保存失败', errText(e));
+                error($('editServer.error.saveFailed'), errText(e));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            保存
+            {$('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -493,14 +501,14 @@ export function TokenDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>服务器 Token</DialogTitle>
-          <DialogDescription>Agent 与面板加密通道的共享密钥，请妥善保管。</DialogDescription>
+          <DialogTitle>{$('token.title')}</DialogTitle>
+          <DialogDescription>{$('token.description')}</DialogDescription>
         </DialogHeader>
         <code className="block break-all rounded-md border bg-muted/50 p-3 font-mono text-xs text-primary">
-          {token ?? '加载中…'}
+          {token ?? $('common.loading')}
         </code>
         <p className="text-xs text-muted-foreground">
-          如怀疑泄露，可在「编辑」旁重置 token（需重新安装/更新远程 agent.json 后生效）。
+          {$('token.hint')}
         </p>
       </DialogContent>
     </Dialog>
