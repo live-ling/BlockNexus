@@ -13,6 +13,19 @@ const { VERSION } = require('./config.js');
 const { computeProof, deriveKeys } = require('./crypto.js');
 const state = require('./state.js');
 
+/**
+ * 读布尔型环境变量。
+ *
+ * 为什么不能直接 `if (process.env.X)`：那样**任何非空字符串都为真**，
+ * 于是 `BLOCKNEXUS_INSECURE=0`、`=false`、`=no` 都会被当成「开启」——
+ * 用户越是明确地写 false 想关掉它，越是把它打开了（与意图完全相反）。
+ * 只认这几个明确的肯定值，其余（含 '0'/'false'/空串）一律为 false。
+ */
+function envFlag(name) {
+  const v = String(process.env[name] || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
 // ======================= WebSocket（客户端 + 服务端，RFC6455 子集） =======================
 // 同一套帧编解码，两种角色：
 //   role='client'：主动连接对端，发送的帧必须掩码
@@ -62,7 +75,9 @@ class WSSocket extends EventEmitter {
         'Sec-WebSocket-Version': '13',
       },
       // 自签证书的面板：Agent 侧可用 --insecure / BLOCKNEXUS_INSECURE=1 / agent.json {tlsInsecure} 放行
-      rejectUnauthorized: process.env.BLOCKNEXUS_INSECURE || state.insecureTls ? false : true,
+      // ⚠ 用 envFlag 而不是直接读环境变量：`process.env.X` 对**任何非空字符串**都为真，
+      //    于是 BLOCKNEXUS_INSECURE=0 / =false 反而会**关掉** TLS 校验——与写它的人意图完全相反。
+      rejectUnauthorized: envFlag('BLOCKNEXUS_INSECURE') || state.insecureTls ? false : true,
     });
     req.setTimeout(15000, () => req.destroy(new Error('连接超时')));
     req.on('upgrade', (res, socket, head) => {
@@ -338,11 +353,15 @@ function panelWsUrl(base) {
 function verifyProof(keys, label, nonceC, nonceP, proofB64, who) {
   const want = computeProof(keys.kProof, label, nonceC, nonceP);
   const got = Buffer.from(String(proofB64 || ''), 'base64');
-  if (process.env.BLOCKNEXUS_DEBUG_HANDSHAKE) {
+  if (envFlag('BLOCKNEXUS_DEBUG_HANDSHAKE')) {
+    // ⚠ 刻意**不打印 kProof**：它是 HKDF 从 token 派生的**密钥本身**，
+    // 打前 64 bit 就等于把密钥的一部分写进日志；而这行调试输出本来是长期留在
+    // 服务器上的（systemd journal），泄露面是持续的。
+    // 诊断握手不匹配并不需要它——对比 want/got 前缀已经足够定位「哪一侧的 proof 不对」。
+    // nonce 是握手时明文传输的公开值，want/got 是 HMAC 输出，泄露它们不揭示密钥。
     console.error('[dbg] label=' + label +
       ' nonceC=' + nonceC.toString('hex') +
       ' nonceP=' + nonceP.toString('hex') +
-      ' kProof=' + keys.kProof.toString('hex').slice(0, 16) +
       ' want=' + want.toString('hex').slice(0, 16) +
       ' got=' + got.toString('hex').slice(0, 16));
   }
@@ -442,4 +461,4 @@ function runHandshake(ws, opts) {
   });
 }
 
-module.exports = { WS_GUID, WSSocket, WSServer, panelWsUrl, verifyProof, runHandshake };
+module.exports = { WS_GUID, WSSocket, WSServer, panelWsUrl, verifyProof, runHandshake, envFlag };
