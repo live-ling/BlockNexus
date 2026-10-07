@@ -72,6 +72,15 @@ function makePanel({ limiterOpts = {}, withErrorHandler = true, trustProxy = und
   // 需要「大量不同来源 IP」的用例必须开 trust proxy，否则 req.ip 恒为 127.0.0.1，
   // 每张表只会有一条记录——上限永远触发不到，断言就成了**空转通过**。
   if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
+  // 复刻 server.js 的顺序：**安全头在 express.json 之前**。
+  // 顺序是要点：body parser 抛错会跳过它之后的所有普通中间件直奔错误处理器，
+  // 放后面的话畸形请求的响应会丢掉这些头。
+  app.use((req, res, next) => {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+  });
   app.use(express.json({ limit: '1mb' })); // ← 与 server.js:76 一致（app 级、router 之前）
 
   let internal = null;
@@ -423,6 +432,30 @@ function jsonPost(base, p, body, headers = {}) {
       const plain = await fetch(`${panel.base}/api/servers/srv1`);
       const bodyPlain = await plain.json();
       check('不带 ?token=1 时不回 token', bodyPlain.token === undefined, JSON.stringify(bodyPlain.token));
+    } finally {
+      await panel.close();
+    }
+  }
+
+  // ================= 基础安全响应头 =================
+  {
+    const panel = await makePanel();
+    try {
+      const ok = await fetch(`${panel.base}/api/me`);
+      check('正常响应带 X-Frame-Options: DENY', ok.headers.get('x-frame-options') === 'DENY');
+      check('正常响应带 X-Content-Type-Options: nosniff', ok.headers.get('x-content-type-options') === 'nosniff');
+      check('正常响应带 Referrer-Policy: no-referrer', ok.headers.get('referrer-policy') === 'no-referrer');
+
+      // 这条才是关键：错误响应也必须带上。
+      // body parser 抛错会跳过其后注册的普通中间件，所以头中间件必须放在它**之前**——
+      // 放后面时这里会拿到 null（我第一版就是放错了，靠这条断言才发现）。
+      const bad = await rawPost(panel.base, '/api/echo', '{bad');
+      check('HTTP 400', bad.status === 400, `实际 ${bad.status}`);
+      check(
+        '**错误响应**也带安全头（证明中间件顺序正确）',
+        bad.headers.get('x-frame-options') === 'DENY',
+        `X-Frame-Options=${bad.headers.get('x-frame-options')}`,
+      );
     } finally {
       await panel.close();
     }
