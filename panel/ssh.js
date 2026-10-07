@@ -212,23 +212,30 @@ async function ensureNode(conn, sudo, log) {
   }
   log(`改用 Node 官方二进制包（${NODE_TARBALL_VERSION}, ${arch}），多镜像尝试…\n`);
   const urls = nodeTarballUrls(arch).map((u) => `'${u}'`).join(' ');
-  // 注意必须用换行拼接：do/fi 后面不能接 ';'，整串经 SSH 交给远端 shell 执行
-  const download = [
+  // ⚠ 必须用 `mktemp -d` 造**私有且不可预测**的临时目录，不能用固定的
+  //   /tmp/blocknexus-node.tar.gz：
+  //   /tmp 全局可写，本地低权限用户可以**抢先**在固定路径上放一个符号链接或投毒文件。
+  //   随后 root 的下载会顺着符号链接把内容写到任意路径（覆盖 /etc/sudoers 之类），
+  //   解压更直接——root 执行攻击者提供的 tar 包 = 本地提权到 root。
+  //   mktemp -d 建出的目录是 700 且名字随机，别人既猜不到也进不去。
+  //
+  //  下载与解压合并成**一条**脚本：分开执行的话 $tmpd 不会留在下一个会话里，
+  //  又会退回到「用一个固定文件把路径传过去」的老问题。
+  const install = [
+    'tmpd=$(mktemp -d) || exit 1',
+    "trap 'rm -rf \"$tmpd\"' EXIT",
+    'ok=0',
     'for u in ' + urls + '; do',
     '  if command -v curl >/dev/null 2>&1; then',
-    '    curl -fL --connect-timeout 8 --retry 2 -o /tmp/blocknexus-node.tar.gz "$u" && break',
+    '    curl -fL --connect-timeout 8 --retry 2 -o "$tmpd/node.tar.gz" "$u" && ok=1 && break',
     '  elif command -v wget >/dev/null 2>&1; then',
-    '    wget -q --timeout=30 -O /tmp/blocknexus-node.tar.gz "$u" && break',
+    '    wget -q --timeout=30 -O "$tmpd/node.tar.gz" "$u" && ok=1 && break',
     '  fi',
     'done',
-    '[ -s /tmp/blocknexus-node.tar.gz ]',
+    '[ "$ok" = 1 ] && [ -s "$tmpd/node.tar.gz" ]',
+    `${sudo}tar -xzf "$tmpd/node.tar.gz" -C /usr/local --strip-components=1`,
   ].join('\n');
-  await runChecked(conn, download, log);
-  await runChecked(
-    conn,
-    `${sudo}tar -xzf /tmp/blocknexus-node.tar.gz -C /usr/local --strip-components=1 && ${sudo}rm -f /tmp/blocknexus-node.tar.gz`,
-    log,
-  );
+  await runChecked(conn, install, log);
   cur = await versionNow();
   if (!cur || cur.major < NODE_MIN_MAJOR) {
     throw new Error('Node 安装后仍不可用，请手动安装 Node.js >= 16 后重试');

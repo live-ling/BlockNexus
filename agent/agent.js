@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.3.7';
+const AGENT_VERSION = '0.3.8';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -3830,6 +3830,7 @@ __modules["src/instance/java.js"] = function (module, exports, __require, __dirn
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const net = require('net');
 const { spawn } = require('child_process');
 const { spawnSync } = require('child_process');
@@ -3963,7 +3964,13 @@ module.exports = {
     );
 
     let lastErr = null;
-    const tmp = `/tmp/blocknexus-jre${major}.tar.gz`;
+    // ⚠ 必须用 mkdtemp 造**私有且不可预测**的目录，不能用固定的
+    //   /tmp/blocknexus-jre${major}.tar.gz：/tmp 全局可写，服务器上任意本地低权限用户
+    //   都能**抢先**在那个固定路径放符号链接或投毒文件。随后 Agent（通常以 root 运行）
+    //   的下载会顺着链接写到任意路径，而 `tar -xzf` 更是直接以 root 执行攻击者的包
+    //   = 本地提权到 root。mkdtemp 建的目录权限 700 且名字随机，别人猜不到也进不去。
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blocknexus-jre-'));
+    const tmp = path.join(tmpDir, `jre${major}.tar.gz`);
     for (const url of sources) {
       try {
         this.emitJava(`下载 Temurin JRE ${major}…`, 0);
@@ -3978,7 +3985,7 @@ module.exports = {
         this.emitJava(`解压到 ${JAVA_ROOT}…`);
         await this.runSh(`${sudo}mkdir -p ${JAVA_ROOT}`, sudo, 60000);
         await this.runSh(`${sudo}tar -xzf ${tmp} -C ${JAVA_ROOT}`, sudo, 300000);
-        await this.runSh(`${sudo}rm -f ${tmp}`, sudo, 60000);
+        await this.runSh(`${sudo}rm -rf ${tmpDir}`, sudo, 60000);
         const dirs = fs.readdirSync(JAVA_ROOT).filter((d) => jdkMajor(d) === major);
         if (!dirs.length) throw new Error('解压后未找到 JDK 目录');
         const jdk = path.join(JAVA_ROOT, dirs[dirs.length - 1]);
@@ -4002,6 +4009,10 @@ module.exports = {
       } catch (e) {
         lastErr = e;
         this.emitJava('下载源失败: ' + e.message);
+        // 该源失败也要清掉临时目录，否则每个失败的镜像源都会漏一个 ~50MB 的 tar 在 /tmp
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {}
       }
     }
     throw lastErr || new Error('Temurin 下载失败');
