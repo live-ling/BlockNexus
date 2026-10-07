@@ -62,13 +62,30 @@ function isLanguageCode(v: unknown): v is LanguageCode {
 }
 
 /**
- * 初始化：从 localStorage 恢复。
- * 存储不可用（隐私模式/被禁用）时静默回退默认值，绝不抛异常。
+ * 初始化：从 localStorage 恢复；无记录时尝试按浏览器语言判断，再退回默认值。
+ * 浏览器语言判断只接受 zh/en 两种语言里的一种，其余（klingon/ja/de/...）一律用默认。
+ *
+ * 为什么这么做——审计背景：
+ *   原先无此回退，登录页固定默认中文，导致英文用户连登录表单都读不懂。
+ *   加上这一行后，登录前就能看到自己语言；不需要在登录页再放漂浮切换。
  */
+function detectFromNavigator(): LanguageCode | null {
+  try {
+    const nav = globalThis.navigator?.language?.toLowerCase() || ''
+    if (nav.startsWith('zh')) return 'zh'
+    if (nav.startsWith('en')) return 'en'
+  } catch {
+    // 忽略：navigator 不可访问
+  }
+  return null
+}
+
 export function initLanguage(): LanguageCode {
   try {
     const saved = globalThis.localStorage?.getItem(STORAGE_KEY)
-    if (isLanguageCode(saved)) currentLanguage = saved
+    if (isLanguageCode(saved)) return (currentLanguage = saved)
+    const detected = detectFromNavigator()
+    if (detected) currentLanguage = detected
   } catch {
     // 忽略：用默认语言
   }

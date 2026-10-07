@@ -2,7 +2,6 @@
 // 三页共用同一套全屏背景（login-bg.jpg）：图片铺满 + 轻渐变遮罩，卡片毛玻璃浮在上面
 
 import { useEffect, useRef, useState } from 'react';
-import { LanguageToggle } from '@/components/language-toggle';
 import { TextReveal } from '@/components/motion/text-reveal';
 import { OTPInput, type OTPStatus } from '@/components/motion/otp-input';
 import { Button } from '@/components/ui/button';
@@ -28,8 +27,8 @@ function AuthShell({ children }: { children: React.ReactNode }) {
         className="pointer-events-none absolute inset-0 h-full w-full object-cover"
       />
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-background/35 via-background/15 to-background/5" />
-      {/* 语言切换放在登录之前可达：否则英文用户连登录页都读不懂 */}
-      <LanguageToggle className="absolute right-4 top-4 z-10" />
+      {/* 不再放漂浮 LanguageToggle：首次访问的语言由 initLanguage() 按浏览器自动判定，
+          进入面板后可在「设置 → 语言」里切换。 */}
       {children}
     </div>
   );

@@ -2,7 +2,7 @@ import { navigate } from '@/lib/router';
 // 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Globe, Info, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
+import { ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Markdown } from '@/components/markdown';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { aiListModels, aiTest, api, errText, getVersion, type AiTestResult, type AppVersion, type PanelSettings } from '@/lib/api';
 import { $ } from '@/lib/i18n';
+import { getLanguage, setLanguage, LANGUAGE_LABELS, type LanguageCode } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 // 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
@@ -23,6 +24,7 @@ const ACCENTS = {
   notify: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
   ai: 'border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   update: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
+  language: 'border-pink-500/25 bg-pink-500/10 text-pink-600 dark:text-pink-400',
   info: 'border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-400',
 } as const;
 
@@ -101,7 +103,8 @@ export function PanelSettingsPage({
         <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
         <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
         <VersionCard accent="update" className="col-span-12" />
-        <AboutEntryCard accent="info" className="col-span-12" />
+        <LanguageCard accent="language" className="col-span-12 md:col-span-6" />
+        <AboutEntryCard accent="info" className="col-span-12 md:col-span-6" />
       </div>
     </div>
   );
@@ -171,6 +174,53 @@ function AboutEntryCard({ accent, className = '' }: { accent: Accent; className?
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
       </button>
     </Card>
+  );
+}
+
+/**
+ * 语言切换：把原先漂浮在顶栏/登录页的 LanguageToggle 搬进设置页。
+ *
+ * 为什么仍然 reload：与原组件一致——`$()` 是同步取词，刷新一次即可让所有可见文案
+ * 切换到目标语言，无需给所有组件做重渲染订阅。代价是未保存的表单内容会丢，
+ * 但设置页通常没有未保存编辑，所以这是合适的。
+ */
+function LanguageCard({ accent, className = '' }: { accent: Accent; className?: string }) {
+  const current = getLanguage();
+  // options 按当前语言展示标签，避免自身翻译抖动（语言名用自家文字写自己是 i18n.ts 的约定）
+  const options: LanguageCode[] = ['zh', 'en'];
+  return (
+    <SettingsCard
+      title={$('panelSettings.language.title')}
+      description={$('panelSettings.language.desc')}
+      icon={<Languages className="h-4 w-4" />}
+      accent={accent}
+      className={className}
+    >
+      <div className="grid gap-3 sm:max-w-xs">
+        <Field label={$('panelSettings.language.current')}>
+          <Select
+            value={current}
+            onValueChange={(v) => {
+              if (v !== current) {
+                setLanguage(v as LanguageCode);
+                location.reload();
+              }
+            }}
+          >
+            <SelectTrigger aria-label={$('panelSettings.language.title')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((code) => (
+                <SelectItem key={code} value={code}>
+                  {LANGUAGE_LABELS[code]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+    </SettingsCard>
   );
 }
 

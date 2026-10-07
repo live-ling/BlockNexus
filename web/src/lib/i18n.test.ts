@@ -163,10 +163,87 @@ describe('语言持久化', () => {
   })
 })
 
+describe('initLanguage 浏览器语言回退（首次访问判定登录页语言）', () => {
+  // 关键审计背景：原先登录页固定默认「语言」导致英文用户连表单都读不懂。
+  // 现在 localStorage 无记录时按 navigator.language 判定一次。
+  function stubNavigator(lang: string | undefined) {
+    vi.stubGlobal('navigator', { language: lang })
+  }
+  function stubStorageEmpty() {
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
+  }
+
+  it('存储空 + navigator.language=zh-CN → zh', () => {
+    stubStorageEmpty()
+    stubNavigator('zh-CN')
+    __resetLanguageForTest()
+    expect(initLanguage()).toBe('zh')
+  })
+
+  it('存储空 + navigator.language=en-US → en', () => {
+    stubStorageEmpty()
+    stubNavigator('en-US')
+    __resetLanguageForTest()
+    expect(initLanguage()).toBe('en')
+  })
+
+  it('存储空 + navigator.language=zh-HK（港繁体）→ zh（前缀匹配）', () => {
+    stubStorageEmpty()
+    stubNavigator('zh-HK')
+    __resetLanguageForTest()
+    expect(initLanguage()).toBe('zh')
+  })
+
+  it('存储空 + navigator.language=ja-JP（不支持的语言）→ 默认值 zh', () => {
+    stubStorageEmpty()
+    stubNavigator('ja-JP')
+    __resetLanguageForTest()
+    expect(initLanguage()).toBe('zh')
+  })
+
+  it('存储已有 zh 时，navigator.language=en 仍以存储为准（用户偏好优先）', () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'zh', setItem: () => {} })
+    stubNavigator('en-US')
+    __resetLanguageForTest()
+    expect(initLanguage()).toBe('zh')
+  })
+
+  it('navigator.language 不可访问时不抛异常', () => {
+    stubStorageEmpty()
+    vi.stubGlobal('navigator', undefined)
+    __resetLanguageForTest()
+    expect(() => initLanguage()).not.toThrow()
+    expect(initLanguage()).toBe('zh')
+  })
+})
+
 describe('LANGUAGES 注册表', () => {
   it('包含两种语言且与包内容一致', () => {
     expect(Object.keys(LANGUAGES).sort()).toEqual(['en', 'zh'])
     expect(LANGUAGES.zh['common.save']).toBe(zh['common.save'])
     expect(LANGUAGES.en['common.save']).toBe(en['common.save'])
+  })
+})
+
+describe('全局语言切换已搬到「设置 → 语言」（审计）', () => {
+  // 旧的 LanguageToggle 是登录页/主界面顶部的漂浮按钮；现已删除，
+  // 用户改语言走 panel-settings 的 LanguageCard。
+  // 「不该再有漂浮切换」分两点证明：
+  //   ① 文件已删（动态 import 必 reject）
+  //   ② 任何消费方的 import 会让 tsc 直接报错 —— 由 tsc -b --force 在 CI 上覆盖
+  // 这里不再做「读文件查 import」类测试——本项目 tsconfig 是浏览器版没开 @types/node，
+  // 在测试文件里引入 node:fs / require 会污染静态检查，得不偿失。
+  it('language-toggle.tsx 已被删除（动态 import 必 reject）', async () => {
+    await expect(import('@/components/language-toggle' as string)).rejects.toThrow()
+  })
+
+  // 关键回归：先前 1095 键 → 现在新增 3 个（中英文）×2 = 6 键；类型守卫强制一致。
+  // 即使将来某次清理把 LanguageCard 从 panel-settings 里下掉，本条还会报「键没人用」——
+  // 这是合理行为：键没人用属于自然清理，不该用测试强行保留。
+  it('panelSettings.language.* 三键在两包里都已翻译', () => {
+    for (const k of ['panelSettings.language.title', 'panelSettings.language.desc', 'panelSettings.language.current']) {
+      expect(zh[k as keyof typeof zh]).toBeTruthy()
+      expect(en[k as keyof typeof en]).toBeTruthy()
+    }
   })
 })
