@@ -21,7 +21,13 @@ const VERSION = 'BlockNexus/' + AGENT_VERSION;
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith('--')) out[argv[i]] = argv[i + 1];
+    if (!argv[i].startsWith('--')) continue;
+    const next = argv[i + 1];
+    // 布尔开关（如 --insecure）不带值。原先一律写 `argv[i+1]`：
+    //   · 放在**末位**时写成 undefined → 调用方用 `!== undefined` 判断，开关**静默失效**；
+    //   · 后面紧跟另一个选项时会把那个选项当成它的值。
+    // 这里把「下一个是选项或不存在」一律记为 true。
+    out[argv[i]] = next === undefined || next.startsWith('--') ? true : next;
   }
   return out;
 }
