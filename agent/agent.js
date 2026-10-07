@@ -4635,6 +4635,14 @@ const { computeProof, deriveKeys } = __require("src/crypto.js");
 const state = __require("src/state.js");
 
 /**
+ * 升级前空闲超时（毫秒）：从 TCP 建连到收到完整 HTTP 升级请求的最长等待。
+ * 没有它的话，一个「连上就不说话」的客户端能把 socket 无限期挂住
+ * （Agent 常以 root 运行且端口对外 → 未认证的 fd/内存耗尽）。
+ * 取 10 秒：正常面板建连后立刻发 hello，远够用；而它只作用于**升级完成前**。
+ */
+const PRE_UPGRADE_TIMEOUT_MS = 10000;
+
+/**
  * 读布尔型环境变量。
  *
  * 为什么不能直接 `if (process.env.X)`：那样**任何非空字符串都为真**，
@@ -4913,6 +4921,15 @@ class WSServer extends EventEmitter {
   }
 
   onSocket(socket) {
+    // 裸 TCP 路径的**升级前超时**。
+    //
+    // 为什么必须有：客户端连上之后**什么都不发**，`onData` 就永远不触发，
+    // 于是这个 socket 被无限期挂住。Agent 通常以 root 运行、端口对外，
+    // 未认证即可反复建连来耗尽 fd 与内存（下面那个 16KB 上限只管「发了一半的头」，
+    // 完全不管「一个字都不发」）。
+    // 升级成功后会清掉它——之后的存活交给 WS 层的握手超时与 keepalive。
+    socket.setTimeout(PRE_UPGRADE_TIMEOUT_MS, () => socket.destroy());
+
     let buf = Buffer.alloc(0);
     const onData = (d) => {
       buf = Buffer.concat([buf, d]);
@@ -4951,6 +4968,9 @@ class WSServer extends EventEmitter {
       );
       const ws = new WSSocket('server');
       ws.attach(socket, rest);
+      // 升级已完成：清掉升级前超时。后续存活由 WS 层握手超时（runHandshake）
+      // 与 keepalive 负责，这里再留一个超时会误杀长连接。
+      socket.setTimeout(0);
       this.emit('connection', ws, socket.remoteAddress);
     };
     socket.on('data', onData);
