@@ -23,12 +23,15 @@ function check(desc, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'} | ${desc}${!ok && detail ? '\n       ' + detail : ''}`);
 }
 
+// 测试可设置：伪造 Agent 的响应，用来测「面板转发」逻辑（不必起真实 Agent）
+let hubResponder = null;
+
 // 覆盖面按 panel/api.js 里实际用到的 hub.* 补齐：
 // 之前只有 on/request/status，所以任何走到 /servers/:id 的用例都会 500
 // （真实原因被包装成 internal.error，容易误判成业务 bug）。
 const fakeHub = {
   on() {},
-  request: async () => ({}),
+  request: async (_id, action, params) => (hubResponder ? hubResponder(action, params) : {}),
   status: () => 'offline',
   isOnline: () => false,
   getLatency: () => null,
@@ -620,6 +623,88 @@ function jsonPost(base, p, body, headers = {}) {
       const okHBody = await okH.json();
       check('合法主机名通过', okHBody.code !== 'server.host-invalid', `code=${okHBody.code}`);
     } finally {
+      await panel.close();
+    }
+  }
+
+  // ================= 地图路由（P4-1d）：转发 + ETag/304 =================
+  // 渲染在 Agent 侧，面板只转发。这里用可控的假 Agent 响应验证面板这一层：
+  // 二进制转发、ETag 协商、以及各层参数校验。
+  {
+    const pngMod = require(path.join(__dirname, '..', 'agent', 'src', 'png.js'));
+    // 造一张真 PNG（不是随便一段 base64）——这样 Content-Type 与内容才对得上
+    const realPng = pngMod.encodePng(Buffer.alloc(4 * 4 * 4, 128), 4, 4);
+    const b64 = realPng.toString('base64');
+
+    const panel = await makePanel();
+    try {
+      // ---- saves 列表 ----
+      hubResponder = () => ({ saves: [{ save: 'world', regions: [[0, 0], [1, 0]], version: 'v1-2' }] });
+      const list = await fetch(`${panel.base}/api/servers/srv1/instances/y/map`);
+      const listBody = await list.json();
+      check('地图存档列表透传 Agent 结果', listBody.saves?.[0]?.save === 'world', JSON.stringify(listBody));
+
+      // ---- 区域 PNG 转发 ----
+      hubResponder = () => ({ png: b64, version: 'v1-2', cached: false, bytes: realPng.length, warns: [] });
+      const img = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/0/0.png`);
+      check('区域请求返回 200', img.status === 200, `status=${img.status}`);
+      check('Content-Type 是 image/png', img.headers.get('content-type')?.includes('image/png'), String(img.headers.get('content-type')));
+      const etag = img.headers.get('etag');
+      check('带 ETag（值为 Agent 给的版本）', etag === '"v1-2"', String(etag));
+      check('Cache-Control 是 private（不能进共享缓存）', /private/.test(String(img.headers.get('cache-control'))), String(img.headers.get('cache-control')));
+      const got = Buffer.from(await img.arrayBuffer());
+      check('返回的二进制与 Agent 给的 PNG 逐字节一致', got.equals(realPng), `len ${got.length} vs ${realPng.length}`);
+
+      // ---- 304 协商：这是 P4-1d 的核心逻辑 ----
+      const cached = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/0/0.png`, {
+        headers: { 'If-None-Match': etag },
+      });
+      check('带上相同 ETag → 304（不重传图片）', cached.status === 304, `status=${cached.status}`);
+      check('304 不带响应体', (await cached.arrayBuffer()).byteLength === 0);
+
+      // 不同 ETag 仍应返回 200（版本变了必须给新图）
+      const changed = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/0/0.png`, {
+        headers: { 'If-None-Match': '"old-version"' },
+      });
+      check('ETag 不匹配 → 200（版本变了要给新图）', changed.status === 200, `status=${changed.status}`);
+      await changed.arrayBuffer();
+
+      // If-None-Match 是列表形式时也要命中（浏览器/代理可能合并多个 ETag）
+      const listForm = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/0/0.png`, {
+        headers: { 'If-None-Match': '"aaa", "v1-2", "bbb"' },
+      });
+      check('If-None-Match 列表里含相同 ETag → 304', listForm.status === 304, `status=${listForm.status}`);
+
+      // ---- 参数校验 ----
+      const badSave = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/..%2fetc/0/0.png`);
+      const badSaveBody = await badSave.json().catch(() => ({}));
+      check('含路径穿越的存档名被拒（map.save-invalid）', badSave.status === 400 && badSaveBody.code === 'map.save-invalid', `status=${badSave.status} code=${badSaveBody.code}`);
+
+      const badCoord = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/abc/0.png`);
+      const badCoordBody = await badCoord.json().catch(() => ({}));
+      check('非数字坐标被拒（map.coord-invalid）', badCoord.status === 400 && badCoordBody.code === 'map.coord-invalid', `status=${badCoord.status} code=${badCoordBody.code}`);
+
+      const badInst = await fetch(`${panel.base}/api/servers/srv1/instances/bad%2Fname/map`);
+      const badInstBody = await badInst.json().catch(() => ({}));
+      check('非法实例名被拒（instance.name-invalid）', badInst.status === 400 && badInstBody.code === 'instance.name-invalid', `status=${badInst.status} code=${badInstBody.code}`);
+
+      // Agent 说这个区域没有数据 → 404，而不是回一张空图
+      hubResponder = () => ({ png: '', version: 'x' });
+      const noData = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/9/9.png`);
+      const noDataBody = await noData.json().catch(() => ({}));
+      check('Agent 无该区域数据 → 404 map.region-not-found', noData.status === 404 && noDataBody.code === 'map.region-not-found', `status=${noData.status} code=${noDataBody.code}`);
+
+      // ---- version 端点（复用 saves，不额外开 Agent 动作）----
+      hubResponder = () => ({ saves: [{ save: 'world', regions: [[0, 0], [1, 0]], version: 'v1-2' }] });
+      const ver = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/world/version`);
+      const verBody = await ver.json();
+      check('version 端点回版本与区域列表', verBody.version === 'v1-2' && verBody.regions.length === 2, JSON.stringify(verBody));
+
+      const noSave = await fetch(`${panel.base}/api/servers/srv1/instances/y/map/nope/version`);
+      const noSaveBody = await noSave.json().catch(() => ({}));
+      check('未知存档 → 404 map.save-not-found', noSave.status === 404 && noSaveBody.code === 'map.save-not-found', `status=${noSave.status} code=${noSaveBody.code}`);
+    } finally {
+      hubResponder = null;
       await panel.close();
     }
   }

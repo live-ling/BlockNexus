@@ -237,6 +237,33 @@ const ERROR_CODES = {
     zh: '上传型实例请在文件管理里直接上传 server.jar',
     en: 'For upload-based instances, upload server.jar in the file manager instead',
   },
+  'instance.name-invalid': {
+    status: 400,
+    zh: '实例名格式无效',
+    en: 'Invalid instance name',
+  },
+
+  // ---------- 地图（P4-1） ----------
+  'map.save-invalid': {
+    status: 400,
+    zh: '存档名格式无效',
+    en: 'Invalid save name',
+  },
+  'map.coord-invalid': {
+    status: 400,
+    zh: '区域坐标无效',
+    en: 'Invalid region coordinates',
+  },
+  'map.save-not-found': {
+    status: 404,
+    zh: '该存档没有可显示的地图数据',
+    en: 'No map data for this save',
+  },
+  'map.region-not-found': {
+    status: 404,
+    zh: '该区域没有地图数据',
+    en: 'No map data for this region',
+  },
 
   // ---------- 请求 / 文件 / 上传 ----------
   'request.json-required': {

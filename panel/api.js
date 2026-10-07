@@ -2200,6 +2200,78 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
   });
 
+  // ---------- 地图（P4-1d）：枚举存档 / 区域 PNG 转发 / 版本协商 ----------
+  //
+  // 渲染在 Agent 侧完成（见 agent/src/instance/map.js），面板只做转发。
+  // 这样前端拿到的就是 PNG 二进制，浏览器原生解码，无需自研瓦片格式。
+  //
+  // 首帧可能很慢：Agent 要读整个 .mca（几 MB ~ 几十 MB）+ 渲染 512×512 + PNG 编码。
+  // 之后走 Agent 的落盘缓存，就是纯读文件。所以超时给得比较宽。
+  const MAP_TIMEOUT = 60000;
+
+  /** 存档名只允许单段路径（Agent 侧还会再校验一次，这里是早筛） */
+  const MAP_SAVE_RE = /^[\w.-]+$/;
+
+  router.get('/servers/:id/instances/:name/map', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    if (!INST_NAME_RE.test(req.params.name)) return fail(res, 'instance.name-invalid');
+    try {
+      res.json(await agentRead(server, 'instance.map.saves', { name: req.params.name }, MAP_TIMEOUT));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.get('/servers/:id/instances/:name/map/:save/version', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    if (!INST_NAME_RE.test(req.params.name)) return fail(res, 'instance.name-invalid');
+    if (!MAP_SAVE_RE.test(req.params.save)) return fail(res, 'map.save-invalid');
+    try {
+      // 复用 saves 接口：它已经带上每个世界的版本号，不必再开一个 Agent 动作
+      const r = await agentRead(server, 'instance.map.saves', { name: req.params.name }, MAP_TIMEOUT);
+      const s = (r.saves || []).find((x) => x.save === req.params.save);
+      if (!s) return fail(res, 'map.save-not-found');
+      res.json({ version: s.version, regions: s.regions });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.get('/servers/:id/instances/:name/map/:save/:x/:z', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    if (!INST_NAME_RE.test(req.params.name)) return fail(res, 'instance.name-invalid');
+    if (!MAP_SAVE_RE.test(req.params.save)) return fail(res, 'map.save-invalid');
+    // `:z` 可能带 `.png` 后缀（前端按图片 URL 用，浏览器与调试都更直观）
+    const zRaw = String(req.params.z).replace(/\.png$/i, '');
+    const x = Number(req.params.x);
+    const z = Number(zRaw);
+    if (!Number.isInteger(x) || !Number.isInteger(z)) return fail(res, 'map.coord-invalid');
+    try {
+      const r = await agentRead(
+        server,
+        'instance.map.region',
+        { name: req.params.name, save: req.params.save, x, z },
+        MAP_TIMEOUT,
+      );
+      if (!r || !r.png) return fail(res, 'map.region-not-found');
+      // ETag 直接用 Agent 给的区域签名（大小+mtime 派生）。世界没变 → 版本不变 → 命中 304。
+      const etag = `"${r.version}"`;
+      res.setHeader('ETag', etag);
+      // 派生数据：允许缓存但要能协商。**不加 public**——面板可能带鉴权，不能进共享缓存。
+      res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+      // If-None-Match 可能是列表或带 W/ 前缀，用包含判断比全等稳
+      const inm = String(req.headers['if-none-match'] || '');
+      if (inm && (inm.includes(etag) || inm === '*')) return res.status(304).end();
+      res.setHeader('Content-Type', 'image/png');
+      res.end(Buffer.from(r.png, 'base64'));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // 域名连通检测：Agent 侧解析（含 _minecraft._tcp SRV）+ TCP 探测实例端口
   router.get('/servers/:id/instances/:name/domain-check', async (req, res, next) => {
     const server = requireServer(req, res);
