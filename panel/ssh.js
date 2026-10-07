@@ -13,6 +13,32 @@ const NODE_MIN_MAJOR = 16;
 // tarball 回退用的 Node LTS 版本（distro 源/NodeSource 都装不上时）
 const NODE_TARBALL_VERSION = 'v20.18.1';
 
+/**
+ * 校验 server.host 是合法主机名 / IP。审计 R4 报告：
+ * `server.host` 拼进远端 `sh -c` 命令（openssl -subj 的双引号嵌套可破出 → 命令注入）。
+ * 主防线在 panel/api.js 的 isValidHost（拦截添加/修改服务器时的输入），
+ * 本函数是**纵深防御**：哪怕将来引入新入口漏了校验，这里也会拒绝执行。
+ * （注意：本函数**不替换** server.host，只是断言它是安全的——既不丢掉合法边界情形，
+ * 也不会在「认为无毒」的口径下默默改写用户的值。）
+ */
+const HOSTNAME_LABEL_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+function assertSafeHost(h) {
+  if (typeof h !== 'string') throw new Error(`server.host 非字符串：${typeof h}`);
+  const v = h.trim();
+  if (!v || v.length > 253) throw new Error(`server.host 长度异常：${v.length}`);
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) {
+    if (!v.split('.').every((o) => { const n = Number(o); return n >= 0 && n <= 255 && String(n) === String(Number(o)); })) {
+      throw new Error(`server.host 不是合法 IPv4：${v}`);
+    }
+    return v;
+  }
+  if (v.includes(':') && /^(\[[0-9a-fA-F:]+\]|[0-9a-fA-F:]+)$/.test(v)) return v;
+  if (v.endsWith('.') || !v.split('.').every((l) => HOSTNAME_LABEL_RE.test(l))) {
+    throw new Error(`server.host 不是合法主机名/IP：${v}`);
+  }
+  return v;
+}
+
 /** SSH 主机密钥指纹（OpenSSH 风格 SHA256 base64，去掉尾部 = 填充） */
 function hostKeyFingerprint(key) {
   const buf = Buffer.isBuffer(key) ? key : Buffer.from(String(key), 'binary');
@@ -418,6 +444,9 @@ async function updateAgentScript(server, log) {
 
 // 安装/重装 agent。log(text) 用于向前端推送进度。
 async function installAgent(server, log) {
+  // 纵深防御：audit R4 报告里 server.host 会被拼进远端 `sh -c` 命令。
+  // 主防线在 panel/api.js（添加/修改服务器时的输入校验），这里再断言一遍。
+  assertSafeHost(server.host);
   const agentFile = path.join(__dirname, '..', 'agent', 'agent.js');
   if (!fs.existsSync(agentFile)) throw new Error('找不到 agent/agent.js');
   const dir = server.agent.installDir || '/opt/blocknexus-agent';

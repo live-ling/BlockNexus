@@ -39,7 +39,7 @@ const fakeHub = {
 };
 const fakeBus = { on() {}, emit() {} };
 
-function makeConfig() {
+function makeConfig({ verifyAlwaysOk = false } = {}) {
   const data = {
     panel: { port: 0, username: 'admin', passwordHash: { salt: '', hash: '' }, authEnabled: false },
     // 放一台 server：用于验证「回凭据的响应必须禁缓存」
@@ -55,7 +55,7 @@ function makeConfig() {
   return {
     data,
     save() {},
-    verifyCredentials: () => false,
+    verifyCredentials: () => verifyAlwaysOk,
     listServers: () => data.servers,
     getServer: (id) => data.servers.find((s) => s.id === id) || null,
     updateServer: () => null,
@@ -89,7 +89,7 @@ function makePanel({ limiterOpts = {}, withErrorHandler = true, trustProxy = und
   });
   const router = express.Router();
   router.post('/echo', (req, res) => res.json({ ok: true }));
-  router.use(createApi(makeConfig(), fakeHub, fakeBus, limiterOpts, apiOpts));
+  router.use(createApi(makeConfig({ verifyAlwaysOk: apiOpts.verifyAlwaysOk }), fakeHub, fakeBus, limiterOpts, apiOpts));
   app.use('/api', router);
 
   // ← 与 server.js 一致：SPA 回退（非错误处理器）
@@ -479,6 +479,149 @@ function jsonPost(base, p, body, headers = {}) {
     const rc = mail.resetCodeMail({ code: '123456', minutes: 15 });
     check('有意内嵌的 <strong> 保留（pHtml 生效，未过度转义）', /<strong>15 分钟<\/strong>/.test(rc.html));
     check('且没有被双重转义', !/&lt;strong&gt;/.test(rc.html));
+  }
+
+  // ================= CSRF：multipart/form-data 已从白名单移除 =================
+  // 跨站表单 + JSON / urlencoded 会触发预检所以天然安全；multipart **不触发**预检，
+  // 所以它的安全等同「全靠 SameSite=Lax」。审计 R1/R2/R5 三份报告均指出。
+  // 现在：multipart POST 直接被 CSRF 中间件 → 400 request.json-required；
+  //       唯一合法 multipart（SFTP）由路径白名单显式放行，仍可上传。
+  {
+    const panel = await makePanel();
+    try {
+      // 边界：multipart POST 到非 SFTP 路径 → 应被 400（CSRF 中间件）或 415（express.json）拒绝
+      // 注：当前路由先经 express.json——它看到 multipart 直接 415，根本到不了 CSRF 中间件。
+      // CSRF 中间件是「express.json 漏过之后」的纵深层。本测试两层都接受。
+      const blocked = await fetch(`${panel.base}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'multipart/form-data; boundary=----xxx' },
+        body: '------xxx\r\nContent-Disposition: form-data; name="host"\r\n\r\nev\r\n------xxx--\r\n',
+      });
+      check(
+        '跨站 multipart 表单 POST 被拒（400 CSRF 或 415 body parser）',
+        blocked.status === 400 || blocked.status === 415,
+        `status=${blocked.status}`,
+      );
+
+      // 反向断言：JSON POST 仍能通过（误伤排查）
+      const okJson = await fetch(`${panel.base}/api/echo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"x":1}',
+      });
+      check('JSON POST 仍正常通过（未被误伤）', okJson.status === 200, `status=${okJson.status}`);
+
+      // urlencoded 也应正常（HTML 表单正路）
+      const okForm = await fetch(`${panel.base}/api/echo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'x=1',
+      });
+      check('urlencoded POST 仍正常通过', okForm.status === 200, `status=${okForm.status}`);
+
+      // SFTP octet-stream 仍放行（关键反向断言 —— 改坏了这条会让文件上传彻底断）
+      // 实际前端用的是 application/octet-stream（见 web/src/lib/upload.ts:134），
+      // 不是 multipart；CSRF 中间件按 Content-Type 拦的话会挡掉，所以必须由路径白名单放行。
+      const okSftp = await fetch(`${panel.base}/api/servers/x/instances/y/files/upload/sftp?dir=t&filename=t`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: 'fake-binary-data',
+      });
+      const text = await okSftp.text();
+      const csrtBlocked = okSftp.status === 400 && /request\.json-required/.test(text);
+      check('SFTP octet-stream 不被 CSRF 中间件拦（路径白名单生效）', !csrtBlocked, `status=${okSftp.status} body=${text.slice(0,80)}`);
+    } finally {
+      await panel.close();
+    }
+  }
+
+  // ================= sessions 表容量上限 =================
+  // GC 60s 周期存在（1fcaaf7），但「上限」上限之前没加。
+  // 单用户面板正常不会过触，加 capTracked 只是兜底——防止任何路径塞进来超出预期的会话数。
+  // 与限流表一致：表满淘汰最旧（拒绝新会话等于顺手做出 DoS）。
+  {
+    const panel = await makePanel({ apiOpts: { verifyAlwaysOk: true } });
+    try {
+      const ss = panel.internal && panel.internal.sessions;
+      check('测试钩子暴露了 sessions 表', !!ss);
+      if (ss) {
+        // 通过登录接口塞入 300 条真实会话（> MAX_SESSIONS=256），
+        // 路径与生产一致：login → sessions.set → capTracked。
+        const before = ss.size;
+        const LIMIT = 256;
+        const TRIES = LIMIT + 50;
+        for (let i = 0; i < TRIES; i++) {
+          const r = await fetch(`${panel.base}/api/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: 'admin', password: 'x', remember: false }),
+          });
+          // 排空 body 以便复用连接
+          await r.text();
+        }
+        check(
+          `登录 ${TRIES} 次后会话表被夹在 ${LIMIT}（不增长）`,
+          ss.size <= LIMIT,
+          `size=${ss.size}, 上限=${LIMIT}`,
+        );
+        check('且确实拿到了至少一份记录', ss.size > 0, `size=${ss.size}`);
+      }
+    } finally {
+      await panel.close();
+    }
+  }
+
+  // ================= server.host 格式校验 =================
+  // 审计 R4：server.host 拼进远端 `sh -c` 命令（openssl -subj 引号嵌套可破出）。
+  // 主防线放在 API 层（添加/修改服务器入口），SSH 层有纵深 assertSafeHost 兜底。
+  {
+    const panel = await makePanel();
+    try {
+      // 注入：试图以引号/分号/etc 破出 openssl -subj
+      const evil = 'x"; touch /tmp/pwn; openssl req -subj "/CN=';
+      const r = await fetch(`${panel.base}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: evil }),
+      });
+      const body = await r.json();
+      check(
+        '含 shell 注入元字符的 host 被拒（code=server.host-invalid）',
+        r.status === 400 && body.code === 'server.host-invalid',
+        `status=${r.status} code=${body.code}`,
+      );
+
+      // 反向：合法 IPv4 / IPv6 / 主机名都通过
+      const ok = await fetch(`${panel.base}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: '192.168.1.10' }),
+      });
+      const okBody = await ok.json();
+      check(
+        '合法 IPv4 host 通过校验（未被误伤）',
+        ok.status !== 400 || okBody.code !== 'server.host-invalid',
+        `status=${ok.status} code=${okBody.code}`,
+      );
+
+      const ok6 = await fetch(`${panel.base}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: '::1' }),
+      });
+      const ok6Body = await ok6.json();
+      check('合法 IPv6 host 通过', ok6Body.code !== 'server.host-invalid', `code=${ok6Body.code}`);
+
+      const okH = await fetch(`${panel.base}/api/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: 'mc.example.com' }),
+      });
+      const okHBody = await okH.json();
+      check('合法主机名通过', okHBody.code !== 'server.host-invalid', `code=${okHBody.code}`);
+    } finally {
+      await panel.close();
+    }
   }
 
   console.log(`\n${pass}/${total} panel-hardening cases passed`);

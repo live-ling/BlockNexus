@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.3.8';
+const AGENT_VERSION = '0.3.9';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -3765,7 +3765,14 @@ module.exports = {
         // 「Profiler is now running!」— 启动成功；有背景分析时 spark 会先停止它再启动
         if (/is now running/i.test(line)) return { started: true, timeoutSec };
         if (/Expected flag|Unknown|error/i.test(line)) {
-          return { started: false, error: line.replace(/^.*?\[(?:⚡|spark)\]\s*/i, '').trim() };
+          // 审计 R3：spark 错误回显混进玩家聊天片段（虽概率低，但无任何过滤）。
+          // 截断到 200 字符既能容纳正常错误信息，又切断大段跨会话回显。
+          // 同时去 ANSI/Minecraft 格式（clean 已做过）与控制字符——后者在前端
+          // 渲染仍可能造成零宽/方向控制符之类的可读性问题。
+          const truncated = String(line.replace(/^.*?\[(?:⚡|spark)\]\s*/i, '').trim())
+            .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
+            .slice(0, 200);
+          return { started: false, error: truncated };
         }
       }
       if (!seen.length) return { started: false, error: '未收到 spark 响应，请确认 spark 已正确加载' };

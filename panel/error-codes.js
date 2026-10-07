@@ -190,6 +190,11 @@ const ERROR_CODES = {
     zh: '缺少主机地址',
     en: 'Host address is required',
   },
+  'server.host-invalid': {
+    status: 400,
+    zh: '主机地址格式无效（需为 IP 或主机名）',
+    en: 'Invalid host (must be an IP address or hostname)',
+  },
   'server.panel-url-required': {
     status: 400,
     zh: '该服务器使用「Agent 回连面板」模式，需要填写面板地址',
