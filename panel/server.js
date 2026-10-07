@@ -80,6 +80,25 @@ const app = express();
 app.disable('x-powered-by');
 // 反代信任必须在任何读取 req.ip 的中间件之前设置（登录/找回密码的限流都依赖它）
 if (TRUST_PROXY !== null) app.set('trust proxy', TRUST_PROXY);
+// ---------- 基础安全响应头 ----------
+// ⚠ 必须注册在 `express.json()` **之前**：body parser 抛出的解析错误会跳过它之后的
+//    所有普通中间件直奔错误处理器，于是畸形请求的响应会**丢掉这些头**
+//    （实测确认过）。放最前面才能覆盖到错误响应。
+// 只加**零功能风险**的几条。CSP 刻意不加：它最容易悄悄弄坏 UI
+// （beUI/shadcn 的内联样式、内联脚本都可能被拦），而本项目没有可自动化的
+// 浏览器回归测试——加一条测不出来的 CSP，风险大于收益。要加请单独一轮并人工过一遍界面。
+app.use((req, res, next) => {
+  // 禁止被 iframe 嵌入：面板是本地高权限服务，被套进第三方页面即可做点击劫持
+  // （诱导管理员点「删除实例」「开启免密」之类）。
+  res.setHeader('X-Frame-Options', 'DENY');
+  // 不要根据内容猜类型：/agent.js 是可直接下载的脚本，猜错类型会有嗅探类风险
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // 跨站跳转时不带 Referer。面板地址本身可能含主机名/端口等内部信息，
+  // 而「关于」页有一堆指向 GitHub / 各服务官网的外链——不带 Referer 最省心。
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
 app.use(express.json({ limit: '1mb' }));
 // agent.js 匿名下载（手动安装用，文件不含密钥）：根路径方便 curl，
 // README 与前端手动安装命令都指向这里；api.js 里的 /api/agent.js 保留兼容
