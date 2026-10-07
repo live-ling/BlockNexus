@@ -231,6 +231,73 @@ function jsonPost(base, p, body, headers = {}) {
     }
   }
 
+  // ================= H6 出站响应体上限 =================
+  // 这些响应来自用户可配置的地址（AI baseUrl / 核心下载 / 更新检查），属不可信输入。
+  // 原先各处都是无上限的 chunks.push，一个超大响应就能把面板堆打爆（目标 240MB）。
+  {
+    const http = require('http');
+    const { readBodyCapped, MAX_REMOTE_BODY } = require(path.join(__dirname, '..', 'panel', 'api.js'));
+
+    // 造一个「只发数据不结束」的端点：模拟恶意/异常服务端持续推送
+    const srv = http.createServer((req, res) => {
+      if (req.url === '/huge') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        const chunk = Buffer.alloc(64 * 1024, 0x61);
+        let sent = 0;
+        const pump = () => {
+          if (res.writableEnded) return;
+          // 一直发到远超上限（上限 2MB → 发到 12MB 足够）
+          if (sent > 12 * 1024 * 1024) {
+            res.end();
+            return;
+          }
+          sent += chunk.length;
+          if (res.write(chunk)) setImmediate(pump);
+          else res.once('drain', pump);
+        };
+        pump();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok-small');
+    });
+
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+
+    const fetchCapped = (p) =>
+      new Promise((resolve, reject) => {
+        const req = http.get({ host: '127.0.0.1', port, path: p }, (res) => {
+          readBodyCapped(res, req, MAX_REMOTE_BODY, '测试响应').then(resolve, reject);
+        });
+        req.on('error', reject);
+      });
+
+    try {
+      const small = await fetchCapped('/small');
+      check(
+        '上限之内正常返回完整内容',
+        small.toString('utf8') === 'ok-small',
+        JSON.stringify(small.toString('utf8')),
+      );
+
+      let bigErr = null;
+      try {
+        await fetchCapped('/huge');
+      } catch (e) {
+        bigErr = e;
+      }
+      check('超过上限时 reject（而不是把整个 body 读进内存）', !!bigErr, String(bigErr));
+      check(
+        '超限错误信息说明是「过大」且不含响应内容',
+        !!bigErr && /过大/.test(bigErr.message) && !/aaaa/.test(bigErr.message),
+        bigErr && bigErr.message,
+      );
+    } finally {
+      await new Promise((r) => srv.close(r));
+    }
+  }
+
   console.log(`\n${pass}/${total} panel-hardening cases passed`);
   process.exit(pass === total ? 0 : 1);
 })().catch((e) => {
