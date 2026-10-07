@@ -16,6 +16,24 @@ const { runCmd, tarCmd } = require('../util.js');
 const MAX_UPLOAD_SESSIONS = 64;
 const MAX_DOWNLOAD_SESSIONS = 64;
 
+/**
+ * 单文件上传上限。
+ * ⚠ 必须按**实际写入的字节数**判定，不能只信客户端自报的 size：
+ * 原先只写了 `typeof size === 'number' && size > 200MB` —— 不带 size（或带个字符串）
+ * 就整个跳过检查，而 uploadChunk 从不核对真实累计长度，于是可以无限往磁盘灌。
+ */
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+
+/**
+ * 解压后的总量上限（压缩炸弹防护）。
+ * 一个几百 KB 的包能解出几百 GB：解压发生在隔离目录里，不会污染实例内容，
+ * 但会把磁盘写满——而 MC 服务器与存档就在同一块盘上，写满等于把游戏一起搞挂。
+ * 上限取得较宽松（2GB / 5 万文件）：MC 服务端整合包解出来通常几百 MB，
+ * 正常使用碰不到，而炸弹会被挡住。
+ */
+const MAX_EXTRACT_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_EXTRACT_ENTRIES = 50000;
+
 
 
 module.exports = {
@@ -216,6 +234,7 @@ module.exports = {
 
     const seen = new Map(); // dev:ino -> 出现次数
     const stat = new Map(); // dev:ino -> nlink
+    let totalBytes = 0;
     for (const f of files) {
       let st;
       try {
@@ -223,9 +242,29 @@ module.exports = {
       } catch {
         continue;
       }
+      totalBytes += st.size;
       const key = `${st.dev}:${st.ino}`;
       seen.set(key, (seen.get(key) || 0) + 1);
       stat.set(key, st.nlink);
+    }
+
+    // 压缩炸弹：一个几百 KB 的包可以解出几百 GB。
+    // 解压发生在隔离目录里，所以不会污染实例内容，但**磁盘会被写满**——
+    // 而 MC 服务器与存档就在同一块盘上，写满等于把游戏一起搞挂。
+    // 因此在「启用」之前按解压后的**实际**体积与条目数判定。
+    if (totalBytes > MAX_EXTRACT_BYTES) {
+      bad.push({
+        kind: 'too-large',
+        rel: '.',
+        target: `解压后 ${Math.round(totalBytes / 1048576)}MB，超过上限 ${Math.round(MAX_EXTRACT_BYTES / 1048576)}MB`,
+      });
+    }
+    if (files.length > MAX_EXTRACT_ENTRIES) {
+      bad.push({
+        kind: 'too-many',
+        rel: '.',
+        target: `${files.length} 个文件，超过上限 ${MAX_EXTRACT_ENTRIES}`,
+      });
     }
     for (const f of files) {
       let st;
@@ -305,13 +344,13 @@ module.exports = {
       const unsafe = this.findUnsafeExtractedEntries(root, quarantine);
       if (unsafe.length) {
         const first = unsafe[0];
-        const who =
-          first.kind === 'symlink'
-            ? `符号链接 ${first.rel} -> ${first.target}`
-            : `硬链接 ${first.rel}（${first.target}）`;
-        throw new Error(
-          `压缩包内含指向实例目录之外的${first.kind === 'symlink' ? '符号链接' : '硬链接'}，已拒绝解压：${who}`,
-        );
+        const who = {
+          symlink: () => `内含指向实例目录之外的符号链接 ${first.rel} -> ${first.target}`,
+          hardlink: () => `内含指向实例目录之外的硬链接 ${first.rel}（${first.target}）`,
+          'too-large': () => first.target,
+          'too-many': () => first.target,
+        }[first.kind];
+        throw new Error(`已拒绝解压：${who ? who() : first.rel + ' ' + first.target}`);
       }
 
       this.mergeTreeInto(quarantine, destDir);
@@ -330,7 +369,8 @@ module.exports = {
     const dirAbs = this.resolveSafe(root, dir);
     const finalPath = this.resolveSafe(root, path.posix.join(String(dir || '').replace(/^\/+/, ''), filename));
     if (!finalPath.startsWith(root + path.sep)) throw new Error('路径越界');
-    if (typeof size === 'number' && size > 200 * 1024 * 1024) throw new Error('单文件上限 200MB');
+    // 自报 size 只用于「提前拒绝」，不作为放行依据（真实字节数在 uploadChunk 里核）
+    if (typeof size === 'number' && size > MAX_UPLOAD_BYTES) throw new Error('单文件上限 200MB');
     const tmpPath = finalPath + '.blocknexus-upload';
     const metaPath = tmpPath + '.meta';
     const chunk = 512 * 1024;
@@ -369,8 +409,10 @@ module.exports = {
     })();
     if (resume && metaOk && fs.existsSync(tmpPath)) {
       const st = fs.statSync(tmpPath);
-      // 半成品比目标还大（多半是别的文件残留）→ 不敢续，重来
-      if (typeof size === 'number' && st.size > size) {
+      // 半成品比目标还大（多半是别的文件残留）→ 不敢续，重来。
+      // 另外**必须**独立核对绝对上限：`typeof size === 'number'` 那半句在客户端
+      // 不带 size 时恒为假，一个超大的既有 tmp 文件就能被直接续下去。
+      if ((typeof size === 'number' && st.size > size) || st.size > MAX_UPLOAD_BYTES) {
         fs.rmSync(tmpPath, { force: true });
         fs.rmSync(metaPath, { force: true });
       } else {
@@ -435,6 +477,11 @@ module.exports = {
       throw e;
     }
     const buf = Buffer.from(String(dataB64 || ''), 'base64');
+    // 上限按**真实累计字节**判定：自报 size 可以不带或造假，这里才是唯一可信的关口。
+    // 超限即拒绝（不写、不累计），避免把磁盘灌满。
+    if (up.received + buf.length > MAX_UPLOAD_BYTES) {
+      throw new Error('单文件上限 200MB');
+    }
     fs.appendFileSync(up.tmpPath, buf);
     up.received += buf.length;
     up.seq = Number(seq);
@@ -445,6 +492,15 @@ module.exports = {
   uploadFinish(uploadId) {
     const up = this.uploads.get(uploadId);
     if (!up) throw new Error('上传会话不存在或已过期');
+    // 兜底再核一次：正常路径已在 uploadChunk 拦下，这里防的是
+    // 「续传时直接接到一个超大的既有 tmp 文件」等情况，避免把超限内容落到最终路径。
+    if (up.received > MAX_UPLOAD_BYTES) {
+      try {
+        fs.rmSync(up.tmpPath, { force: true });
+      } catch {}
+      this.uploads.delete(uploadId);
+      throw new Error('单文件上限 200MB');
+    }
     fs.renameSync(up.tmpPath, up.finalPath);
     try {
       fs.rmSync(up.metaPath, { force: true });

@@ -11,13 +11,35 @@ const utilSrc = fs.readFileSync(path.join(__dirname, 'src', 'util.js'), 'utf8');
 
 // 从模块源码提取方法定义（对象字面量成员：2 空格缩进 + 签名，收尾为 "\n  },"）；
 // 只能按「行首缩进的定义」匹配，否则会命中调用点
+/**
+ * 从源码里取模块级常量的**值**（不是复制一份字面量）——
+ * 否则改了源码上限、测试还在用旧值，就会得出「测试通过」的假结论。
+ */
+function srcConst(name) {
+  const m = new RegExp(`^const ${name} = (.+?);$`, 'm').exec(src);
+  if (!m) throw new Error('未找到常量 ' + name);
+  return new Function('return ' + m[1])();
+}
+const MAX_EXTRACT_BYTES = srcConst('MAX_EXTRACT_BYTES');
+const MAX_EXTRACT_ENTRIES = srcConst('MAX_EXTRACT_ENTRIES');
+const MAX_UPLOAD_BYTES = srcConst('MAX_UPLOAD_BYTES');
+
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
 async function extractMethod(name) {
   const m = new RegExp(`^  (?:async )?${name}\\(`, 'm').exec(src);
   if (!m) throw new Error('未找到 ' + name);
   const body = src.slice(m.index, src.indexOf('\n  },', m.index));
   if (body.length < 40) throw new Error(name + ' 提取内容异常');
-  return await AsyncFunction('fs', 'path', 'runCmd', 'tarCmd', 'return {' + body + '}}')(fs, path, runCmd, tarCmd);
+  return await AsyncFunction(
+    'fs',
+    'path',
+    'runCmd',
+    'tarCmd',
+    'MAX_EXTRACT_BYTES',
+    'MAX_EXTRACT_ENTRIES',
+    'MAX_UPLOAD_BYTES',
+    'return {' + body + '}}',
+  )(fs, path, runCmd, tarCmd, MAX_EXTRACT_BYTES, MAX_EXTRACT_ENTRIES, MAX_UPLOAD_BYTES);
 }
 
 // runCmd 也从源码提取（模块级函数）——保证测试跑的就是实现本身
@@ -79,6 +101,7 @@ fs.writeFileSync(path.join(ROOT, 'outside.txt'), 'secret');
     ...(await extractMethod('extractArchive')),
     ...(await extractMethod('findUnsafeExtractedEntries')),
     ...(await extractMethod('mergeTreeInto')),
+    ...(await extractMethod('uploadChunk')),
   };
 
   // 复制
@@ -184,6 +207,55 @@ fs.writeFileSync(path.join(ROOT, 'outside.txt'), 'secret');
       total++;
       pass++;
     }
+  }
+
+  // ---------- 压缩炸弹：解压后总量超限必须被拒 ----------
+  // 用**稀疏文件**造出超大逻辑体积：truncate 只改 size 元数据、不实际写盘，
+  // 所以能在毫秒级测出 2GB 以上的判定，不会真的占用磁盘。
+  {
+    const bomb = path.join(ROOT, 'bomb-tree');
+    fs.mkdirSync(bomb, { recursive: true });
+    const big = path.join(bomb, 'huge.bin');
+    fs.writeFileSync(big, '');
+    fs.truncateSync(big, MAX_EXTRACT_BYTES + 1024 * 1024);
+
+    const bad = mgr.findUnsafeExtractedEntries(ROOT, bomb);
+    if (!bad.some((b) => b.kind === 'too-large')) {
+      throw new Error('解压后超量未被识别：' + JSON.stringify(bad));
+    }
+    console.log('PASS | 解压后总量超限被识别（压缩炸弹防护）');
+    total++;
+    pass++;
+    fs.rmSync(bomb, { recursive: true, force: true });
+  }
+
+  // ---------- 上传上限必须按**真实累计字节**判定 ----------
+  // 自报 size 可以不带或造假，所以真正的关口在 uploadChunk。
+  {
+    const tmp = path.join(ROOT, 'up.tmp');
+    fs.writeFileSync(tmp, Buffer.alloc(0));
+    const sid = 'probe-upload';
+    mgr.uploads = new Map([
+      [sid, { tmpPath: tmp, metaPath: tmp + '.meta', finalPath: path.join(ROOT, 'up.bin'), received: MAX_UPLOAD_BYTES - 10, seq: 0, at: Date.now() }],
+    ]);
+
+    let threw = null;
+    try {
+      // 10 字节刚好到顶（允许），再来 100 字节就该被拒
+      mgr.uploadChunk(sid, 1, Buffer.alloc(10).toString('base64'));
+      mgr.uploadChunk(sid, 2, Buffer.alloc(100).toString('base64'));
+    } catch (e) {
+      threw = e;
+    }
+    if (!threw || !/200MB/.test(threw.message)) {
+      throw new Error('超出真实字节上限未被拒绝：' + (threw && threw.message));
+    }
+    if (mgr.uploads.get(sid).received !== MAX_UPLOAD_BYTES) {
+      throw new Error('超限的分块仍被写入了：received=' + mgr.uploads.get(sid).received);
+    }
+    console.log('PASS | 上传按真实累计字节判定，超限被拒且未写入');
+    total++;
+    pass++;
   }
 
   console.log(`\n${pass}/${total} fs-ops cases passed`);
