@@ -14,7 +14,6 @@ import { ServerDetailPage } from '@/pages/server-detail';
 import { ServerSettingsPage } from '@/pages/server-settings';
 import { ServersPage } from '@/pages/servers';
 import { ApiError, api, type Me, type ServerSummary } from '@/lib/api';
-import { LanguageToggle } from '@/components/language-toggle';
 import { $ } from '@/lib/i18n';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
@@ -277,8 +276,8 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
           <span className="opacity-90">{$('warning.exposedNoAuth.desc')}</span>
         </div>
       )}
-      {/* 语言切换：登录后也能改（登录页另有一份，因为那时还没进 App） */}
-      <LanguageToggle className="fixed right-4 top-4 z-40 bg-background/60 backdrop-blur" />
+      {/* 全局语言切换已搬到「设置 → 语言」（panel-settings.tsx 的 LanguageCard）。
+          不再放漂浮按钮——登录前由 initLanguage() 按浏览器自动判定登录页语言。 */}
       <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
         <ExpandableActionBar items={items} size="md" collapseOnBlur={false} />
       </div>

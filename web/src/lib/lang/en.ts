@@ -446,6 +446,11 @@ export const en = {
   'panelSettings.version.check': 'Check for updates',
   'panelSettings.version.error.check': 'Update check failed',
 
+  // 语言
+  'panelSettings.language.title': 'Language',
+  'panelSettings.language.desc': 'Interface language; switching reloads the page',
+  'panelSettings.language.current': 'Current language',
+
   // 登录保护
   'panelSettings.auth.title': 'Sign-in protection',
   'panelSettings.auth.desc': 'The panel is a local service and needs no password by default. Enable this when exposing it to a LAN or the internet.',

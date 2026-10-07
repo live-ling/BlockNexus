@@ -452,6 +452,11 @@ export const zh = {
   'panelSettings.version.check': '检查更新',
   'panelSettings.version.error.check': '检查更新失败',
 
+  // 语言
+  'panelSettings.language.title': '语言',
+  'panelSettings.language.desc': '面板界面的语言；切换后整页刷新生效',
+  'panelSettings.language.current': '当前语言',
+
   // 登录保护
   'panelSettings.auth.title': '登录保护',
   'panelSettings.auth.desc': '面板是本地服务，默认无需密码；暴露给局域网/公网时建议开启。',
