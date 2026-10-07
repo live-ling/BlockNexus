@@ -98,6 +98,50 @@ async function checkLatestRelease(version, force = false) {
 // 它和错误文案本地化是同一件事，且 http-errors.js 的 app 级兜底中间件要用同一规则
 // ——放在两处迟早会出现「错误码按 A 规则判语言、兜底中间件按 B 规则判」。
 
+/** 出站响应体上限：这些响应来自**用户可配置的地址**（AI baseUrl / 核心下载 / 更新检查），属不可信输入 */
+const MAX_REMOTE_BODY = 2 * 1024 * 1024;
+
+/**
+ * 读取响应体并**限制上限**。
+ *
+ * 为什么必须有上限：原先各处都是 `res.on('data', c => chunks.push(c))`，没有任何限制。
+ * 一个恶意/异常的端点返回超大响应就能把面板堆打爆（面板内存目标是 240MB，
+ * 一个几 GB 的 body 足以 OOM）。这类响应完全由远端控制，不能信任。
+ *
+ * 超限时立刻销毁请求并 reject —— 不继续读、不继续累积。
+ * 注意 Error 只读**已读到的长度**，不会把内容带进错误信息（避免日志里出现大量远端内容）。
+ */
+function readBodyCapped(res, req, maxBytes = MAX_REMOTE_BODY, label = '响应') {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const done = (err, buf) => {
+      if (settled) return;
+      settled = true;
+      if (err) {
+        try {
+          req.destroy();
+        } catch {}
+        reject(err);
+        return;
+      }
+      resolve(buf);
+    };
+    res.on('data', (c) => {
+      if (settled) return;
+      size += c.length;
+      if (size > maxBytes) {
+        done(new Error(`${label}过大（超过 ${Math.round(maxBytes / 1048576)}MB），已中断`));
+        return;
+      }
+      chunks.push(c);
+    });
+    res.on('end', () => done(null, Buffer.concat(chunks)));
+    res.on('error', (e) => done(e));
+  });
+}
+
 function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const router = express.Router();
   const sessions = new Map(); // sid -> expires
@@ -1176,16 +1220,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
             res.resume();
             return reject(new Error('HTTP ' + res.statusCode));
           }
-          const chunks = [];
-          res.on('data', (c) => chunks.push(c));
-          res.on('end', () => {
-            try {
-              resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-            } catch (e) {
-              reject(e);
-            }
-          });
-        });
+          readBodyCapped(res, req, MAX_REMOTE_BODY, '版本清单')
+            .then((buf) => resolve(JSON.parse(buf.toString('utf8'))))
+            .catch(reject);        });
         req.on('error', reject);
         req.setTimeout(timeoutMs, () => req.destroy(new Error('请求超时')));
       };
@@ -1283,9 +1320,10 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
           res.resume();
           return reject(new Error('HTTP ' + res.statusCode));
         }
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        readBodyCapped(res, req, MAX_REMOTE_BODY, '远端文本响应').then(
+          (buf) => resolve(buf.toString('utf8')),
+          reject,
+        );
       });
       req.on('error', reject);
       req.setTimeout(timeoutMs, () => req.destroy(new Error('请求超时')));
@@ -2140,19 +2178,19 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         u,
         { headers: { Authorization: `Bearer ${apiKey}`, 'User-Agent': HTTP_UA } },
         (res) => {
-          const chunks = [];
-          res.on('data', (c) => chunks.push(c));
-          res.on('end', () => {
-            const text = Buffer.concat(chunks).toString('utf8');
-            if (res.statusCode !== 200) {
-              return reject(new Error(`HTTP ${res.statusCode}: ${text.replace(/\s+/g, ' ').slice(0, 200)}`));
-            }
-            try {
-              resolve(JSON.parse(text));
-            } catch {
-              reject(new Error('响应不是合法 JSON'));
-            }
-          });
+          readBodyCapped(res, req, MAX_REMOTE_BODY, '模型列表响应')
+            .then((buf) => {
+              const text = buf.toString('utf8');
+              if (res.statusCode !== 200) {
+                return reject(new Error(`HTTP ${res.statusCode}: ${text.replace(/\s+/g, ' ').slice(0, 200)}`));
+              }
+              try {
+                resolve(JSON.parse(text));
+              } catch {
+                reject(new Error('响应不是合法 JSON'));
+              }
+            })
+            .catch(reject);
         },
       );
       req.setTimeout(timeoutMs, () => req.destroy(new Error('查询超时')));
@@ -2198,17 +2236,28 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         },
         (res) => {
           if (res.statusCode !== 200) {
-            const chunks = [];
-            res.on('data', (c) => chunks.push(c));
-            res.on('end', () => {
-              const t = Buffer.concat(chunks).toString('utf8').replace(/\s+/g, ' ').slice(0, 300);
-              reject(new Error(`AI 接口返回 HTTP ${res.statusCode}: ${t}`));
-            });
+            // 错误体也要有上限：下面虽然只取 300 字符，但原先是**先累积完整 body 再截断**，
+            // 一个刻意返回超大错误体的端点照样能打爆内存。
+            readBodyCapped(res, req, MAX_REMOTE_BODY, 'AI 错误响应')
+              .then((buf) => {
+                const t = buf.toString('utf8').replace(/\s+/g, ' ').slice(0, 300);
+                reject(new Error(`AI 接口返回 HTTP ${res.statusCode}: ${t}`));
+              })
+              .catch(() => reject(new Error(`AI 接口返回 HTTP ${res.statusCode}`)));
             return;
           }
           let buf = '';
           res.on('data', (chunk) => {
             buf += chunk.toString('utf8');
+            // 上限保护：这是 SSE 流，正常情况下按行消费、buf 不会涨。
+            // 但恶意端点可以**只发数据不发换行**，让 buf 无限增长直到 OOM。
+            if (buf.length > MAX_REMOTE_BODY) {
+              try {
+                req.destroy();
+              } catch {}
+              reject(new Error('AI 响应过大，已中断'));
+              return;
+            }
             let idx;
             while ((idx = buf.indexOf('\n')) >= 0) {
               const line = buf.slice(0, idx).trim();
@@ -3110,4 +3159,4 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   return router;
 }
 
-module.exports = { createApi, __setTestHook, langOf };
+module.exports = { createApi, __setTestHook, langOf, readBodyCapped, MAX_REMOTE_BODY };

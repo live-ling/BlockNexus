@@ -167,8 +167,101 @@ module.exports = {
       return path.relative(root, abs).split(path.sep).join('/');
     });
     fs.mkdirSync(path.dirname(outFile), { recursive: true });
-    await runCmd(tarCmd(), ['-czf', outFile, '-C', root, ...entries]);
+    // ⚠ `--` 不是可选的：entries 是**相对路径**，而文件管理器允许任意文件名。
+    // 一个名为 `--checkpoint-action=exec=<命令>` 的文件会被 tar 当成**选项**而不是文件
+    // （GNU tar 默认允许选项与操作数交错）→ Agent 以 root 运行 → 任意命令执行。
+    // 这不是 shell 注入（runCmd 用 spawn 传参数组，不过 shell），而是 **tar 参数注入**，
+    // 所以引号转义救不了，唯一正确的做法是用 `--` 终止选项解析。
+    await runCmd(tarCmd(), ['-czf', outFile, '-C', root, '--', ...entries]);
     return { ok: true };
+  },
+
+  /**
+   * 校验「刚解压出来的临时树」里没有能**逃出实例目录**的链接。
+   * 返回违规条目数组（空 = 通过）。
+   *
+   * 为什么必须单独查：resolveSafe / isWithinPath 都只做**文本**路径校验，
+   * 而实例目录里一条 `evil -> /` 的软链会让 `evil/etc/passwd` 在文本上仍在 root 内、
+   * 实际指向宿主的 /etc/passwd。Agent 以 root 运行 → 任意读 / 写 / 截断。
+   * 压缩包是用户上传的不可信输入，所以必须在**启用**之前查，而不是事后堵。
+   *
+   * 软链用 readlink 做**文本**解析，不用 realpath：断链会让 realpath 抛错，
+   * 而断链同样危险（目标可以事后被创建/替换）。
+   * 硬链接用 dev:ino 建表：tar 的成员可以是指向**外部文件**的硬链接，
+   * 解出来就是宿主文件（可读可写）；本树内的合法硬链接会出现多次，
+   * 因此「nlink 大于本树内出现次数」即说明还有链在树外。
+   */
+  findUnsafeExtractedEntries(root, dir) {
+    const bad = [];
+    const files = [];
+    const walk = (cur) => {
+      for (const e of fs.readdirSync(cur, { withFileTypes: true })) {
+        const full = path.join(cur, e.name);
+        if (e.isSymbolicLink()) {
+          let target = '';
+          try {
+            target = fs.readlinkSync(full);
+          } catch {}
+          const resolved = path.resolve(path.dirname(full), target);
+          if (!this.isWithinPath(root, resolved)) {
+            bad.push({ kind: 'symlink', rel: path.relative(root, full), target });
+          }
+          continue;
+        }
+        if (e.isDirectory()) walk(full);
+        else files.push(full);
+      }
+    };
+    walk(dir);
+
+    const seen = new Map(); // dev:ino -> 出现次数
+    const stat = new Map(); // dev:ino -> nlink
+    for (const f of files) {
+      let st;
+      try {
+        st = fs.statSync(f);
+      } catch {
+        continue;
+      }
+      const key = `${st.dev}:${st.ino}`;
+      seen.set(key, (seen.get(key) || 0) + 1);
+      stat.set(key, st.nlink);
+    }
+    for (const f of files) {
+      let st;
+      try {
+        st = fs.statSync(f);
+      } catch {
+        continue;
+      }
+      const key = `${st.dev}:${st.ino}`;
+      if (st.nlink > (seen.get(key) || 0)) {
+        bad.push({
+          kind: 'hardlink',
+          rel: path.relative(root, f),
+          target: `nlink=${st.nlink} 但树内只有 ${seen.get(key)} 个`,
+        });
+      }
+    }
+    return bad;
+  },
+
+  /** 把临时树合并进目标目录（同名文件覆盖、目录合并），用于解压后的「启用」阶段 */
+  mergeTreeInto(src, dst) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, e.name);
+      const d = path.join(dst, e.name);
+      if (e.isDirectory()) {
+        this.mergeTreeInto(s, d);
+        continue;
+      }
+      // 目标已存在且是目录时先清掉，否则 copyFileSync 会 EISDIR
+      try {
+        if (fs.statSync(d).isDirectory()) fs.rmSync(d, { recursive: true, force: true });
+      } catch {}
+      fs.copyFileSync(s, d);
+    }
   },
 
   /** 解压 .zip / .tar.gz / .tgz / .tar 到压缩包所在目录（同名覆盖） */
@@ -183,23 +276,47 @@ module.exports = {
     }
     if (!st.isFile()) throw new Error('不是文件');
     const destDir = path.dirname(file);
-    if (/\.zip$/i.test(file)) {
-      if (process.platform === 'win32') {
-        // Windows 自带 bsdtar，可直接解 zip
-        await runCmd(tarCmd(), ['-xf', file, '-C', destDir]);
-      } else {
-        // Linux：优先 unzip，缺失再试 bsdtar
-        try {
-          await runCmd('unzip', ['-o', file, '-d', destDir]);
-        } catch (e) {
-          if (!/ENOENT|缺少命令/.test(e.message)) throw e;
-          await runCmd('bsdtar', ['-xf', file, '-C', destDir]);
+
+    // ---------- 先解到实例内的隔离目录，校验通过后才「启用」 ----------
+    // 直接解到 destDir 的话，压缩包里 `evil -> /` + `evil/etc/x` 的组合会在解压**过程中**
+    // 就通过软链写到实例外（那时 tar 已经写完了，事后校验为时已晚）。
+    // 隔离目录建在实例根内，保证即使解压过程被利用，写入点也只落在实例里。
+    const quarantine = fs.mkdtempSync(path.join(root, '.bn-extract-'));
+    try {
+      if (/\.zip$/i.test(file)) {
+        if (process.platform === 'win32') {
+          // Windows 自带 bsdtar，可直接解 zip
+          await runCmd(tarCmd(), ['-xf', file, '-C', quarantine]);
+        } else {
+          // Linux：优先 unzip，缺失再试 bsdtar
+          try {
+            await runCmd('unzip', ['-o', file, '-d', quarantine]);
+          } catch (e) {
+            if (!/ENOENT|缺少命令/.test(e.message)) throw e;
+            await runCmd('bsdtar', ['-xf', file, '-C', quarantine]);
+          }
         }
+      } else if (/\.(tar\.gz|tgz|tar)$/i.test(file)) {
+        await runCmd(tarCmd(), ['-xf', file, '-C', quarantine]);
+      } else {
+        throw new Error('仅支持 .zip / .tar.gz / .tgz / .tar');
       }
-    } else if (/\.(tar\.gz|tgz|tar)$/i.test(file)) {
-      await runCmd(tarCmd(), ['-xf', file, '-C', destDir]);
-    } else {
-      throw new Error('仅支持 .zip / .tar.gz / .tgz / .tar');
+
+      const unsafe = this.findUnsafeExtractedEntries(root, quarantine);
+      if (unsafe.length) {
+        const first = unsafe[0];
+        const who =
+          first.kind === 'symlink'
+            ? `符号链接 ${first.rel} -> ${first.target}`
+            : `硬链接 ${first.rel}（${first.target}）`;
+        throw new Error(
+          `压缩包内含指向实例目录之外的${first.kind === 'symlink' ? '符号链接' : '硬链接'}，已拒绝解压：${who}`,
+        );
+      }
+
+      this.mergeTreeInto(quarantine, destDir);
+    } finally {
+      fs.rmSync(quarantine, { recursive: true, force: true });
     }
     return { ok: true };
   },

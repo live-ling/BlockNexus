@@ -77,6 +77,8 @@ fs.writeFileSync(path.join(ROOT, 'outside.txt'), 'secret');
     ...(await extractMethod('copyMovePath')),
     ...(await extractMethod('compressPaths')),
     ...(await extractMethod('extractArchive')),
+    ...(await extractMethod('findUnsafeExtractedEntries')),
+    ...(await extractMethod('mergeTreeInto')),
   };
 
   // 复制
@@ -124,6 +126,64 @@ fs.writeFileSync(path.join(ROOT, 'outside.txt'), 'secret');
     console.log('PASS | zip 解压内容一致');
     total++; pass++;
     await expectAsync('解压不支持的格式 → 拒绝', () => mgr.extractArchive('inst', 'world/a.txt'), '仅支持');
+  }
+
+  // ---------- H1：tar 参数注入（文件名以 - 开头不得变成 tar 的选项）----------
+  // runCmd 用 spawn 传参数组、不过 shell，所以这不是 shell 注入而是**参数注入**：
+  // 一个名为 --checkpoint-action=exec=<命令> 的文件会被 tar 当成选项 → Agent 以 root 运行
+  // → 任意命令执行。修法是 `--` 终止选项解析；下面用「该名字确实作为文件进了包」来验证。
+  {
+    const evil = '--checkpoint-action=exec=echo pwned';
+    fs.writeFileSync(path.join(ROOT, evil), 'payload');
+    await expectAsync('压缩以 -- 开头的文件名（参数注入防护）', () =>
+      mgr.compressPaths('inst', [evil], 'inject.tar.gz'),
+    );
+    const listed = await new Promise((resolve, reject) => {
+      const c = spawn(tarCmd(), ['-tzf', path.join(ROOT, 'inject.tar.gz')]);
+      let out = '';
+      c.stdout.on('data', (d) => (out += d));
+      c.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error('tar -tzf 退出码 ' + code))));
+    });
+    if (!listed.split('\n').some((l) => l.trim() === evil)) {
+      throw new Error('该文件名没有作为**文件**进包，说明它被 tar 当成选项吃掉了：' + JSON.stringify(listed));
+    }
+    console.log('PASS | `--` 生效：以 - 开头的文件名作为普通文件进包');
+    total++;
+    pass++;
+  }
+
+  // ---------- H2：解压逃逸软链 ----------
+  // resolveSafe/isWithinPath 只做文本校验，挡不住软链；压缩包是用户上传的不可信输入。
+  {
+    const q = path.join(ROOT, 'quarantine-test');
+    fs.mkdirSync(path.join(q, 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(q, 'inner', 'ok.txt'), 'fine');
+
+    // 干净树：不应误报
+    const clean = mgr.findUnsafeExtractedEntries(ROOT, q);
+    if (clean.length !== 0) throw new Error('干净树被误报：' + JSON.stringify(clean));
+    console.log('PASS | 无软链的解压结果不误报');
+    total++;
+    pass++;
+
+    // 逃逸软链：必须被识别（Windows 上普通文件软链需特权，用 junction 目录软链；
+    // Node 对 junction 同样返回 isSymbolicLink()=true，readlink 给出绝对目标）
+    let linked = false;
+    try {
+      fs.symlinkSync(os.tmpdir(), path.join(q, 'escape'), 'junction');
+      linked = true;
+    } catch (e) {
+      console.log(`SKIP | 无法创建软链（${e.code}），跳过逃逸检测用例`);
+    }
+    if (linked) {
+      const bad = mgr.findUnsafeExtractedEntries(ROOT, q);
+      if (bad.length !== 1 || bad[0].kind !== 'symlink' || bad[0].rel !== path.join('quarantine-test', 'escape')) {
+        throw new Error('逃逸软链未被正确识别：' + JSON.stringify(bad));
+      }
+      console.log('PASS | 指向实例目录之外的软链被识别（解压会被拒绝）');
+      total++;
+      pass++;
+    }
   }
 
   console.log(`\n${pass}/${total} fs-ops cases passed`);
