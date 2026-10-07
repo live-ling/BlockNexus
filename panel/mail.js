@@ -103,9 +103,26 @@ ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;c
 </html>`;
 }
 
-/** 正文段落 */
+/**
+ * 正文段落。
+ *
+ * ⚠ text **按纯文本转义**。本文件里其它插值点（kv 的值、页脚、品牌名）都走了 esc()，
+ *   只有 p() 漏了。目前所有调用方传的都是静态文案，所以现在没有可注入点——
+ *   但下一个「把服务器名 / 玩家名 / 错误信息塞进正文」的调用方会直接得到 HTML 注入，
+ *   而邮件是发到管理员邮箱的，注入进去的标记会被邮件客户端渲染。
+ *   默认转义让**正确用法成为默认**；确实要内嵌标记时用 pHtml()（并自行保证内容可信）。
+ */
 function p(text, style = '') {
-  return `<p style="margin:0 0 12px;font-size:14px;line-height:1.75;color:${C.fg};${style}">${text}</p>`;
+  return `<p style="margin:0 0 12px;font-size:14px;line-height:1.75;color:${C.fg};${style}">${esc(text)}</p>`;
+}
+
+/**
+ * 允许内嵌 HTML 标记的正文段落。
+ * **只在内容可信（代码内写死的标记 + 已转义的变量）时使用**：
+ * 传进来的 html 不会被转义。变量部分请自己包 esc()。
+ */
+function pHtml(html, style = '') {
+  return `<p style="margin:0 0 12px;font-size:14px;line-height:1.75;color:${C.fg};${style}">${html}</p>`;
 }
 
 /** 键值信息行：左侧标签、右侧内容，对应面板里的字段行 */
@@ -151,7 +168,7 @@ function resetCodeMail({ code, minutes = 15 }) {
       bodyHtml:
         p('有人（可能是你）请求重置 BlockNexus 面板密码。在面板的验证码输入框中填入下面这 6 位数字即可继续。') +
         codeBlock(code) +
-        p(`验证码 <strong>${minutes} 分钟</strong>内有效，用后即失效。`, `color:${C.muted};font-size:13px;`) +
+        pHtml(`验证码 <strong>${minutes} 分钟</strong>内有效，用后即失效。`, `color:${C.muted};font-size:13px;`) +
         p(
           '如果这不是你本人操作，直接忽略本邮件即可——在验证码失效前，任何人都无法改动你的密码。',
           `color:${C.muted};font-size:13px;margin-bottom:0;`,
