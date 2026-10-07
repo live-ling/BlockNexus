@@ -9,7 +9,7 @@ const state = require('./state.js');
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.3.7';
+const AGENT_VERSION = '0.3.8';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
