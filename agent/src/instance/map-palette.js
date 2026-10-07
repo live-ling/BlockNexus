@@ -525,9 +525,12 @@ function shadeIndexFor(topY, northY) {
  * @param {number} pz
  */
 function shadeIndexAt(heights, size, px, pz) {
-  const northPz = pz === 0 ? 1 : pz - 1;
-  const cur = heights[pz * size + px];
-  const north = heights[northPz * size + px];
+  // pz=0 时把**取样行**抬到 1（第一行复用第二行的档位），与 OPanel 一致
+  // （render.rs:56-59 的 `if z == 0 { z += 1 }`）。注意不是「把北邻换成 pz=1」——
+  // 那样算出来的是 h(0)-h(1)，方向相反，有坡度时会在每张区域图顶部留一条色线。
+  const useRow = pz === 0 ? 1 : pz;
+  const cur = heights[useRow * size + px];
+  const north = heights[(useRow - 1) * size + px];
   return shadeIndexFor(cur, north);
 }
 
