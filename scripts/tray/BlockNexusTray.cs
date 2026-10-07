@@ -242,7 +242,8 @@ namespace BlockNexus
             {
                 try { _tray.Visible = false; _tray.Dispose(); } catch { }
             }
-            try { _mutex.ReleaseMutex(); } catch { }
+            // _mutex 可能已在 RestartElevated 里提前释放并置空（提权重启路径）
+            try { if (_mutex != null) _mutex.ReleaseMutex(); } catch { }
             LogStep("process exit");
             return 0;
         }
@@ -709,7 +710,7 @@ namespace BlockNexus
                 {
                     try
                     {
-                        f.ShowTrayNotice(Environment.GetCommandLineArgs().Length > 0 && HasRelaunchFlag());
+                        f.ShowTrayNotice(HasRelaunchFlag());
                     }
                     catch (Exception ex) { LogStep("ShowTrayNotice fail: " + ex.Message); }
                 }));
@@ -740,6 +741,18 @@ namespace BlockNexus
         {
             try
             {
+                // ⚠ 必须**先释放单实例互斥锁**，再拉起新进程。
+                //
+                // 否则：新进程可能在我们真正退出之前就抢到锁做检查 → 看到
+                // createdNew=False → 误判为「已有实例在运行」→ 只给旧实例发一个
+                // 「显示窗口」事件然后自己退出。提权重启就被**静默吞掉**了，
+                // 用户看到的是「点了按钮什么都没发生」。
+                // （这不是假想：本项目就踩过同一个坑 —— 普通实例占着锁时，
+                //   提权启动完全无效，日志里连一条新记录都没有。）
+                try { _mutex.ReleaseMutex(); } catch { }
+                try { _mutex.Dispose(); } catch { }
+                _mutex = null;
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = Application.ExecutablePath,
