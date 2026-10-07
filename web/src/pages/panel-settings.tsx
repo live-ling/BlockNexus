@@ -102,9 +102,9 @@ export function PanelSettingsPage({
         <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
         <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
         <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
+        <LanguageCard accent="language" className="col-span-12" />
         <VersionCard accent="update" className="col-span-12" />
-        <LanguageCard accent="language" className="col-span-12 md:col-span-6" />
-        <AboutEntryCard accent="info" className="col-span-12 md:col-span-6" />
+        <AboutEntryCard accent="info" className="col-span-12" />
       </div>
     </div>
   );
