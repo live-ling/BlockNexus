@@ -564,6 +564,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       port: config.data.panel.port,
       authEnabled: !!config.data.panel.authEnabled,
       version: APP_VERSION,
+      // 危险组合告警（审计 H5）：**对外可达 + 免密** = 任何人都能完全接管面板
+      // （改配置、经 SSH 装 Agent、以 root 读写服务器文件）。
+      // 只做告警、不改默认行为：默认免密对「只监听本机」的单用户场景是正当设计，
+      // 危险的是这个组合。前端据此显示持久横幅。
+      exposedWithoutAuth: !!opts.mayBeExposed && !config.data.panel.authEnabled,
     });
   });
 

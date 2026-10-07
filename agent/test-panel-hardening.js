@@ -52,7 +52,7 @@ function makeConfig() {
  * 复刻 panel/server.js 的中间件顺序——顺序本身就是要测的东西：
  * app 级 body parser 在 router **之前**，其错误不会进入 router 内部错误处理器。
  */
-function makePanel({ limiterOpts = {}, withErrorHandler = true, trustProxy = undefined } = {}) {
+function makePanel({ limiterOpts = {}, withErrorHandler = true, trustProxy = undefined, apiOpts = {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   // 需要「大量不同来源 IP」的用例必须开 trust proxy，否则 req.ip 恒为 127.0.0.1，
@@ -66,7 +66,7 @@ function makePanel({ limiterOpts = {}, withErrorHandler = true, trustProxy = und
   });
   const router = express.Router();
   router.post('/echo', (req, res) => res.json({ ok: true }));
-  router.use(createApi(makeConfig(), fakeHub, fakeBus, limiterOpts, {}));
+  router.use(createApi(makeConfig(), fakeHub, fakeBus, limiterOpts, apiOpts));
   app.use('/api', router);
 
   // ← 与 server.js 一致：SPA 回退（非错误处理器）
@@ -355,6 +355,36 @@ function jsonPost(base, p, body, headers = {}) {
       !!r3.error && r3.error.includes(fpA) && r3.error.includes(ssh.hostKeyFingerprint(keyB)) && /中间人/.test(r3.error),
       r3.error,
     );
+  }
+
+  // ================= H5「对外可达 + 免密」告警信号 =================
+  // 只做**告警**不改默认行为：默认免密对「只听本机」的单用户场景是正当设计，
+  // 危险的是「对外可达 + 免密」这个组合。前端据 /api/me 显示持久横幅。
+  {
+    // 测试用 config 的 authEnabled 恒为 false，所以 exposedWithoutAuth 直接跟随 mayBeExposed
+    const exposedPanel = await makePanel({ apiOpts: { mayBeExposed: true } });
+    try {
+      const me = await (await fetch(`${exposedPanel.base}/api/me`)).json();
+      check(
+        '对外可达 + 免密 → /api/me 带 exposedWithoutAuth=true',
+        me.exposedWithoutAuth === true,
+        JSON.stringify(me),
+      );
+    } finally {
+      await exposedPanel.close();
+    }
+
+    const localPanel = await makePanel({ apiOpts: { mayBeExposed: false } });
+    try {
+      const me = await (await fetch(`${localPanel.base}/api/me`)).json();
+      check(
+        '仅本机监听 → 不报警（避免误报刷屏）',
+        me.exposedWithoutAuth === false,
+        JSON.stringify(me),
+      );
+    } finally {
+      await localPanel.close();
+    }
   }
 
   console.log(`\n${pass}/${total} panel-hardening cases passed`);

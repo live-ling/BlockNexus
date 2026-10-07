@@ -1,7 +1,7 @@
 // App：左侧窄导航栏（logo）+ 底部中央展开式操作条（beUI ExpandableActionBar）+ 登录态管理
 
 import { useCallback, useEffect, useState } from 'react';
-import { LogOut, Server, Settings } from 'lucide-react';
+import { LogOut, Server, Settings, ShieldAlert } from 'lucide-react';
 import {
   ExpandableActionBar,
   type ExpandableActionBarItem,
@@ -263,6 +263,20 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
 
   return (
     <>
+      {/*
+        危险组合的持久横幅（审计 H5）：**对外可达 + 没开鉴权**。
+        此时任何人打开这个地址就能完全接管面板——改配置、经 SSH 装 Agent、
+        以 root 读写服务器文件。后端只给信号、不改默认行为（默认免密对
+        「只听本机」的单用户场景是正当设计），所以这里必须显眼地提示。
+        刻意不做成可关闭的 toast：这是持续存在的配置风险，不是一次性事件。
+      */}
+      {me.exposedWithoutAuth && (
+        <div className="fixed inset-x-0 top-0 z-50 flex flex-wrap items-center gap-x-2 gap-y-0.5 bg-destructive px-4 py-1.5 text-xs text-destructive-foreground">
+          <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+          <b>{$('warning.exposedNoAuth.title')}</b>
+          <span className="opacity-90">{$('warning.exposedNoAuth.desc')}</span>
+        </div>
+      )}
       {/* 语言切换：登录后也能改（登录页另有一份，因为那时还没进 App） */}
       <LanguageToggle className="fixed right-4 top-4 z-40 bg-background/60 backdrop-blur" />
       <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">

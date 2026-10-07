@@ -1178,4 +1178,8 @@ export const zh = {
   'console.close': '关闭控制台',
   'fileTree.select.aria': '选择 {0}',
   'logViewer.jumpToLatest': '跳到最新',
+
+  // ---------- warning ----------
+  'warning.exposedNoAuth.title': '面板未启用登录保护，且已对外暴露',
+  'warning.exposedNoAuth.desc': '任何人访问此地址即可完全接管面板（改配置、经 SSH 安装 Agent、以 root 读写服务器文件）。请立即在「面板设置」中开启登录保护。',
 } as const
