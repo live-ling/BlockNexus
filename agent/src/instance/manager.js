@@ -239,6 +239,7 @@ Object.assign(
   require('./serverinfo.js'),
   require('./spark.js'),
   require('./java.js'),
+  require('./map.js'),
 );
 
 module.exports = { InstanceManager };

@@ -255,6 +255,11 @@ class Agent {
         return m.iconGet(p.name);
       case 'instance.iconSet':
         return m.iconSet(p.name, p.b64);
+      // ---------- 地图（P4-1）：区域级 PNG，浏览器原生解码 ----------
+      case 'instance.map.saves':
+        return m.mapSaves(p.name);
+      case 'instance.map.region':
+        return m.mapRegion(p.name, p.save, p.x, p.z, { force: !!p.force });
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.backupSchedule.set':
