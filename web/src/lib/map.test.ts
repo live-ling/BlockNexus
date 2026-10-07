@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEFAULT_ZOOM,
   REGION_BLOCKS,
   ZOOM_MAX,
   ZOOM_MIN,
@@ -128,24 +129,33 @@ describe('worldToScreen / screenToWorld 互为逆运算', () => {
 
 describe('zoomAround：锚点不动（滚轮手感的关键）', () => {
   it('缩放前后锚点处的世界坐标不变', () => {
-    const v = V(0, 0, 1)
+    // 基准 zoom 必须落在 [ZOOM_MIN, ZOOM_MAX] = [1.75, 10] 内，
+    // 否则会被钳制，断言量到的就不是我们想测的那次缩放
+    const v = V(0, 0, DEFAULT_ZOOM)
     const sx = 300
     const sy = 200
     const before = screenToWorld(sx, sy, v)
-    const next = zoomAround(v, 1.2, sx, sy)
+    const next = zoomAround(v, 1.1, sx, sy)
     const after = screenToWorld(sx, sy, next)
     expect(after.bx).toBeCloseTo(before.bx, 6)
     expect(after.bz).toBeCloseTo(before.bz, 6)
-    expect(next.zoom).toBeCloseTo(1.2, 6)
+    expect(next.zoom).toBeCloseTo(DEFAULT_ZOOM * 1.1, 6)
   })
 
-  it('缩小方向同样保持锚点', () => {
-    const v = V(-100, 50, 2)
+  it('缩小方向同样保持锚点（且不触发下限钳制）', () => {
+    const v = V(-100, 50, DEFAULT_ZOOM * 2)
     const before = screenToWorld(123, 45, v)
-    const next = zoomAround(v, 1 / 1.2, 123, 45)
+    const next = zoomAround(v, 0.9, 123, 45)
     const after = screenToWorld(123, 45, next)
     expect(after.bx).toBeCloseTo(before.bx, 6)
     expect(after.bz).toBeCloseTo(before.bz, 6)
+    expect(next.zoom).toBeCloseTo(DEFAULT_ZOOM * 2 * 0.9, 6)
+  })
+
+  it('下限钳制时原样返回，锚点语义不被破坏', () => {
+    const v = V(0, 0, ZOOM_MIN)
+    const next = zoomAround(v, 0.9, 200, 150)   // 会被钳到 ZOOM_MIN ⇒ 等于没变
+    expect(next).toBe(v)
   })
 
   it('缩放到上限后不再变', () => {
@@ -193,6 +203,35 @@ describe('panBy：拖动手感', () => {
 
   it('zoom 不变', () => {
     expect(panBy(V(0, 0, 3), 10, 10).zoom).toBe(3)
+  })
+})
+
+describe('缩放量级（对齐 OPanel，防再退回「1 像素一方块」）', () => {
+  // 这一组是「色块太小」那个 bug 的回归网。
+  // 原先 ZOOM_MIN=0.05 / DEFAULT=1：一屏能覆盖 400+ 个区域（请求风暴），
+  // 且默认一个方块只占 1 个屏幕像素 —— 根本看不出「方块」。
+  // OPanel 的语义是「端到端最少放大 1.75×、默认 2×」。
+  it('下限不低于 1.75（每方块至少 1.75 屏幕像素）', () => {
+    expect(ZOOM_MIN).toBeGreaterThanOrEqual(1.75)
+  })
+
+  it('默认缩放为 2（每方块 2 像素）', () => {
+    expect(DEFAULT_ZOOM).toBe(2)
+  })
+
+  it('默认值落在范围内', () => {
+    expect(DEFAULT_ZOOM).toBeGreaterThanOrEqual(ZOOM_MIN)
+    expect(DEFAULT_ZOOM).toBeLessThanOrEqual(ZOOM_MAX)
+  })
+
+  it('一屏覆盖的区域数有上限（不会因缩得太小而爆炸）', () => {
+    // 取一个偏大的画布 1920×1080，在最小缩放下数覆盖到的区域数
+    const r = regionRange({ camX: 0, camZ: 0, zoom: ZOOM_MIN }, 1920, 1080)!
+    const cols = r.rx1 - r.rx0 + 1
+    const rows = r.rz1 - r.rz0 + 1
+    // 下限 1.75 时约 3×2；即便放宽到 1 也才 4×3。设 64 作为「绝不该爆」的粗线，
+    // 真正要防的是 0.05 那种量级（那会是 400+）。
+    expect(cols * rows).toBeLessThan(64)
   })
 })
 

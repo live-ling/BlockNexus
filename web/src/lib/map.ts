@@ -14,9 +14,20 @@
 /** 一个 region 覆盖的方块边长 */
 export const REGION_BLOCKS = 512;
 
-/** 缩放范围（每方块像素数） */
-export const ZOOM_MIN = 0.05;
-export const ZOOM_MAX = 8;
+/**
+ * 缩放范围与默认值（每方块多少 CSS 像素）。
+ *
+ * ⚠ 这三条与 OPanel 对齐（.opanel-reference/frontend/hooks/use-map-tiles.ts:6-8）。
+ *   原先我用 0.05~8、默认 1，后果有两个且都被用户直接看到：
+ *     · 默认 1 = **一个方块只占 1 个屏幕像素**，根本看不出「方块」，像一片细碎纹理；
+ *     · 下限 0.05 = 一屏覆盖约 400+ 个区域 → 触发请求风暴，还显得「缩放异常」。
+ *   OPanel 的语义是「**端到端最少放大 1.75×、默认 2×**」——它从不允许缩到
+ *   一像素一方块。跟随这个下限同时也天然封顶了并发请求数。
+ */
+export const ZOOM_MIN = 1.75;
+export const ZOOM_MAX = 10;
+/** 初始与重置时的缩放（每方块 2 像素） */
+export const DEFAULT_ZOOM = 2;
 
 export type View = { camX: number; camZ: number; zoom: number };
 
