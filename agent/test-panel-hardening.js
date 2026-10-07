@@ -323,6 +323,40 @@ function jsonPost(base, p, body, headers = {}) {
     check('放行公网 API', allow('https://api.deepseek.com'));
   }
 
+  // ================= H4 SSH 主机密钥 TOFU =================
+  // 不做主机密钥校验的后果：能做中间人的人即可拿到 SSH 凭据并完全接管服务器。
+  // 采 TOFU 而非强制人工核对：本项目是单人使用，用户手上通常没有服务器指纹。
+  {
+    const ssh = require(path.join(__dirname, '..', 'panel', 'ssh.js'));
+    const keyA = Buffer.from('ssh-rsa AAAA-first-host-key');
+    const keyB = Buffer.from('ssh-rsa AAAA-different-host-key');
+
+    const fpA = ssh.hostKeyFingerprint(keyA);
+    check('指纹是 OpenSSH 风格 SHA256:', /^SHA256:[A-Za-z0-9+/]+$/.test(fpA), fpA);
+    check('同一密钥指纹稳定', ssh.hostKeyFingerprint(keyA) === fpA);
+    check('不同密钥指纹不同', ssh.hostKeyFingerprint(keyB) !== fpA);
+
+    // 首次：记录并放行
+    const fresh = { ssh: {} };
+    const r1 = ssh.verifyHostKey(fresh, keyA);
+    check('首次连接：放行且标记为「需记录」', r1.ok === true && r1.recorded === true, JSON.stringify(r1));
+
+    // 之后一致：放行且不再记录
+    const same = { ssh: { hostKeyFingerprint: fpA } };
+    const r2 = ssh.verifyHostKey(same, keyA);
+    check('指纹一致：放行且不重复记录', r2.ok === true && r2.recorded === false, JSON.stringify(r2));
+
+    // 不一致：拒绝，且错误里能同时看到两个指纹（便于用户判断是换机还是被劫持）
+    const changed = { ssh: { hostKeyFingerprint: fpA } };
+    const r3 = ssh.verifyHostKey(changed, keyB);
+    check('指纹不一致：拒绝连接', r3.ok === false, JSON.stringify(r3));
+    check(
+      '拒绝时错误信息含「记录/本次」两个指纹与中间人提示',
+      !!r3.error && r3.error.includes(fpA) && r3.error.includes(ssh.hostKeyFingerprint(keyB)) && /中间人/.test(r3.error),
+      r3.error,
+    );
+  }
+
   console.log(`\n${pass}/${total} panel-hardening cases passed`);
   process.exit(pass === total ? 0 : 1);
 })().catch((e) => {
