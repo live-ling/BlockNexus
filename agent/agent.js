@@ -4452,8 +4452,16 @@ module.exports = {
     const shaded = new Array(names.length * 4);
 
     for (let pz = 0; pz < size; pz++) {
-      // 北侧邻居行：pz=0 时按原版做法改用 pz=1（避免第一行出现凭空的黑边）
-      const northRow = (pz === 0 ? 1 : pz - 1) * size;
+      // 明暗取样行：**pz=0 时把取样行抬到 1**，即第一行直接复用第二行的档位。
+      //
+      // ⚠ 这里与 OPanel 对齐（.opanel-reference/frontend/wasm-lib/map-renderer
+      //   /render.rs:56-59 的 `if z == 0 { z += 1 }`）。
+      //   我第一版把它理解成「把北邻换成 pz=1」，于是算的是 h(0)-h(1) —— 方向相反。
+      //   平地看不出来，但有坡度时每张区域图**顶部一行会与参考实现相反（通常更暗）**，
+      //   形成每 512 像素一条水平色线。
+      const useRow = pz === 0 ? 1 : pz;
+      const northRow = (useRow - 1) * size;
+      const sampleRow = useRow * size;
       const row = pz * size;
       for (let px = 0; px < size; px++) {
         const p = row + px;
@@ -4464,7 +4472,7 @@ module.exports = {
         const base = palette.colorOf(name);
         if (!base) continue; // 空气/透明方块
 
-        const diff = heights[p] - heights[northRow + px];
+        const diff = heights[sampleRow + px] - heights[northRow + px];
         const shade = diff > 0 ? 0 : diff === 0 ? 1 : diff > -2 ? 2 : 3;
         const key = pi * 4 + shade;
         let rgb = shaded[key];
@@ -5691,9 +5699,12 @@ function shadeIndexFor(topY, northY) {
  * @param {number} pz
  */
 function shadeIndexAt(heights, size, px, pz) {
-  const northPz = pz === 0 ? 1 : pz - 1;
-  const cur = heights[pz * size + px];
-  const north = heights[northPz * size + px];
+  // pz=0 时把**取样行**抬到 1（第一行复用第二行的档位），与 OPanel 一致
+  // （render.rs:56-59 的 `if z == 0 { z += 1 }`）。注意不是「把北邻换成 pz=1」——
+  // 那样算出来的是 h(0)-h(1)，方向相反，有坡度时会在每张区域图顶部留一条色线。
+  const useRow = pz === 0 ? 1 : pz;
+  const cur = heights[useRow * size + px];
+  const north = heights[(useRow - 1) * size + px];
   return shadeIndexFor(cur, north);
 }
 
