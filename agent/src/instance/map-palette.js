@@ -210,6 +210,45 @@ const COLORS = {
   terracotta: [152, 94, 67],
   white_terracotta: [209, 178, 161],
   orange_terracotta: [161, 83, 37],
+
+  // ---------- 花岗岩类：在石头里成团生成，山地/海岸剖面大面积露出 ----------
+  // ⚠ 这三种早期漏掉了，实测「50 个常见方块里 35 个未命中」时它们排在最前。
+  //   缺它们的直接后果是整片山体渲染成品红 —— 就是用户看到的「满屏噪点」。
+  andesite: [136, 136, 137],
+  diorite: [207, 207, 208],
+  granite: [149, 103, 85],
+  polished_andesite: [132, 132, 133],
+  polished_diorite: [214, 214, 215],
+  polished_granite: [154, 106, 88],
+  smooth_quartz: [235, 232, 225],
+  smooth_sandstone: [220, 208, 160],
+  smooth_red_sandstone: [181, 97, 31],
+  smooth_stone: [158, 158, 158],
+  cut_sandstone: [216, 203, 155],
+  cut_red_sandstone: [181, 97, 31],
+  chiseled_sandstone: [216, 203, 155],
+  chiseled_red_sandstone: [181, 97, 31],
+  chiseled_quartz_block: [232, 229, 220],
+  chiseled_deepslate: [54, 54, 56],
+  cracked_deepslate_bricks: [62, 62, 64],
+  cracked_deepslate_tiles: [48, 48, 50],
+  smooth_basalt: [72, 72, 78],
+
+  // ---------- 1.17+ / 1.19+ 自然与建筑方块 ----------
+  sculk: [16, 24, 30],
+  sculk_vein: [14, 20, 26],
+  sculk_catalyst: [12, 26, 28],
+  sculk_shrieker: [18, 28, 32],
+  mangrove_roots: [94, 66, 44],
+  muddy_mangrove_roots: [70, 60, 48],
+  warped_nylium: [43, 104, 99],
+  crimson_nylium: [130, 40, 45],
+  nether_sprouts: [40, 120, 110],
+  bamboo_planks: [193, 168, 82],
+  bamboo_mosaic: [193, 168, 82],
+  ochre_froglight: [222, 214, 168],
+  verdant_froglight: [190, 214, 178],
+  pearlescent_froglight: [226, 200, 214],
   moss_block: [89, 109, 45],
   azalea_leaves: [76, 107, 32],
   flowering_azalea_leaves: [90, 120, 45],
@@ -360,6 +399,92 @@ function normalize(name) {
 }
 
 /**
+ * 可剥的后缀：形状变体。
+ *
+ * 为什么用「剥后缀」而不是把变体全列进色表：
+ *   MC 里每个方块几乎都有 stairs / slab / wall / fence / door / trapdoor / button /
+ *   pressure_plate / sign / pane / carpet 等形状变体，而且各自还有 16 种染色版与
+ *   5 种氧化态。全枚举是**几千条**，而它们的颜色本就与基础方块一致或极接近。
+ *   一条剥离规则就能覆盖，且新增方块时自动跟着生效。
+ *
+ * ⚠ 刻意**不**剥 `_block`：`coal_block` / `iron_block` 等是独立配色，剥掉会全变成煤/铁的原色。
+ */
+const STRIP_SUFFIX = [
+  '_stairs',
+  '_slab',
+  '_wall',
+  '_fence_gate',
+  '_fence',
+  '_trapdoor',
+  '_door',
+  '_button',
+  '_pressure_plate',
+  '_hanging_sign',
+  '_sign',
+  '_pane',
+  '_carpet',
+  '_bars',
+];
+
+/** 可剥的前缀：加工变体（颜色接近基础方块） */
+const STRIP_PREFIX = [
+  'polished_',
+  'smooth_',
+  'chiseled_',
+  'cut_',
+  'cracked_',
+  'mossy_',
+  'stripped_',
+  'waxed_',
+  'exposed_',
+  'weathered_',
+  'oxidized_',
+  'infested_',
+  'cobbled_',
+];
+
+/** 木头家族：`oak_stairs` 这类剥完只剩 `oak`，再退到 `oak_planks` */
+const WOODS = new Set([
+  'oak',
+  'spruce',
+  'birch',
+  'jungle',
+  'acacia',
+  'dark_oak',
+  'mangrove',
+  'cherry',
+  'bamboo',
+  'crimson',
+  'warped',
+]);
+
+/** 带递归的查表（剥前缀 → 剥后缀 → 木头退化），深度受规则数限制，不会无限递归 */
+function lookup(n, depth = 0) {
+  const hit = COLORS[n];
+  if (hit) return [hit[0], hit[1], hit[2]];
+  if (depth > 3) return null;
+
+  for (const p of STRIP_PREFIX) {
+    if (n.startsWith(p) && n.length > p.length) {
+      const r = lookup(n.slice(p.length), depth + 1);
+      if (r) return r;
+    }
+  }
+  for (const s of STRIP_SUFFIX) {
+    if (n.endsWith(s) && n.length > s.length) {
+      const base = n.slice(0, -s.length);
+      const r = lookup(base, depth + 1);
+      if (r) return r;
+      if (WOODS.has(base)) {
+        const w = COLORS[base + '_planks'];
+        if (w) return [w[0], w[1], w[2]];
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 方块名 → RGB。未知方块返回**品红**（刻意刺眼），透明方块返回 `null`。
  * @param {string} name
  * @returns {[number, number, number]|null}
@@ -367,8 +492,7 @@ function normalize(name) {
 function colorOf(name) {
   const n = normalize(name);
   if (!n || TRANSPARENT.has(n)) return null;
-  const c = COLORS[n];
-  return c ? [c[0], c[1], c[2]] : UNKNOWN;
+  return lookup(n) || UNKNOWN;
 }
 
 /**

@@ -67,6 +67,8 @@ export function MapPanel({
   // 用 ref 打断：draw 只调用 requestRef.current(...)，不直接引用 requestRegion 的函数值。
   // （比用 lint 压制 react-hooks/exhaustive-deps 好：压制会把真正的依赖漏项也一起藏起来。）
   const requestRef = useRef<(rx: number, rz: number) => void>(() => {});
+  // 缩放函数也要给「原生非被动 wheel 监听」用（原因见下方绑定的注释）
+  const zoomRef = useRef<(factor: number, sx: number, sy: number) => void>(() => {});
 
   useEffect(() => {
     curRef.current = cur;
@@ -150,7 +152,7 @@ export function MapPanel({
           continue;
         }
         const r = regionRect(rx, rz, view);
-        ctx.drawImage(img, r.dx, r.dy, r.size, r.size);
+        ctx.drawImage(img, r.dx, r.dy, r.dw, r.dh);
       }
     }
   }, []);
@@ -238,10 +240,30 @@ export function MapPanel({
     scheduleDraw();
   };
 
-  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - rect.left, e.clientY - rect.top);
-  };
+  // 把 zoomAt 的最新函数值交给原生 wheel 监听
+  useEffect(() => {
+    zoomRef.current = zoomAt;
+  });
+
+  // ---------- 滚轮缩放：必须用**非被动**原生监听 ----------
+  //
+  // ⚠ 不能用 React 的 onWheel + e.preventDefault()：
+  //   React 17+ 把 `wheel`（以及 touchstart/touchmove）注册为**被动监听**（passive: true），
+  //   被动监听里调用 preventDefault() 是**无效的**（浏览器会忽略并可能打印警告）。
+  //   结果就是：滚轮缩放地图的同时，整个页面也跟着上下滚动 —— 这正是用户报的那个 bug。
+  //   唯一可靠做法是自己用 { passive: false } 绑原生监听，再阻止默认行为。
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      // 阻止页面滚动（含滚动链）：在地图上滚轮只用来缩放
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      zoomRef.current(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - rect.left, e.clientY - rect.top);
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
 
   /** 居中到世界坐标 */
   const doCenterOn = (bx: number, bz: number) => {
@@ -323,7 +345,7 @@ export function MapPanel({
       </div>
 
       {/* 画布 */}
-      <div ref={wrapRef} className={`relative overflow-hidden rounded-xl border bg-[#0b0f14] ${heightClass}`}>
+      <div ref={wrapRef} className={`relative overflow-hidden overscroll-contain rounded-xl border bg-[#0b0f14] ${heightClass}`}>
         <canvas
           ref={canvasRef}
           className="h-full w-full cursor-grab touch-none active:cursor-grabbing"
@@ -331,7 +353,6 @@ export function MapPanel({
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
-          onWheel={onWheel}
         />
         <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur">
           {$('map.hint')}
