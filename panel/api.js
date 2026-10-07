@@ -200,6 +200,39 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     return res.status(status).json(body);
   }
 
+  /**
+   * 校验主机名 / IP。用于 SSH 安装流程里把 `server.host` 拼进远端 `sh -c` 命令前，
+   * 防止审计 R4 报告指出的 openssl -subj 引号嵌套命令注入。
+   *
+   * 判定标准：
+   *  · IPv4（4 段 0–255）
+   *  · IPv6（带可选的方括号）
+   *  · RFC 1123 主机名（字母/数字/连字符/点，单段 ≤ 63，整体 ≤ 253）
+   *
+   * 注意：这是 admin 自配置服务器字段，不接受未认证调用。但 admin 也可能写错——
+   * 允许任何字符就会让 `openssl req -subj "/CN=${cn}"` 的双引号被破出。
+   * 「server.host 拼进远端命令」是 ssh.js 的具体场景，本校验放 api 层做集中入口拦截，
+   * ssh.js 那侧再独立加一道引号转义作纵深。
+   */
+  const HOSTNAME_LABEL_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+  function isValidHost(h) {
+    if (typeof h !== 'string') return false;
+    const v = h.trim();
+    if (!v || v.length > 253) return false;
+    // IPv4
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) {
+      return v.split('.').every((o) => {
+        const n = Number(o);
+        return n >= 0 && n <= 255 && String(n) === String(Number(o));
+      });
+    }
+    // IPv6（带或不带方括号——浏览器不会给服务器套括号，但保守放过）
+    if (/^(\[[0-9a-fA-F:]+\]|[0-9a-fA-F:]+)$/.test(v) && v.includes(':')) return true;
+    // 主机名（RFC 1123）
+    if (v.endsWith('.')) return false; // 拒绝尾点，避免与 FQDN 写法歧义
+    return v.split('.').every((l) => HOSTNAME_LABEL_RE.test(l));
+  }
+
   // ---------- 任务日志：留存最近一批，供页面刷新后重放 ----------
   // 纯广播的日志一刷新就丢，而 SSH 装 Node 动辄几分钟，用户很可能中途刷新，
   // 因此在服务端按 (serverId, 任务类型) 缓存日志与完成状态。
@@ -435,8 +468,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // ⚠ 真正的防线是 SameSite=Lax Cookie + 全库无 CORS 中间件，本检查是第二层，不是主防线。
   // 跨域 HTML 表单只能发出 CORS 安全列表内的 Content-Type；PUT/PATCH/DELETE 与
   // application/json 都会触发预检，因此在浏览器里无法被跨站表单伪造。
+  // ⚠ `multipart/form-data` 已**从白名单中移除**（R1/R2/R5 三份报告均指出）：
+  //   浏览器允许跨站表单以 multipart/form-data 提交且**不触发预检**，于是它能绕过
+  //   JSON / urlencoded 触发的预检防线。本仓库目前只有 SFTP 直传一个 multipart
+  //   端点，且已用路径白名单单独放行（见下方 if 分支），所以可以安全移除。
   const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-  const CSRF_SAFE_TYPES = ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data'];
+  const CSRF_SAFE_TYPES = ['application/json', 'application/x-www-form-urlencoded'];
 
   /**
    * 请求是否带 body。用 content-length / transfer-encoding 判定，不依赖 Content-Type。
@@ -475,6 +512,10 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const LIMITER_MAX_TRACKED = Number(limiterOpts.maxTracked) || 10000;
   // loginFails 的上限名对外暴露（/api/limits 会返回它），保持不变
   const LOGIN_MAX_TRACKED = LIMITER_MAX_TRACKED;
+  // sessions 表的容量上限：单用户面板正常情况不会到这儿，留点余量。
+  // 真到上限时按插入顺序淘汰最旧的（与限流表「表满淘汰最旧」同思路——
+  // 拒绝新会话等于顺手做出 DoS）。
+  const MAX_SESSIONS = 256;
   const loginFails = new Map(); // ip -> { count, until, at }
 
   /** loginFails 记录是否已无用（周期 GC 与上限裁剪**共用**同一谓词，避免两处判定漂移） */
@@ -546,6 +587,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const rememberOn = remember !== false;
     const ttl = rememberOn ? REMEMBER_TTL : SESSION_TTL;
     sessions.set(sid, { exp: Date.now() + ttl, remember: rememberOn });
+    // 容量上限：sessions 是按会话增长的表，与 loginFails/forgotSent 同样是「会话级」键空间。
+    // 单用户面板没有这么多会话，但理论上伪造会话 cookie 可以堆大小，所以仍然设上限。
+    // 与限流表不同——这里没有「过期判定」，GC 周期 60s 内的新会话无法依赖过期回收——
+    // 所以**只按插入顺序淘汰**最旧的；GC 周期会补一刀把过期残留清掉。
+    capTracked(sessions, MAX_SESSIONS, Date.now(), () => false);
     const maxAge = rememberOn ? `; Max-Age=${Math.floor(REMEMBER_TTL / 1000)}` : '';
     res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/${maxAge}${cookieAttrs(req)}`);
     res.json({ ok: true });
@@ -881,6 +927,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         config.save();
         const sid = crypto.randomBytes(24).toString('hex');
         sessions.set(sid, { exp: Date.now() + SESSION_TTL, remember: false });
+        capTracked(sessions, MAX_SESSIONS, Date.now(), () => false);
         res.setHeader('Set-Cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 24 * 3600}${cookieAttrs(req)}`);
       } else {
         // 关闭登录时也允许顺带改用户名（面板此时本身免密，无泄露面）
@@ -1037,6 +1084,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/servers/ssh-check', async (req, res, next) => {
     const b = req.body || {};
     if (!b.host) return fail(res, 'server.host-required');
+    if (!isValidHost(b.host)) return fail(res, 'server.host-invalid');
     if (localAgent.isLocalHost(b.host)) {
       return res.json({
         ok: true,
@@ -1067,6 +1115,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/servers', (req, res) => {
     const b = req.body || {};
     if (!b.host) return fail(res, 'server.host-required');
+    if (!isValidHost(b.host)) return fail(res, 'server.host-invalid');
     const server = config.addServer(b);
     hub.syncOutbound();
     res.json(sanitize(server, { revealToken: true }));
@@ -1092,6 +1141,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const server = requireServer(req, res);
     if (!server) return;
     const b = req.body || {};
+    if (b.host !== undefined && !isValidHost(b.host)) return fail(res, 'server.host-invalid');
     const patch = {
       name: b.name,
       host: b.host,
