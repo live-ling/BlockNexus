@@ -461,6 +461,26 @@ function jsonPost(base, p, body, headers = {}) {
     }
   }
 
+  // ================= 邮件模板的 HTML 注入防护 =================
+  // mail.js 里 kv 的值、页脚、品牌名都走了 esc()，唯独 p() 漏了。
+  // 当时所有调用方传的都是静态文案，所以没有可注入点；但下一个把
+  // 服务器名/玩家名塞进正文的调用方就会直接得到注入——而邮件是在邮件客户端里渲染的。
+  // 现已让 p() 默认转义，内嵌标记必须显式用 pHtml()。
+  {
+    const mail = require(path.join(__dirname, '..', 'panel', 'mail.js'));
+    const hostile = '服<script>alert(1)</script>';
+
+    const off = mail.offlineMail({ name: hostile, host: '1.2.3.4' });
+    check('恶意服务器名在 HTML 里被转义', !String(off.html).includes('<script>alert(1)'), '出现了原始 <script>');
+    check('转义后留下实体（确实处理过而不是被丢掉）', String(off.html).includes('&lt;script&gt;'));
+    check('纯文本部分保留原文（纯文本不需要转义）', String(off.text).includes(hostile));
+
+    // 反向断言：有意内嵌的标记不能被「顺手转义」掉，否则验证码邮件会少格式
+    const rc = mail.resetCodeMail({ code: '123456', minutes: 15 });
+    check('有意内嵌的 <strong> 保留（pHtml 生效，未过度转义）', /<strong>15 分钟<\/strong>/.test(rc.html));
+    check('且没有被双重转义', !/&lt;strong&gt;/.test(rc.html));
+  }
+
   console.log(`\n${pass}/${total} panel-hardening cases passed`);
   process.exit(pass === total ? 0 : 1);
 })().catch((e) => {
