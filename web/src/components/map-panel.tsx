@@ -21,12 +21,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { $ } from '@/lib/i18n';
 import { api, errText } from '@/lib/api';
 import {
+  DEFAULT_ZOOM,
   REGION_BLOCKS,
   centerOn as centerOnView,
   panBy,
   regionKey,
   regionRange,
   regionRect,
+  screenToWorld,
   zoomAround,
 } from '@/lib/map';
 
@@ -48,14 +50,24 @@ export function MapPanel({
   const [cur, setCur] = useState('');
   const [phase, setPhase] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
   const [msg, setMsg] = useState('');
-  const [zoomUi, setZoomUi] = useState(1);
+  const [zoomUi, setZoomUi] = useState(DEFAULT_ZOOM);
+  /**
+   * 光标处的世界方块坐标读数。
+   * 为什么必须有：`worldToScreen/screenToWorld` 纯函数虽然有单测，但「用户看到的位置对不对」
+   * 只能靠一个**可读的坐标**来闭环验证（与游戏内 F3 对照一个不对称地标）。
+   * 没有它就只能靠「感觉不对」来报障，无法定位是映射错、还是初始视角偏。
+   */
+  const [coordUi, setCoordUi] = useState<{ x: number; z: number } | null>(null);
+  const coordKeyRef = useRef('');
   const [jumpX, setJumpX] = useState('');
   const [jumpZ, setJumpZ] = useState('');
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // 视角：camX/camZ 是视口左上角对应的**世界方块坐标**
-  const viewRef = useRef({ camX: -REGION_BLOCKS / 2, camZ: -REGION_BLOCKS / 2, zoom: 1 });
+  const viewRef = useRef({ camX: -REGION_BLOCKS / 2, camZ: -REGION_BLOCKS / 2, zoom: DEFAULT_ZOOM });
+  // 是否已按真实画布尺寸把世界原点摆到正中（见 ResizeObserver 那个 effect）
+  const initedRef = useRef(false);
   const dragRef = useRef<{ x: number; y: number; camX: number; camZ: number } | null>(null);
   const rafRef = useRef(0);
   const imgsRef = useRef(new Map<string, HTMLImageElement>());
@@ -108,8 +120,10 @@ export function MapPanel({
     imgsRef.current.clear();
     inflightRef.current.clear();
     haveRef.current = new Set();
-    viewRef.current = { camX: -REGION_BLOCKS / 2, camZ: -REGION_BLOCKS / 2, zoom: 1 };
-    setZoomUi(1);
+    // 复位：交给 ResizeObserver 那个 effect 按真实画布尺寸重新居中
+    // （initedRef 置 false 即可；不要再硬编码左上角，否则原点不在正中）
+    initedRef.current = false;
+    setZoomUi(DEFAULT_ZOOM);
     const s = saves.find((x) => x.save === cur);
     if (s) for (const [x, z] of s.regions) haveRef.current.add(`${x},${z}`);
   }, [cur, saves]);
@@ -195,11 +209,24 @@ export function MapPanel({
   // 尺寸变化与可见性变化都要重绘（隐藏期间 clientWidth 为 0，不能画）
   // ⚠ 依赖里同样必须有 phase：理由与滚轮 effect 完全相同 —— wrapRef 只在 ready
   //   阶段存在，空/不充分的依赖会让观察器永远挂不上（窗口缩放时不重绘）。
+  //
+  // 首次拿到真实尺寸时把世界原点 (0,0) 摆到视口正中。
+  // 原先用硬编码 `(-256,-256)` 当左上角，那只在画布恰好 512×512 时才让原点居中；
+  // 而实际高度是 45vh/60vh → 原点偏移，用户会以为「位置映射不对」。
   useEffect(() => {
     if (!visible) return;
-    scheduleDraw();
     const wrap = wrapRef.current;
     if (!wrap) return;
+    if (!initedRef.current) {
+      const w = wrap.clientWidth;
+      const h = wrap.clientHeight;
+      if (w > 0 && h > 0) {
+        viewRef.current = centerOnView(0, 0, DEFAULT_ZOOM, w, h);
+        setZoomUi(DEFAULT_ZOOM);
+        initedRef.current = true;
+      }
+    }
+    scheduleDraw();
     const ro = new ResizeObserver(() => scheduleDraw());
     ro.observe(wrap);
     return () => ro.disconnect();
@@ -219,6 +246,23 @@ export function MapPanel({
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // 坐标读数先算（必须在拖动提前返回之前，否则不拖动时就没有读数）
+    const el = wrapRef.current;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const bl = (rect.width - el.clientWidth) / 2;
+      const bt = (rect.height - el.clientHeight) / 2;
+      const b = screenToWorld(e.clientX - rect.left - bl, e.clientY - rect.top - bt, viewRef.current);
+      // 取整到方块；只有跨方块时才 setState，避免每像素一次重渲染
+      const bx = Math.floor(b.bx);
+      const bz = Math.floor(b.bz);
+      const key = bx + ',' + bz;
+      if (key !== coordKeyRef.current) {
+        coordKeyRef.current = key;
+        setCoordUi({ x: bx, z: bz });
+      }
+    }
+
     const d = dragRef.current;
     if (!d) return;
     // 用拖动起点算总位移（而不是逐帧累加），避免误差累积与丢帧导致的漂移
@@ -266,7 +310,14 @@ export function MapPanel({
       // 阻止页面滚动（含滚动链）：在地图上滚轮只用来缩放
       e.preventDefault();
       const rect = el.getBoundingClientRect();
-      zoomRef.current(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - rect.left, e.clientY - rect.top);
+      // ⚠ 锚点必须换算到**内容盒**：getBoundingClientRect 给的是 border box，
+      //   而容器带 border（绘制与居中用的是 clientWidth/Height 即内容盒）。
+      //   直接用 border box 会引入 1px 偏移，在同一处反复缩放会看到画面缓慢漂移。
+      //   边框对称，所以单边 = (总差 / 2)。
+      const bl = (rect.width - el.clientWidth) / 2;
+      const bt = (rect.height - el.clientHeight) / 2;
+      // 步长 1.1/0.9 与 OPanel 对齐（原用 1.2，每格步长是它的两倍，触控板一次手势会跳得很大）
+      zoomRef.current(e.deltaY < 0 ? 1.1 : 0.9, e.clientX - rect.left - bl, e.clientY - rect.top - bt);
     };
     el.addEventListener('wheel', handler, { passive: false });
     return () => el.removeEventListener('wheel', handler);
@@ -330,7 +381,7 @@ export function MapPanel({
             aria-label={$('map.zoomOut')}
             onClick={() => {
               const wrap = wrapRef.current;
-              zoomAt(1 / 1.2, (wrap?.clientWidth ?? 0) / 2, (wrap?.clientHeight ?? 0) / 2);
+              zoomAt(0.9, (wrap?.clientWidth ?? 0) / 2, (wrap?.clientHeight ?? 0) / 2);
             }}
           >
             <Minus className="h-3.5 w-3.5" />
@@ -343,7 +394,7 @@ export function MapPanel({
             aria-label={$('map.zoomIn')}
             onClick={() => {
               const wrap = wrapRef.current;
-              zoomAt(1.2, (wrap?.clientWidth ?? 0) / 2, (wrap?.clientHeight ?? 0) / 2);
+              zoomAt(1.1, (wrap?.clientWidth ?? 0) / 2, (wrap?.clientHeight ?? 0) / 2);
             }}
           >
             <Plus className="h-3.5 w-3.5" />
@@ -355,7 +406,7 @@ export function MapPanel({
       <div ref={wrapRef} className={`relative overflow-hidden overscroll-contain rounded-xl border bg-[#0b0f14] ${heightClass}`}>
         <canvas
           ref={canvasRef}
-          className="h-full w-full cursor-grab touch-none active:cursor-grabbing"
+          className="h-full w-full cursor-grab touch-none [image-rendering:pixelated] active:cursor-grabbing"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
@@ -364,6 +415,12 @@ export function MapPanel({
         <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur">
           {$('map.hint')}
         </div>
+        {/* 光标处世界坐标：与游戏内 F3 对照即可验证「映射偏移」是否真实存在 */}
+        {coordUi && (
+          <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-background/70 px-2 py-1 font-mono text-[11px] text-muted-foreground backdrop-blur">
+            X {coordUi.x}　Z {coordUi.z}
+          </div>
+        )}
       </div>
 
       {/* 坐标跳转 */}
@@ -411,8 +468,15 @@ export function MapPanel({
           variant="ghost"
           size="sm"
           onClick={() => {
-            viewRef.current = { camX: -REGION_BLOCKS / 2, camZ: -REGION_BLOCKS / 2, zoom: 1 };
-            setZoomUi(1);
+            // 复位 = 把世界原点 (0,0) 摆到视口正中，缩放回默认值。
+            // 用真实画布尺寸算，而不是硬编码左上角（硬编码只在画布恰好 512×512 时居中）。
+            const wrap = wrapRef.current;
+            const w = wrap?.clientWidth ?? 0;
+            const h = wrap?.clientHeight ?? 0;
+            viewRef.current = w > 0 && h > 0
+              ? centerOnView(0, 0, DEFAULT_ZOOM, w, h)
+              : { camX: -REGION_BLOCKS / 2, camZ: -REGION_BLOCKS / 2, zoom: DEFAULT_ZOOM };
+            setZoomUi(DEFAULT_ZOOM);
             scheduleDraw();
           }}
         >
