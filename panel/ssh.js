@@ -7,20 +7,89 @@ const { Client } = require('ssh2');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 const NODE_MIN_MAJOR = 16;
 // tarball 回退用的 Node LTS 版本（distro 源/NodeSource 都装不上时）
 const NODE_TARBALL_VERSION = 'v20.18.1';
 
+/** SSH 主机密钥指纹（OpenSSH 风格 SHA256 base64，去掉尾部 = 填充） */
+function hostKeyFingerprint(key) {
+  const buf = Buffer.isBuffer(key) ? key : Buffer.from(String(key), 'binary');
+  return 'SHA256:' + crypto.createHash('sha256').update(buf).digest('base64').replace(/=+$/, '');
+}
+
+/**
+ * TOFU 主机密钥判定（单独成函数以便直接测试——它是这条防线的全部逻辑）。
+ *
+ * 不做校验的后果：任何能做中间人的人都能拿到 SSH 凭据并完全接管服务器。
+ * 而「首次就必须人工核对指纹」对本项目的单人使用场景太重——用户手上通常
+ * 没有服务器指纹，逼他核对只会让人把整个功能关掉。
+ *
+ * 因此采 TOFU（首次使用即信任），与 agent.tlsFingerprint 同一思路：
+ *   · 首次（记录为空）：记录并放行；
+ *   · 之后：比对，不一致即拒绝——挡住**后续**的中间人，
+ *     以及服务器被重装/换机导致的密钥变更（会明确报错，而不是静默连到陌生主机）。
+ *
+ * ⚠ 已知边界：首次连接本身仍可能被中间人利用（TOFU 的固有代价）。
+ *
+ * @returns {{ ok: boolean, fingerprint: string, recorded: boolean, error: string|null }}
+ */
+function verifyHostKey(server, key) {
+  const fp = hostKeyFingerprint(key);
+  const known = String((server.ssh && server.ssh.hostKeyFingerprint) || '');
+  if (!known) return { ok: true, fingerprint: fp, recorded: true, error: null };
+  if (known === fp) return { ok: true, fingerprint: fp, recorded: false, error: null };
+  return {
+    ok: false,
+    fingerprint: fp,
+    recorded: false,
+    error:
+      'SSH 主机密钥与首次记录的不一致，已拒绝连接。\n' +
+      `  记录的指纹: ${known}\n` +
+      `  本次的指纹: ${fp}\n` +
+      '  这可能是服务器被重装/换机（若确属正常，清除该服务器的 SSH 指纹后重试），\n' +
+      '  也可能是中间人攻击——请在确认前不要继续。',
+  };
+}
+
 function sshConnect(server, readyTimeout = 20000) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
+    // hostVerifier 只能返回布尔值，带不出原因；把原因记在这里，连接报错时替换掉
+    // ssh2 那句没信息量的 "Host verification failed"。
+    let hostKeyError = null;
+    let recordedFingerprint = false;
     const opts = {
       host: server.host,
       port: server.ssh.port,
       username: server.ssh.user,
       readyTimeout,
       keepaliveInterval: 10000,
+      // ---------- 主机密钥校验（TOFU：首次信任）----------
+      // 不做校验的后果：任何能做中间人的人都能拿到 SSH 凭据并完全接管服务器。
+      // 而「首次就必须人工核对指纹」对本项目的单人使用场景太重——用户手上
+      // 通常没有服务器指纹，逼他核对只会让人直接跳过这个功能。
+      //
+      // 因此采 TOFU（首次使用即信任），与 agent.tlsFingerprint 同一思路：
+      //   · 首次连接：记录指纹并放行；
+      //   · 之后每次：比对，不一致即**拒绝**（返回 false 让 ssh2 中断连接）。
+      // 能挡住的是**后续**的中间人，以及服务器被重装/换机导致的密钥变更——
+      // 后者会明确报错，而不是静默连到一台陌生主机上。
+      //
+      // ⚠ 已知边界：首次连接本身仍可能被中间人利用（TOFU 的固有代价）。
+      hostVerifier: (key) => {
+        const r = verifyHostKey(server, key);
+        if (!r.ok) {
+          hostKeyError = r.error;
+          return false;
+        }
+        if (r.recorded) {
+          server.ssh.hostKeyFingerprint = r.fingerprint; // 记在配置记录上，由调用方持久化
+          recordedFingerprint = true;
+        }
+        return true;
+      },
     };
     if (server.ssh.auth === 'key') {
       const key = server.ssh.key || fs.readFileSync(server.ssh.keyPath, 'utf8');
@@ -29,8 +98,12 @@ function sshConnect(server, readyTimeout = 20000) {
       opts.password = server.ssh.password;
       opts.tryKeyboard = false;
     }
-    conn.on('ready', () => resolve(conn));
-    conn.on('error', (e) => reject(new Error('SSH 连接失败: ' + e.message)));
+    conn.on('ready', () => {
+      // 暴露给调用方：本次是否新记录了指纹（据此决定要不要落盘）
+      conn._bnRecordedHostKey = recordedFingerprint;
+      resolve(conn);
+    });
+    conn.on('error', (e) => reject(new Error(hostKeyError || 'SSH 连接失败: ' + e.message)));
     conn.connect(opts);
   });
 }
@@ -466,4 +539,4 @@ async function uninstallAgent(server, log) {
   }
 }
 
-module.exports = { installAgent, updateAgentScript, uninstallAgent, checkSsh, suggestPanelUrl, sftpUploadStream };
+module.exports = { installAgent, updateAgentScript, uninstallAgent, checkSsh, suggestPanelUrl, sftpUploadStream, hostKeyFingerprint, verifyHostKey };

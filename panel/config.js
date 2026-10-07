@@ -152,6 +152,9 @@ class Config {
         password: fields.sshAuth === 'password' ? String(fields.sshPassword || '') : '',
         keyPath: fields.sshAuth === 'key' ? String(fields.sshKeyPath || '').trim() : '',
         key: fields.sshAuth === 'key' ? String(fields.sshKey || '') : '',
+        // SSH 主机密钥指纹（TOFU：首次连接记录，之后比对不匹配即拒绝）。
+        // 与 agent.tlsFingerprint 同一思路：把「首次信任」固定下来，挡住后续中间人。
+        hostKeyFingerprint: '',
       },
       agent: {
         // 连接方向：'outbound' = 面板主动连 Agent（默认，适合 Agent 在公网）
