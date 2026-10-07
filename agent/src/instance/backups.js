@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { fmtSize } = require('../util.js');
+const { MAP_CACHE_DIR } = require('./map-cache.js');
 
 
 
@@ -71,7 +72,13 @@ module.exports = {
         await new Promise((r) => setTimeout(r, 3000));
       }
       try {
-        await this.tarRun(['-czf', rel, '.'], instDir);
+        // 排除地图缓存目录：它是可再生的派生数据（从 world/*.mca 重新渲染即可），
+        // 打进备份只会让每份快照白白变大，还会在恢复时把过期缓存盖回实例目录。
+        // 目录名来自 map-cache.js（三处共用同一常量，避免改名时漏改一处）。
+        await this.tarRun(
+          [`--exclude=./${MAP_CACHE_DIR}`, '-czf', rel, '.'],
+          instDir,
+        );
       } finally {
         if (running) send('save-on');
       }

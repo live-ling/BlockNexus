@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.3.9';
+const AGENT_VERSION = '0.4.0';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -440,6 +440,7 @@ Object.assign(
   __require("src/instance/serverinfo.js"),
   __require("src/instance/spark.js"),
   __require("src/instance/java.js"),
+  __require("src/instance/map.js"),
 );
 
 module.exports = { InstanceManager };
@@ -2488,6 +2489,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { runCmd, tarCmd } = __require("src/util.js");
+const { MAP_CACHE_DIR } = __require("src/instance/map-cache.js");
 
 // 传输会话数量上限。
 // 之所以除了「时间过期」还要有「数量上限」：gcTransferSessions 每 10 分钟才跑一次，
@@ -2539,7 +2541,13 @@ module.exports = {
     const root = this.instanceRoot(name);
     const dir = this.resolveSafe(root, rel);
     if (!fs.existsSync(dir)) throw new Error('目录不存在');
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    // 是否是实例根目录（决定要不要隐藏地图缓存目录）
+    const atRoot = !rel || rel === '.' || rel === '/' || rel === path.sep;
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+      // 地图缓存目录是工具内部数据（派生自 world/*.mca，删了会自动重建），
+      // 在文件管理器里露出只会让用户困惑「这是什么、能不能删」。
+      // 只过滤**实例根目录**下这个名字：用户自己建的同名目录在子目录里仍然可见。
+      .filter((e) => !(atRoot && e.name === MAP_CACHE_DIR));
     return entries
       .map((e) => {
         const full = path.join(dir, e.name);
@@ -3079,6 +3087,32 @@ module.exports = {
 };
 };
 
+// ---------------------------- src/instance/map-cache.js ----------------------------
+__modules["src/instance/map-cache.js"] = function (module, exports, __require, __dirname, __filename) {
+'use strict';
+// 地图缓存目录的位置 —— fs.js / backups.js / map.js 三处共用，单独放一个文件避免硬编码重复。
+//
+// 为什么要有这个目录、以及为什么它必须被排除：
+//   地图是「从 world/*.mca 重新渲染即可」的**派生数据**。把它放进实例目录是为了
+//   跟着实例走（删除实例时一起清掉），但它绝不能进备份——那只会让每份快照白白变大，
+//   恢复时还会把过期缓存盖回实例目录。同理也不该出现在文件管理器里（用户看到会困惑）。
+
+const path = require('path');
+
+/** 缓存目录名（位于实例目录根部，点号开头表明是工具内部数据） */
+const MAP_CACHE_DIR = '.blocknexus-map';
+
+/**
+ * 实例目录 → 地图缓存根目录。
+ * @param {string} instDir 实例目录（绝对路径）
+ */
+function mapCacheRoot(instDir) {
+  return path.join(instDir, MAP_CACHE_DIR);
+}
+
+module.exports = { MAP_CACHE_DIR, mapCacheRoot };
+};
+
 // ---------------------------- src/instance/backups.js ----------------------------
 __modules["src/instance/backups.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
@@ -3089,6 +3123,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { fmtSize } = __require("src/util.js");
+const { MAP_CACHE_DIR } = __require("src/instance/map-cache.js");
 
 
 
@@ -3154,7 +3189,13 @@ module.exports = {
         await new Promise((r) => setTimeout(r, 3000));
       }
       try {
-        await this.tarRun(['-czf', rel, '.'], instDir);
+        // 排除地图缓存目录：它是可再生的派生数据（从 world/*.mca 重新渲染即可），
+        // 打进备份只会让每份快照白白变大，还会在恢复时把过期缓存盖回实例目录。
+        // 目录名来自 map-cache.js（三处共用同一常量，避免改名时漏改一处）。
+        await this.tarRun(
+          [`--exclude=./${MAP_CACHE_DIR}`, '-czf', rel, '.'],
+          instDir,
+        );
       } finally {
         if (running) send('save-on');
       }
@@ -4197,6 +4238,1208 @@ module.exports = {
 };
 };
 
+// ---------------------------- src/instance/map.js ----------------------------
+__modules["src/instance/map.js"] = function (module, exports, __require, __dirname, __filename) {
+'use strict';
+// BlockNexus Agent — 地图服务（P4-1c）
+//
+// 职责：把实例里的世界目录找出来，按需把区域文件渲染成 PNG 并落盘缓存。
+//
+// 与 OPanel 的关键差异：**渲染在 Agent 侧做，产 PNG**，而不是把方块数据传给
+// 浏览器用 wasm 渲染。理由见 docs/p4-1-map-plan.md §2：本项目没有 Rust/wasm
+// 构建链，而 PNG 让前端零解码代码（createImageBitmap 直接用）。
+//
+// 粒度是**一个区域文件**（32×32 区块 = 512×512 像素），不是单个区块：
+// 屏幕一屏只覆盖几个区域 → 每次交互只发几个请求（单区块瓦片要上千个）。
+
+const fs = require('fs');
+const path = require('path');
+const anvil = __require("src/instance/anvil.js");
+const png = __require("src/png.js");
+const palette = __require("src/instance/map-palette.js");
+const { mapCacheRoot } = __require("src/instance/map-cache.js");
+
+/** 常见世界目录名（Paper/Vanilla 默认；自定义名由 server.properties 的 level-name 或扫描补上） */
+const DEFAULT_WORLDS = ['world', 'world_nether', 'world_the_end'];
+
+/** 缓存文件后缀 */
+const SIG_SUFFIX = '.sig';
+
+/**
+ * 单个区域的签名：只要文件大小或修改时间变了，签名就变。
+ *
+ * 用「大小 + mtime」而不是内容哈希：读一遍几十 MB 的区域文件只为算哈希太贵，
+ * 而这两个字段对「世界被改过」的判定已经足够（地图缓存是派生数据，偶发漏判
+ * 只是显示旧图，重新打开即可，不是正确性问题）。
+ */
+function regionSig(r) {
+  return `${r.size}-${Math.round(r.mtime)}`;
+}
+
+/** 整个存档的版本号：所有区域签名串起来做 FNV-1a（快，且文件一变就变） */
+function saveVersion(regions) {
+  let h = 0x811c9dc5;
+  for (const r of regions) {
+    const s = `${r.rx},${r.rz},${regionSig(r)};`;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+  }
+  return (h >>> 0).toString(36) + '-' + regions.length;
+}
+
+/** 非法存档名一律拒绝（防目录穿越；与其它模块同一条纪律） */
+function assertSaveName(save) {
+  const s = String(save || '');
+  if (!s || s.includes('/') || s.includes('\\') || s === '.' || s === '..' || s.includes('..')) {
+    throw new Error('存档名非法');
+  }
+  return s;
+}
+
+module.exports = {
+  /**
+   * 列出实例下的所有世界（存档）及其可用区域。
+   *
+   * @param {string} name 实例名
+   * @returns {{saves: {save: string, regions: [number,number][], version: string}[]}}
+   */
+  mapSaves(name) {
+    const root = this.instDir(name);
+    const saves = [];
+    for (const save of this.mapWorldDirs(name)) {
+      let regions;
+      try {
+        regions = this.mapRegionFiles(root, save);
+      } catch {
+        continue;
+      }
+      if (!regions.length) continue;
+      saves.push({
+        save,
+        regions: regions.map((r) => [r.rx, r.rz]),
+        version: saveVersion(regions),
+      });
+    }
+    return { saves };
+  },
+
+  /**
+   * 找出实例下的世界目录。
+   * 三个来源合一：server.properties 的 level-name、常见默认名、以及「真的含 region/*.mca」的目录。
+   */
+  mapWorldDirs(name) {
+    const root = this.instDir(name);
+    const cand = new Set(DEFAULT_WORLDS);
+
+    // server.properties 的 level-name（用户可能改成 my_world 之类）
+    try {
+      const props = fs.readFileSync(path.join(root, 'server.properties'), 'utf8');
+      const m = /^\s*level-name\s*=\s*(.+?)\s*$/m.exec(props);
+      if (m && m[1] && !m[1].includes('/') && !m[1].includes('\\')) cand.add(m[1]);
+    } catch {}
+
+    // 扫描实例根目录下所有「含 region/*.mca」的目录（覆盖 Paper 的多世界与自定义名）
+    try {
+      for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!e.isDirectory()) continue;
+        cand.add(e.name);
+      }
+    } catch {}
+
+    const out = [];
+    for (const d of cand) {
+      try {
+        if (this.mapRegionFiles(root, d).length) out.push(d);
+      } catch {}
+    }
+    return out.sort();
+  },
+
+  /**
+   * 列出某世界的区域文件及其签名信息。
+   * @returns {{rx:number, rz:number, file:string, size:number, mtime:number}[]}
+   */
+  mapRegionFiles(root, save) {
+    const s = assertSaveName(save);
+    const dir = path.join(root, s, 'region');
+    const out = [];
+    for (const f of fs.readdirSync(dir)) {
+      const m = /^r\.(-?\d+)\.(-?\d+)\.mca$/i.exec(f);
+      if (!m) continue;
+      let st;
+      try {
+        st = fs.statSync(path.join(dir, f));
+      } catch {
+        continue;
+      }
+      out.push({ rx: Number(m[1]), rz: Number(m[2]), file: f, size: st.size, mtime: st.mtimeMs });
+    }
+    // 稳定排序：版本号必须与顺序无关，否则同一份数据会算出不同版本
+    return out.sort((a, b) => a.rx - b.rx || a.rz - b.rz);
+  },
+
+  /**
+   * 取单个区域的 PNG（走落盘缓存）。
+   *
+   * @param {string} name 实例名
+   * @param {string} save 世界目录名
+   * @param {number} rx 区域 X
+   * @param {number} rz 区域 Z
+   * @param {{force?: boolean}} [opts] force 时忽略缓存重渲染
+   * @returns {{png: string, version: string, cached: boolean, bytes: number, warns: string[]}}
+   */
+  mapRegion(name, save, rx, rz, opts = {}) {
+    const s = assertSaveName(save);
+    const root = this.instDir(name);
+    const X = Math.trunc(Number(rx));
+    const Z = Math.trunc(Number(rz));
+    if (!Number.isFinite(X) || !Number.isFinite(Z)) throw new Error('区域坐标非法');
+
+    const regions = this.mapRegionFiles(root, s);
+    const info = regions.find((r) => r.rx === X && r.rz === Z);
+    if (!info) throw new Error(`区域 (${X},${Z}) 不存在`);
+
+    const cacheDir = path.join(mapCacheRoot(root), s);
+    const pngPath = path.join(cacheDir, `${X}.${Z}.png`);
+    const sigPath = pngPath + SIG_SUFFIX;
+    const sig = regionSig(info);
+
+    // 缓存命中：PNG 在、且签名一致
+    if (!opts.force) {
+      try {
+        if (fs.readFileSync(sigPath, 'utf8') === sig) {
+          const buf = fs.readFileSync(pngPath);
+          return { png: buf.toString('base64'), version: sig, cached: true, bytes: buf.length, warns: [] };
+        }
+      } catch {
+        // 缓存缺失/损坏 → 往下走重新渲染
+      }
+    }
+
+    const warns = [];
+    const regionBuf = fs.readFileSync(path.join(root, s, 'region', info.file));
+    const img = anvil.readRegion(regionBuf, { onWarn: (m) => warns.push(m) });
+    const out = this.mapRenderPng(img);
+
+    // 原子写：并发请求下不能让别人读到半个 PNG。先写临时名再 rename。
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const tmp = pngPath + '.tmp' + process.pid;
+    fs.writeFileSync(tmp, out);
+    fs.renameSync(tmp, pngPath);
+    fs.writeFileSync(sigPath, sig);
+
+    return { png: out.toString('base64'), version: sig, cached: false, bytes: out.length, warns };
+  },
+
+  /**
+   * 把 anvil.readRegion 的结果渲染成 PNG。
+   *
+   * 逐像素内联做明暗计算（而不是调 palette.applyShade）：512×512 = 26 万次，
+   * 每像素多分配一个数组会让 GC 压力明显上升，而 Agent 有内存预算。
+   *
+   * @param {{size:number, indices:Uint16Array, heights:Int16Array, palette:(string|null)[]}} img
+   * @returns {Buffer} PNG
+   */
+  mapRenderPng(img) {
+    const { size, indices, heights, palette: names } = img;
+    const rgba = Buffer.alloc(size * size * 4); // 默认全透明（空区块 = 露出底色）
+    const SHADES = palette.SHADES;
+
+    // 调色板索引 → 已着色 RGB 的缓存：同一区域往往只有十几种方块，
+    // 明暗只有 4 档，所以「方块 × 明暗」的组合数很少，缓存后省掉大量查表与乘法。
+    const shaded = new Array(names.length * 4);
+
+    for (let pz = 0; pz < size; pz++) {
+      // 北侧邻居行：pz=0 时按原版做法改用 pz=1（避免第一行出现凭空的黑边）
+      const northRow = (pz === 0 ? 1 : pz - 1) * size;
+      const row = pz * size;
+      for (let px = 0; px < size; px++) {
+        const p = row + px;
+        const pi = indices[p];
+        if (!pi) continue; // 空区块
+        const name = names[pi];
+        if (!name) continue;
+        const base = palette.colorOf(name);
+        if (!base) continue; // 空气/透明方块
+
+        const diff = heights[p] - heights[northRow + px];
+        const shade = diff > 0 ? 0 : diff === 0 ? 1 : diff > -2 ? 2 : 3;
+        const key = pi * 4 + shade;
+        let rgb = shaded[key];
+        if (rgb === undefined) {
+          const k = SHADES[shade];
+          rgb = [(base[0] * k) | 0, (base[1] * k) | 0, (base[2] * k) | 0];
+          shaded[key] = rgb;
+        }
+        const o = p * 4;
+        rgba[o] = rgb[0];
+        rgba[o + 1] = rgb[1];
+        rgba[o + 2] = rgb[2];
+        rgba[o + 3] = 255;
+      }
+    }
+    return png.encodePng(rgba, size, size);
+  },
+};
+};
+
+// ---------------------------- src/instance/anvil.js ----------------------------
+__modules["src/instance/anvil.js"] = function (module, exports, __require, __dirname, __filename) {
+'use strict';
+// Anvil（.mca）区域文件解析 —— 零依赖
+//
+// 用途：网页地图（P4-1）需要把世界的方块俯视图画出来，而世界存在 MC 服务器上，
+// 所以必须在 Agent 侧读 region 文件。这里实现 Anvil 格式的读取部分。
+//
+// 格式要点（都是踩过才知道的）：
+//   · 区域文件 r.X.Z.mca 覆盖区块坐标 [X*32, X*32+31] × [Z*32, Z*32+31]，共 1024 个
+//   · 文件头 8 KiB = 1024 个 4 字节 location + 1024 个 4 字节 timestamp
+//     location 的**高 3 字节是扇区偏移**、**低 1 字节是扇区数**（扇区 = 4 KiB）
+//     location == 0 表示该区块不存在 —— 这是**正常情况**（未探索区域），不是错误
+//   · 每个区块数据：4 字节长度 + 1 字节压缩类型 + 压缩数据
+//     压缩类型最高位 0x80 = 数据外置到同名 .mcc 文件（1.15+ 的大区块）
+//   · 压缩类型：1 = gzip、2 = zlib、3 = 未压缩
+//
+// 为什么不用第三方库：Agent 是单文件零依赖产物，且打包器只支持纯 CJS 纯 JS。
+// 引入 NBT 库会把体积与依赖面都撑大，而这里只需要读（不需要写）一小部分标签类型。
+
+const zlib = require('zlib');
+
+// ---------- NBT 常量 ----------
+const TAG = {
+  END: 0,
+  BYTE: 1,
+  SHORT: 2,
+  INT: 3,
+  LONG: 4,
+  FLOAT: 5,
+  DOUBLE: 6,
+  BYTE_ARRAY: 7,
+  STRING: 8,
+  LIST: 9,
+  COMPOUND: 10,
+  INT_ARRAY: 11,
+  LONG_ARRAY: 12,
+};
+
+/** 扇区大小：Anvil 的分配单位固定 4 KiB */
+const SECTOR_BYTES = 4096;
+/** 一个区域文件的区块边长 */
+const REGION_CHUNKS = 32;
+/** 一个区块的方块边长 */
+const CHUNK_SIZE = 16;
+/** 区域图像的像素边长（32 区块 × 16 方块） */
+const REGION_PIXELS = REGION_CHUNKS * CHUNK_SIZE; // 512
+
+/**
+ * 解析 NBT。
+ *
+ * 只实现读取。long 一律读成 **unsigned BigInt** —— 位解包要做 64 位运算，
+ * 用 Number 会在超过 2^53 时静默丢精度，这类 bug 极难发现（表现为地图局部花屏）。
+ *
+ * @param {Buffer} buf
+ * @returns {{name: string, value: any}}
+ */
+function parseNbt(buf) {
+  let p = 0;
+
+  const u8 = () => buf[p++];
+  const i16 = () => {
+    const v = buf.readInt16BE(p);
+    p += 2;
+    return v;
+  };
+  const i32 = () => {
+    const v = buf.readInt32BE(p);
+    p += 4;
+    return v;
+  };
+  const i64 = () => {
+    const v = buf.readBigUInt64BE(p);
+    p += 8;
+    return v;
+  };
+  const f32 = () => {
+    const v = buf.readFloatBE(p);
+    p += 4;
+    return v;
+  };
+  const f64 = () => {
+    const v = buf.readDoubleBE(p);
+    p += 8;
+    return v;
+  };
+  const str = () => {
+    const len = buf.readUInt16BE(p);
+    p += 2;
+    const v = buf.toString('utf8', p, p + len);
+    p += len;
+    return v;
+  };
+
+  /** 读一个「具名标签」的负载（类型已知） */
+  function payload(type) {
+    switch (type) {
+      case TAG.BYTE:
+        return u8();
+      case TAG.SHORT:
+        return i16();
+      case TAG.INT:
+        return i32();
+      case TAG.LONG:
+        return i64();
+      case TAG.FLOAT:
+        return f32();
+      case TAG.DOUBLE:
+        return f64();
+      case TAG.BYTE_ARRAY: {
+        const n = i32();
+        const out = buf.subarray(p, p + n);
+        p += n;
+        return out;
+      }
+      case TAG.STRING:
+        return str();
+      case TAG.LIST: {
+        const itemType = u8();
+        const n = i32();
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) out[i] = payload(itemType);
+        return out;
+      }
+      case TAG.COMPOUND: {
+        const out = {};
+        for (;;) {
+          const t = u8();
+          if (t === TAG.END) break;
+          const key = str();
+          out[key] = payload(t);
+        }
+        return out;
+      }
+      case TAG.INT_ARRAY: {
+        const n = i32();
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) out[i] = i32();
+        return out;
+      }
+      case TAG.LONG_ARRAY: {
+        const n = i32();
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) out[i] = i64();
+        return out;
+      }
+      default:
+        // 未知类型无法安全跳过（长度未知），只能报错——静默返回 undefined 会让
+        // 上层拿到残缺的树却以为解析成功，那种 bug 极难定位。
+        throw new Error(`NBT 未知标签类型 ${type}（偏移 ${p - 1}）`);
+    }
+  }
+
+  const rootType = u8();
+  if (rootType !== TAG.COMPOUND) {
+    // 区块数据一定是「根是 Compound」，其它形态说明不是我们预期的文件
+    throw new Error(`NBT 根标签应为 Compound，实际为 ${rootType}`);
+  }
+  const name = str();
+  return { name, value: payload(TAG.COMPOUND) };
+}
+
+/**
+ * 读取区域文件头：每个区块的扇区偏移与扇区数。
+ * @param {Buffer} buf
+ * @returns {{offset: number, sectors: number}[]} 长度 1024，offset/sectors 均为 0 表示区块不存在
+ */
+function readRegionHeader(buf) {
+  const out = new Array(REGION_CHUNKS * REGION_CHUNKS);
+  for (let i = 0; i < out.length; i++) {
+    const raw = buf.readUInt32BE(i * 4);
+    out[i] = { offset: raw >>> 8, sectors: raw & 0xff };
+  }
+  return out;
+}
+
+/**
+ * 取出并解压一个区块的 NBT。
+ *
+ * @param {Buffer} buf 区域文件内容
+ * @param {number} cx 区块 X（**区域内相对坐标 0..31**，不是世界坐标）
+ * @param {number} cz 区块 Z（区域内相对坐标 0..31）
+ * @returns {object|null} 解析后的 NBT；区块不存在时返回 null（不是错误）
+ */
+function readChunk(buf, cx, cz) {
+  if (cx < 0 || cx >= REGION_CHUNKS || cz < 0 || cz >= REGION_CHUNKS) return null;
+  const loc = readRegionHeader(buf)[cx + cz * REGION_CHUNKS];
+  if (!loc.offset || !loc.sectors) return null;
+
+  const start = loc.offset * SECTOR_BYTES;
+  if (start + 5 > buf.length) return null; // 文件被截断
+
+  const len = buf.readUInt32BE(start);
+  const type = buf.readUInt8(start + 4);
+  const body = buf.subarray(start + 5, start + 5 + len);
+
+  // 最高位 0x80：数据外置到 .mcc。这里无法拿到那个文件（调用方只给了本文件），
+  // 如实抛出而不是静默返回 null —— 「以为区块是空的」和「读不了」必须能区分。
+  if (type & 0x80) throw new Error(`区块 (${cx},${cz}) 数据外置于 .mcc，当前不支持`);
+
+  const kind = type & 0x7f;
+  let raw;
+  if (kind === 1) raw = zlib.gunzipSync(body);
+  else if (kind === 2) raw = zlib.inflateSync(body);
+  else if (kind === 3) raw = body;
+  else throw new Error(`区块 (${cx},${cz}) 未知压缩类型 ${kind}`);
+
+  return parseNbt(raw).value;
+}
+
+/**
+ * 位解包：从 MC 的 packed long 数组里取第 `index` 个值。
+ *
+ * ⚠ 值**会跨 long 边界**（bits 不整除 64 时，例如 5 bit 时每 long 12.8 个），
+ * 所以不能简单地「每 long 取固定个数」。这里按连续位流处理。
+ *
+ * 为什么要 BigInt：long 是 64 位，MC 把它当**无符号位流**用。用 Number 在
+ * 超过 2^53 后静默丢精度，表现为地图上零散的花屏点——极难定位。
+ *
+ * @param {bigint[]} longs
+ * @param {number} bits 每个值的位宽
+ * @param {number} index 值序号
+ */
+function readPacked(longs, bits, index) {
+  const bit = index * bits;
+  const li = Math.floor(bit / 64);
+  const off = bit % 64;
+  const lo = longs[li];
+  if (lo === undefined) return 0;
+  const mask = (1n << BigInt(bits)) - 1n;
+  let v = lo >> BigInt(off);
+  if (off + bits > 64) {
+    const next = longs[li + 1] ?? 0n;
+    v |= next << BigInt(64 - off);
+  }
+  return Number(v & mask);
+}
+
+/**
+ * 调色板位宽：Atlas 规定最低 4 bit（即使调色板只有 2 项）。
+ * @param {number} paletteSize
+ */
+function bitsFor(paletteSize) {
+  let bits = 4;
+  while (1 << bits < paletteSize) bits++;
+  return bits;
+}
+
+/**
+ * 取一个区块的「每列顶部方块 + 高度」。
+ *
+ * 兼容两种世界格式：
+ *   · 1.18+：根下 `sections[]`，每节 `block_states.{palette,data}`，Y 为节号（可为负）
+ *   · 1.17-：根下 `Level.Sections[]`，每节 `Palette` + `BlockStates`，Y 为节号
+ *
+ * @param {object} chunk 解析后的区块 NBT
+ * @returns {{names: (string|null)[], heights: Int16Array}|null}
+ *   names 长度 256（z*16+x 索引），无方块处为 null
+ */
+function chunkColumns(chunk) {
+  if (!chunk) return null;
+  const isLegacy = !chunk.sections && chunk.Level && chunk.Level.Sections;
+  const sections = isLegacy ? chunk.Level.Sections : chunk.sections;
+  const heightmaps = isLegacy ? chunk.Level.Heightmaps : chunk.Heightmaps;
+  if (!Array.isArray(sections) || !heightmaps) return null;
+
+  const motion = heightmaps.MOTION_BLOCKING;
+  if (!Array.isArray(motion)) return null;
+  // 高度图位宽由「值数固定 256 + long 数组长度」**反推**，不要写死也不要猜。
+  // MC 用 ceil(log2(worldHeight+1))：主世界 384 高 → 9 bit → 36 个 long。
+  // （踩过的坑：想当然写 `bitsFor(4096)` 以为得到 9，实际得到 12——
+  //   bitsFor 算的是「表示 N 个不同值的位宽」，不是「位图总位数」。）
+  // 反推的好处：超高/模组世界（位宽不同）也自动适配。
+  const hBits = motion.length ? Math.round((motion.length * 64) / 256) : 9;
+
+  const names = new Array(CHUNK_SIZE * CHUNK_SIZE).fill(null);
+  const heights = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
+  // 世界最低 Y：1.18+ 从 -64 开始（节号 -4 起）；旧格式从 0 开始
+  const minY = isLegacy ? 0 : -64;
+
+  /** 节号 → {palette, longs, bits}，只对真正用到的节做一次位宽准备 */
+  const bySection = new Map();
+
+  for (let i = 0; i < 256; i++) {
+    const stored = readPacked(motion, hBits, i);
+    if (!stored) continue; // 该列无高度记录（未生成/全空气）
+    const topY = stored + minY - 1; // 高度图存的是「顶部方块 y + 1」
+    const secY = Math.floor(topY / 16);
+    const inSec = topY - secY * 16;
+
+    let sec = bySection.get(secY);
+    if (sec === undefined) {
+      // 找到该节号对应的 section 对象（节号在 1.18+ 可为负，所以不能按数组下标取）
+      const found = sections.find((s) => Number(s.Y) === secY);
+      if (!found) {
+        bySection.set(secY, null);
+        continue;
+      }
+      if (isLegacy) {
+        const pal = (found.Palette || []).map((e) => e && e.Name);
+        const longs = found.BlockStates || [];
+        sec = { pal, longs, bits: bitsFor(pal.length || 1) };
+      } else {
+        const bs = found.block_states || {};
+        const pal = (bs.palette || []).map((e) => e && e.Name);
+        const longs = bs.data || [];
+        sec = { pal, longs, bits: bitsFor(pal.length || 1) };
+      }
+      bySection.set(secY, sec);
+    }
+    if (!sec) continue;
+
+    const x = i % 16;
+    const z = Math.floor(i / 16);
+    const idx = inSec * 256 + z * 16 + x; // 节内顺序：Y → Z → X
+    // 调色板只有 1 项时 MC 省略 data 数组（整节同一种方块）
+    const pi = sec.longs.length ? readPacked(sec.longs, sec.bits, idx) : 0;
+    names[i] = sec.pal[pi] ?? null;
+    heights[i] = topY;
+  }
+
+  return { names, heights };
+}
+
+/**
+ * 读取整个区域，产出俯视图所需的紧凑数据。
+ *
+ * 返回的调色板是「方块名 → 索引」，图像数据是索引数组 —— 而不是直接出 RGBA。
+ * 这样单个区域的常驻内存是 512×512×2(索引) + 512×512×2(高度) ≈ 1MB，
+ * 且调色板只存一份；着色（可能按生物群系变化）留给渲染阶段。
+ *
+ * 索引 0 保留给「空」（无区块/全空气），所以 palette[0] 恒为 null。
+ *
+ * @param {Buffer} buf 区域文件内容
+ * @param {{onWarn?: (msg: string) => void}} [opts]
+ * @returns {{size: number, indices: Uint16Array, heights: Int16Array, palette: (string|null)[], chunkCount: number}}
+ */
+function readRegion(buf, opts = {}) {
+  const onWarn = opts.onWarn || (() => {});
+  const size = REGION_PIXELS;
+  const indices = new Uint16Array(size * size); // 0 = 空
+  const heights = new Int16Array(size * size);
+  const palette = [null]; // 0 号位固定为「空」
+  const indexOf = new Map();
+
+  const nameIndex = (name) => {
+    let i = indexOf.get(name);
+    if (i === undefined) {
+      i = palette.length;
+      palette.push(name);
+      indexOf.set(name, i);
+    }
+    return i;
+  };
+
+  let chunkCount = 0;
+  for (let cz = 0; cz < REGION_CHUNKS; cz++) {
+    for (let cx = 0; cx < REGION_CHUNKS; cx++) {
+      let cols;
+      try {
+        const nbt = readChunk(buf, cx, cz);
+        if (!nbt) continue; // 未探索/不存在：正常情况，留空
+        cols = chunkColumns(nbt);
+      } catch (e) {
+        // 单个区块坏掉不该让整个区域失败——记一条警告继续
+        onWarn(`区块 (${cx},${cz}) 解析失败：${e.message}`);
+        continue;
+      }
+      if (!cols) continue;
+      chunkCount++;
+
+      // 区块内 (x,z) → 区域像素 (px,pz)；索引按行主序（pz 为行）
+      const px0 = cx * CHUNK_SIZE;
+      const pz0 = cz * CHUNK_SIZE;
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        for (let x = 0; x < CHUNK_SIZE; x++) {
+          const name = cols.names[z * 16 + x];
+          if (!name) continue;
+          const p = (pz0 + z) * size + (px0 + x);
+          indices[p] = nameIndex(name);
+          heights[p] = cols.heights[z * 16 + x];
+        }
+      }
+    }
+  }
+
+  return { size, indices, heights, palette, chunkCount };
+}
+
+module.exports = {
+  TAG,
+  SECTOR_BYTES,
+  REGION_CHUNKS,
+  CHUNK_SIZE,
+  REGION_PIXELS,
+  parseNbt,
+  readRegionHeader,
+  readChunk,
+  readPacked,
+  bitsFor,
+  chunkColumns,
+  readRegion,
+};
+};
+
+// ---------------------------- src/png.js ----------------------------
+__modules["src/png.js"] = function (module, exports, __require, __dirname, __filename) {
+'use strict';
+// 最小 PNG 编码器 —— 零依赖
+//
+// 用途：网页地图（P4-1）在 Agent 侧把区块俯视图编码成 PNG，浏览器原生解码。
+// 这样前端零解码代码（createImageBitmap 直接用），也不需要自研瓦片二进制格式。
+//
+// 只实现「8 bit RGBA、非隔行」这一种形态 —— 地图正好只需要它。
+// 不做调色板 PNG（虽然更小，但多一套索引同步逻辑，收益不值）。
+//
+// ⚠ 为什么要自写 CRC32：Node 的 `zlib.crc32` 是 **20.15+ / 22.2+** 才有的，
+//   而 Agent 最低支持 Node 16。表驱动 CRC32 只有十几行，自己写最省事。
+
+const zlib = require('zlib');
+
+/** CRC32 查表（多项式 0xEDB88320，与 PNG 规范一致） */
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+
+/**
+ * 计算 CRC32。
+ * 标准测试向量：`crc32(Buffer.from('123456789'))` === `0xCBF43926`。
+ * @param {Buffer} buf
+ * @returns {number} 无符号 32 位
+ */
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** PNG 文件签名 */
+const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * 组装一个 PNG chunk：长度(4) + 类型(4) + 数据 + CRC(4)。
+ * CRC 覆盖「类型 + 数据」（**不含**长度字段）。
+ */
+function chunk(type, data) {
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0);
+  out.write(type, 4, 'ascii');
+  data.copy(out, 8);
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+  return out;
+}
+
+/** 行过滤器：0 = None（原样），2 = Up（减去上一行同列字节） */
+const FILTER_NONE = 0;
+const FILTER_UP = 2;
+
+/**
+ * 编码 PNG。
+ *
+ * @param {Buffer} rgba 长度必须是 width*height*4，顺序 R,G,B,A
+ * @param {number} width
+ * @param {number} height
+ * @param {{filter?: number, level?: number}} [opts]
+ *   filter 默认 **2（Up）**：地图相邻两行高度相似，逐行做差后大量字节归零，
+ *   deflate 压缩率明显好于 None（代价是编码时多一次逐字节减法）。
+ * @returns {Buffer}
+ */
+function encodePng(rgba, width, height, opts = {}) {
+  const filter = opts.filter ?? FILTER_UP;
+  const level = opts.level ?? 6;
+  if (!Buffer.isBuffer(rgba)) throw new Error('encodePng 需要 Buffer');
+  const stride = width * 4;
+  const need = stride * height;
+  if (rgba.length !== need) {
+    throw new Error(`RGBA 长度不符：期望 ${need}，实际 ${rgba.length}`);
+  }
+
+  // 每条扫描线前面加 1 字节过滤器类型
+  const raw = Buffer.alloc(height * (stride + 1));
+  for (let y = 0; y < height; y++) {
+    const o = y * (stride + 1);
+    const cur = y * stride;
+    raw[o] = filter;
+    if (filter === FILTER_UP && y > 0) {
+      const up = cur - stride;
+      for (let i = 0; i < stride; i++) raw[o + 1 + i] = (rgba[cur + i] - rgba[up + i]) & 0xff;
+    } else {
+      // 第一行（Up 的 Prior 视为全 0）与 None 都直接照抄
+      rgba.copy(raw, o + 1, cur, cur + stride);
+    }
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // 位深
+  ihdr[9] = 6; // 颜色类型 6 = RGBA
+  ihdr[10] = 0; // 压缩方法（只有 0 合法）
+  ihdr[11] = 0; // 过滤器方法（只有 0 合法）
+  ihdr[12] = 0; // 非隔行
+
+  const idat = zlib.deflateSync(raw, { level });
+  return Buffer.concat([
+    SIGNATURE,
+    chunk('IHDR', ihdr),
+    chunk('IDAT', idat),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+module.exports = { crc32, encodePng, chunk, SIGNATURE, FILTER_NONE, FILTER_UP };
+};
+
+// ---------------------------- src/instance/map-palette.js ----------------------------
+__modules["src/instance/map-palette.js"] = function (module, exports, __require, __dirname, __filename) {
+'use strict';
+// 方块 → 颜色表 + 原版地图的高度阴影规则 —— 零依赖
+//
+// 为什么手写色表而不用「下载 client.jar 抽材质算平均色」（OPanel 的做法）：
+//   · 那需要构建期下载 client.jar，引入版权与网络依赖，还要求用户机器能访问 Mojang；
+//   · 本项目是单用户面板，色表够用就行，缺的方块用**品红**兜底，一眼就能看出漏了哪些。
+//
+// ⚠ 草方块 / 树叶 / 水在游戏里是**生物群系着色**的，这里给的是平原（plains）观感，
+//   不按生物群系变化。这是刻意的取舍：做生物群系着色要读每列的 biome id 并维护
+//   一张群系色表，收益只是「更准的颜色」，不值第一版的复杂度。
+
+/** 未知方块的兜底色：品红。刻意刺眼 —— 比默默画黑块更容易发现问题 */
+const UNKNOWN = [255, 0, 255];
+
+/** 透明方块（不画，露出底下的空白） */
+const TRANSPARENT = new Set([
+  'air',
+  'cave_air',
+  'void_air',
+  'barrier',
+  'light',
+  'structure_void',
+  'moving_piston',
+]);
+
+/**
+ * 方块 → RGB。
+ * 键是**去掉 `minecraft:` 前缀后**的名字；带 blockstate 后缀的会在查表前剥掉。
+ */
+const COLORS = {
+  // ---------- 地表 ----------
+  stone: [125, 125, 125],
+  cobblestone: [110, 110, 110],
+  mossy_cobblestone: [110, 124, 100],
+  smooth_stone: [158, 158, 158],
+  stone_bricks: [122, 122, 122],
+  cracked_stone_bricks: [118, 118, 118],
+  mossy_stone_bricks: [115, 125, 105],
+  chiseled_stone_bricks: [120, 120, 120],
+  dirt: [134, 96, 67],
+  coarse_dirt: [134, 96, 67],
+  rooted_dirt: [144, 104, 74],
+  grass_block: [127, 178, 56],
+  grass_path: [148, 122, 65],
+  dirt_path: [148, 122, 65],
+  farmland: [82, 52, 20],
+  podzol: [91, 64, 24],
+  mycelium: [111, 99, 105],
+  mud: [60, 57, 60],
+  mud_bricks: [137, 103, 95],
+  packed_mud: [141, 106, 90],
+  clay: [160, 166, 179],
+  gravel: [136, 126, 126],
+  sand: [219, 207, 163],
+  red_sand: [190, 102, 33],
+  sandstone: [216, 203, 155],
+  red_sandstone: [181, 97, 31],
+  snow: [249, 254, 254],
+  snow_block: [249, 254, 254],
+  powder_snow: [248, 253, 253],
+  ice: [145, 183, 253],
+  packed_ice: [141, 180, 250],
+  blue_ice: [116, 167, 253],
+  frosted_ice: [140, 180, 250],
+  bedrock: [85, 85, 85],
+
+  // ---------- 流体 ----------
+  water: [63, 118, 228],
+  flowing_water: [63, 118, 228],
+  lava: [234, 109, 29],
+  flowing_lava: [234, 109, 29],
+  bubble_column: [63, 118, 228],
+
+  // ---------- 岩石（1.17+） ----------
+  deepslate: [80, 80, 82],
+  cobbled_deepslate: [77, 77, 80],
+  polished_deepslate: [72, 72, 75],
+  deepslate_bricks: [70, 70, 73],
+  deepslate_tiles: [54, 54, 56],
+  tuff: [108, 109, 102],
+  calcite: [223, 224, 220],
+  dripstone_block: [134, 107, 92],
+  amethyst_block: [133, 97, 191],
+  smooth_basalt: [72, 72, 78],
+  basalt: [72, 72, 78],
+  polished_basalt: [88, 88, 91],
+  blackstone: [42, 35, 40],
+  polished_blackstone: [53, 46, 51],
+  gilded_blackstone: [55, 42, 42],
+  magma_block: [142, 63, 31],
+  obsidian: [21, 18, 30],
+  crying_obsidian: [32, 10, 60],
+  ancient_debris: [95, 70, 66],
+  netherrack: [111, 54, 52],
+  nether_bricks: [44, 22, 26],
+  red_nether_bricks: [70, 16, 20],
+  soul_sand: [81, 62, 50],
+  soul_soil: [75, 57, 46],
+  glowstone: [254, 214, 133],
+  shroomlight: [244, 147, 79],
+  end_stone: [219, 222, 158],
+  end_stone_bricks: [218, 224, 162],
+  purpur_block: [169, 125, 169],
+  purpur_pillar: [171, 128, 171],
+  chorus_plant: [93, 66, 93],
+
+  // ---------- 木头 ----------
+  oak_log: [102, 81, 49],
+  oak_planks: [162, 130, 78],
+  oak_leaves: [60, 140, 40],
+  oak_wood: [102, 81, 49],
+  spruce_log: [58, 42, 23],
+  spruce_planks: [114, 84, 48],
+  spruce_leaves: [40, 90, 40],
+  birch_log: [216, 215, 210],
+  birch_planks: [192, 175, 121],
+  birch_leaves: [80, 140, 60],
+  jungle_log: [85, 67, 25],
+  jungle_planks: [160, 115, 80],
+  jungle_leaves: [45, 110, 30],
+  acacia_log: [103, 96, 86],
+  acacia_planks: [168, 90, 50],
+  acacia_leaves: [70, 120, 40],
+  dark_oak_log: [60, 46, 26],
+  dark_oak_planks: [66, 43, 20],
+  dark_oak_leaves: [40, 90, 30],
+  mangrove_log: [80, 50, 40],
+  mangrove_planks: [117, 54, 48],
+  mangrove_leaves: [50, 110, 40],
+  cherry_log: [54, 36, 44],
+  cherry_planks: [226, 178, 178],
+  cherry_leaves: [230, 155, 190],
+  bamboo_block: [90, 140, 50],
+  bamboo: [90, 140, 50],
+  crimson_stem: [92, 25, 29],
+  crimson_planks: [101, 48, 70],
+  warped_stem: [43, 104, 99],
+  warped_planks: [43, 104, 99],
+  nether_wart_block: [114, 3, 3],
+  warped_wart_block: [20, 120, 112],
+  stripped_oak_log: [177, 143, 86],
+  stripped_spruce_log: [110, 84, 50],
+  stripped_birch_log: [196, 176, 118],
+  stripped_jungle_log: [170, 124, 80],
+  stripped_acacia_log: [174, 92, 52],
+  stripped_dark_oak_log: [70, 50, 26],
+
+  // ---------- 矿石 ----------
+  coal_ore: [115, 115, 115],
+  deepslate_coal_ore: [74, 74, 76],
+  iron_ore: [136, 130, 127],
+  deepslate_iron_ore: [96, 92, 90],
+  copper_ore: [130, 127, 116],
+  deepslate_copper_ore: [92, 90, 84],
+  gold_ore: [145, 133, 106],
+  deepslate_gold_ore: [104, 96, 78],
+  redstone_ore: [133, 107, 107],
+  deepslate_redstone_ore: [92, 76, 76],
+  lapis_ore: [107, 117, 141],
+  deepslate_lapis_ore: [78, 84, 100],
+  diamond_ore: [124, 144, 146],
+  deepslate_diamond_ore: [88, 102, 104],
+  emerald_ore: [110, 140, 120],
+  deepslate_emerald_ore: [80, 100, 88],
+  nether_gold_ore: [117, 60, 44],
+  nether_quartz_ore: [126, 84, 78],
+
+  // ---------- 矿物块 ----------
+  coal_block: [16, 15, 15],
+  iron_block: [220, 220, 220],
+  copper_block: [192, 107, 79],
+  gold_block: [246, 208, 61],
+  diamond_block: [92, 219, 213],
+  redstone_block: [175, 24, 5],
+  lapis_block: [30, 67, 140],
+  emerald_block: [42, 203, 86],
+  netherite_block: [67, 61, 64],
+  quartz_block: [236, 233, 226],
+  raw_iron_block: [166, 135, 107],
+  raw_copper_block: [154, 105, 79],
+  raw_gold_block: [221, 169, 46],
+  amethyst_cluster: [160, 120, 210],
+  budding_amethyst: [133, 97, 191],
+
+  // ---------- 建筑 ----------
+  bricks: [150, 97, 83],
+  bookshelf: [156, 127, 74],
+  crafting_table: [124, 90, 55],
+  furnace: [110, 110, 110],
+  blast_furnace: [90, 90, 90],
+  smoker: [86, 78, 70],
+  chest: [162, 130, 78],
+  barrel: [109, 86, 54],
+  tnt: [219, 68, 32],
+  glass: [215, 240, 240],
+  glass_pane: [215, 240, 240],
+  tinted_glass: [40, 40, 40],
+  hay_block: [166, 140, 31],
+  melon: [141, 175, 44],
+  pumpkin: [197, 124, 26],
+  carved_pumpkin: [197, 124, 26],
+  jack_o_lantern: [210, 140, 40],
+  cactus: [15, 110, 32],
+  sea_lantern: [172, 199, 190],
+  prismarine: [99, 156, 151],
+  prismarine_bricks: [99, 171, 158],
+  dark_prismarine: [51, 91, 75],
+  sponge: [195, 192, 74],
+  wet_sponge: [171, 181, 70],
+  terracotta: [152, 94, 67],
+  white_terracotta: [209, 178, 161],
+  orange_terracotta: [161, 83, 37],
+  moss_block: [89, 109, 45],
+  azalea_leaves: [76, 107, 32],
+  flowering_azalea_leaves: [90, 120, 45],
+  scaffolding: [174, 140, 86],
+  campfire: [109, 80, 58],
+  lantern: [190, 150, 80],
+  lodestone: [160, 168, 175],
+  iron_bars: [180, 180, 180],
+  cobweb: [230, 235, 235],
+  iron_door: [200, 200, 200],
+  iron_block_door: [200, 200, 200],
+  beacon: [110, 200, 190],
+  conduit: [110, 160, 160],
+  target: [215, 180, 170],
+  slime_block: [110, 190, 90],
+  honey_block: [230, 160, 60],
+  note_block: [110, 80, 60],
+  jukebox: [110, 85, 60],
+  dispenser: [110, 110, 110],
+  dropper: [110, 110, 110],
+  observer: [110, 110, 110],
+  piston: [140, 130, 110],
+  sticky_piston: [140, 130, 110],
+  hopper: [90, 90, 90],
+  cauldron: [70, 70, 70],
+  composter: [130, 100, 60],
+  lectern: [160, 130, 80],
+  loom: [150, 120, 80],
+  cartography_table: [130, 105, 70],
+  fletching_table: [200, 185, 135],
+  smithing_table: [70, 55, 45],
+  stonecutter: [130, 130, 130],
+  grindstone: [150, 140, 120],
+  bell: [230, 190, 70],
+  anvil: [70, 70, 70],
+  chipped_anvil: [70, 70, 70],
+  damaged_anvil: [70, 70, 70],
+  enchanting_table: [130, 60, 60],
+  end_portal_frame: [90, 130, 110],
+  respawn_anchor: [60, 20, 40],
+  crying_obsidian_block: [32, 10, 60],
+
+  // ---------- 植物 ----------
+  short_grass: [110, 160, 60],
+  tall_grass: [110, 160, 60],
+  fern: [110, 160, 60],
+  large_fern: [110, 160, 60],
+  dead_bush: [140, 110, 55],
+  dandelion: [120, 160, 50],
+  poppy: [120, 160, 50],
+  sunflower: [120, 160, 50],
+  lilac: [120, 160, 50],
+  rose_bush: [120, 160, 50],
+  peony: [120, 160, 50],
+  sugar_cane: [120, 170, 70],
+  kelp: [60, 120, 60],
+  seagrass: [60, 120, 60],
+  vine: [60, 120, 40],
+  lily_pad: [60, 130, 50],
+  wheat: [180, 170, 60],
+  carrots: [110, 160, 60],
+  potatoes: [110, 160, 60],
+  beetroots: [110, 160, 60],
+  nether_wart: [120, 20, 25],
+  crimson_fungus: [140, 60, 60],
+  warped_fungus: [60, 130, 130],
+  crimson_roots: [130, 40, 45],
+  warped_roots: [60, 120, 120],
+  big_dripleaf: [90, 130, 50],
+  small_dripleaf: [90, 130, 50],
+  glow_lichen: [130, 150, 120],
+  hanging_roots: [130, 100, 70],
+  twisting_vines: [60, 130, 130],
+  weeping_vines: [130, 40, 45],
+
+  // ---------- 羊毛 / 混凝土 ----------
+  white_wool: [233, 236, 236],
+  orange_wool: [240, 118, 19],
+  magenta_wool: [189, 68, 179],
+  light_blue_wool: [58, 175, 217],
+  yellow_wool: [248, 198, 39],
+  lime_wool: [112, 185, 25],
+  pink_wool: [237, 141, 172],
+  gray_wool: [62, 68, 71],
+  light_gray_wool: [142, 142, 134],
+  cyan_wool: [21, 137, 145],
+  purple_wool: [121, 42, 172],
+  blue_wool: [53, 57, 157],
+  brown_wool: [114, 71, 40],
+  green_wool: [84, 109, 27],
+  red_wool: [161, 39, 34],
+  black_wool: [20, 21, 25],
+  white_concrete: [207, 213, 214],
+  orange_concrete: [224, 97, 0],
+  magenta_concrete: [169, 48, 159],
+  light_blue_concrete: [36, 137, 199],
+  yellow_concrete: [241, 175, 21],
+  lime_concrete: [94, 168, 24],
+  pink_concrete: [214, 101, 143],
+  gray_concrete: [55, 58, 62],
+  light_gray_concrete: [125, 125, 115],
+  cyan_concrete: [21, 119, 136],
+  purple_concrete: [100, 32, 156],
+  blue_concrete: [44, 46, 143],
+  brown_concrete: [96, 60, 32],
+  green_concrete: [73, 91, 36],
+  red_concrete: [142, 33, 33],
+  black_concrete: [8, 10, 15],
+  white_terracotta_glazed: [188, 212, 202],
+  orange_glazed_terracotta: [154, 86, 40],
+  magenta_glazed_terracotta: [150, 60, 145],
+  light_blue_glazed_terracotta: [90, 150, 180],
+  yellow_glazed_terracotta: [210, 180, 70],
+  lime_glazed_terracotta: [130, 170, 60],
+  pink_glazed_terracotta: [200, 120, 150],
+  gray_glazed_terracotta: [80, 90, 95],
+  light_gray_glazed_terracotta: [140, 145, 145],
+  cyan_glazed_terracotta: [60, 120, 130],
+  purple_glazed_terracotta: [110, 60, 140],
+  blue_glazed_terracotta: [70, 80, 160],
+  brown_glazed_terracotta: [100, 70, 50],
+  green_glazed_terracotta: [80, 110, 60],
+  red_glazed_terracotta: [150, 60, 55],
+  black_glazed_terracotta: [40, 40, 45],
+};
+
+/**
+ * 原版地图的明暗档乘数（0 最亮 ~ 3 最暗）。
+ * 与原版 `MapColor` 的观感一致：高处亮、低处暗，形成地形立体感。
+ */
+const SHADES = [1.0, 0.8, 0.5, 0.4];
+
+/**
+ * 规范化方块名：剥 `minecraft:` 前缀与 blockstate 后缀。
+ * @param {string} name 例如 `minecraft:oak_log[axis=y]`
+ */
+function normalize(name) {
+  // ⚠ 顺序要紧：**先** trim + 小写，**再**剥前缀与后缀。
+  //   反过来写（先看前缀后小写）时，`'  Minecraft:STONE  '` 这类带空白/大写的输入
+  //   会匹配不上前缀，于是整个名字留着 `minecraft:` 去查表 → 误判成未知方块（品红）。
+  let n = String(name || '')
+    .trim()
+    .toLowerCase();
+  const bracket = n.indexOf('[');
+  if (bracket >= 0) n = n.slice(0, bracket);
+  if (n.startsWith('minecraft:')) n = n.slice('minecraft:'.length);
+  return n.trim();
+}
+
+/**
+ * 方块名 → RGB。未知方块返回**品红**（刻意刺眼），透明方块返回 `null`。
+ * @param {string} name
+ * @returns {[number, number, number]|null}
+ */
+function colorOf(name) {
+  const n = normalize(name);
+  if (!n || TRANSPARENT.has(n)) return null;
+  const c = COLORS[n];
+  return c ? [c[0], c[1], c[2]] : UNKNOWN;
+}
+
+/**
+ * 明暗档：照搬原版规则 —— 由**当前方块与北侧邻居的高度差**决定，不是绝对高度。
+ *
+ * 这样同一高度的平地到处一样亮，而台阶、墙、坑的边缘会出现明暗线，
+ * 观感与游戏内地图一致；用绝对高度则整张图会随地形起伏整体变暗变亮，反而不像地图。
+ *
+ * @param {number} topY 当前列顶部方块的高度
+ * @param {number} northY 北侧（z-1）邻居的高度
+ * @returns {number} 0..3
+ */
+function shadeIndexFor(topY, northY) {
+  const diff = topY - northY;
+  if (diff > 0) return 0;
+  if (diff === 0) return 1;
+  if (diff > -2) return 2;
+  return 3;
+}
+
+/**
+ * 取某列的明暗档，处理北侧取样的边界。
+ *
+ * `pz === 0` 时北侧越界：按原版做法**改用 pz = 1**（而不是把邻居当 0 高度或跳过），
+ * 否则地图第一行会出现一条凭空的黑边。
+ *
+ * @param {Int16Array} heights
+ * @param {number} size 图像边长
+ * @param {number} px
+ * @param {number} pz
+ */
+function shadeIndexAt(heights, size, px, pz) {
+  const northPz = pz === 0 ? 1 : pz - 1;
+  const cur = heights[pz * size + px];
+  const north = heights[northPz * size + px];
+  return shadeIndexFor(cur, north);
+}
+
+/**
+ * 应用明暗档。
+ * @param {[number,number,number]} rgb
+ * @param {number} shadeIndex 0..3
+ * @returns {[number, number, number]}
+ */
+function applyShade(rgb, shadeIndex) {
+  const k = SHADES[shadeIndex] ?? 1;
+  return [Math.round(rgb[0] * k), Math.round(rgb[1] * k), Math.round(rgb[2] * k)];
+}
+
+module.exports = {
+  UNKNOWN,
+  COLORS,
+  SHADES,
+  normalize,
+  colorOf,
+  shadeIndexFor,
+  shadeIndexAt,
+  applyShade,
+};
+};
+
 // ---------------------------- src/agent.js ----------------------------
 __modules["src/agent.js"] = function (module, exports, __require, __dirname, __filename) {
 'use strict';
@@ -4456,6 +5699,11 @@ class Agent {
         return m.iconGet(p.name);
       case 'instance.iconSet':
         return m.iconSet(p.name, p.b64);
+      // ---------- 地图（P4-1）：区域级 PNG，浏览器原生解码 ----------
+      case 'instance.map.saves':
+        return m.mapSaves(p.name);
+      case 'instance.map.region':
+        return m.mapRegion(p.name, p.save, p.x, p.z, { force: !!p.force });
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.backupSchedule.set':
