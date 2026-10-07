@@ -47,6 +47,12 @@ const TRUST_PROXY = parseTrustProxy(argOf('trust-proxy') || process.env.BLOCKNEX
 // ⚠ 仅在确实通过 HTTPS 访问时开启：纯 HTTP 下浏览器会拒绝保存带 Secure 的 Cookie，表现为「登录成功但立刻掉线」。
 const SECURE_COOKIE = argOf('secure-cookies') !== null || process.env.BLOCKNEXUS_SECURE_COOKIES === '1';
 
+/** 监听地址是否仅限本机（回环 / localhost）。0.0.0.0 与具体 IP、主机名都算「对外」 */
+function isLoopbackHost(h) {
+  const s = String(h || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return s === '127.0.0.1' || s === 'localhost' || s === '::1' || s === '0:0:0:0:0:0:0:1';
+}
+
 // 面板自身是否以 HTTPS 对外（自签或正式证书）。
 // 提前判定：下面注册 /api 时要把「是否 https」告诉 createApi，由它决定会话 Cookie 是否带 Secure。
 // 放在反代后面时面板自身是 HTTP，此时应改用 --secure-cookies。
@@ -87,7 +93,14 @@ app.use(express.static(path.join(__dirname, '..', 'web', 'dist'), {
     if (String(filePath).endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
   },
 }));
-app.use('/api', createApi(config, hub, bus, {}, { secureCookies: tlsOn || SECURE_COOKIE }));
+app.use('/api', createApi(config, hub, bus, {}, {
+  secureCookies: tlsOn || SECURE_COOKIE,
+  // 是否可能被本机之外访问到（审计 H5 的告警依据）：
+  //   · 监听非回环地址（--host 0.0.0.0 / 具体 IP / 主机名）
+  //   · 或配置了 trust proxy —— 说明前面有反代，面板虽只听 127.0.0.1 但实际对外
+  // 只用于提示，**不改变任何行为**。
+  mayBeExposed: !isLoopbackHost(HOST) || TRUST_PROXY !== null,
+}));
 
 // SPA history 路由回退：/settings、/server/... 等路径直达时返回 index.html。
 // API 与带扩展名的资源路径不回退（缺失照常 404）

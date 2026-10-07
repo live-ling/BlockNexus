@@ -1172,4 +1172,8 @@ export const en = {
   'console.close': 'Close console',
   'fileTree.select.aria': 'Select {0}',
   'logViewer.jumpToLatest': 'Jump to latest',
+
+  // ---------- warning ----------
+  'warning.exposedNoAuth.title': 'Sign-in protection is off while the panel is reachable from outside',
+  'warning.exposedNoAuth.desc': 'Anyone who can reach this address has full control of the panel (change settings, install Agents over SSH, read and write server files as root). Enable sign-in protection in Panel settings now.',
 } as const

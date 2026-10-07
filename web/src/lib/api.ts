@@ -263,6 +263,12 @@ export interface Me {
   authEnabled: boolean;
   /** 面板版本（package.json） */
   version?: string;
+  /**
+   * 危险组合告警：面板**对外可达**（非回环监听或配了 trust proxy）却**没开鉴权**。
+   * 此时任何人都能完全接管面板（改配置、经 SSH 装 Agent、以 root 读写服务器文件）。
+   * 后端只做告警、不改默认行为，前端据此显示持久横幅。
+   */
+  exposedWithoutAuth?: boolean;
 }
 
 /** 面板设置（GET /api/settings；SMTP 密码不回传，只给 hasPass） */
