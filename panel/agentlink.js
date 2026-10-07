@@ -16,6 +16,8 @@ const crypto = require('crypto');
 const { deriveKeys, computeProof, Sealer, Opener, randomNonce } = require('./crypto');
 
 const HANDSHAKE_TIMEOUT = 15000;
+/** 面板入站 /agent/ws 的并发握手上限（正常部署的 Agent 数远小于它） */
+const MAX_INFLIGHT_HANDSHAKES = 32;
 const MAX_CLOCK_SKEW = 5 * 60 * 1000;
 const DEFAULT_AGENT_PORT = 3099;
 
@@ -150,6 +152,14 @@ class AgentHub extends require('events').EventEmitter {
     this.outbound = new Map(); // serverId -> { ws, timer, delay }
     this.wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
     this.wss.on('connection', (ws) => this.onInbound(ws));
+    /**
+     * 进行中的握手数（含尚未完成认证的连接）。
+     * 为什么要上限：/agent/ws 的凭据在**握手 proof 里**，所以升级阶段必须放行未认证连接；
+     * 而握手最长要 HANDSHAKE_TIMEOUT（15s）。面板一旦对外暴露，攻击者可以持续开连接、
+     * 每条挂满 15 秒来堆积 fd 与内存（每条连接 = 一个 socket + 一个 ws 对象）。
+     * 上限取 32：正常部署的 Agent 数量远小于它（每台 1 条），不会误伤。
+     */
+    this.inflight = 0;
     // 定期同步外向连接（配置变更/新增服务器后自动建立）
     this.syncTimer = setInterval(() => this.syncOutbound(), 15000);
     setTimeout(() => this.syncOutbound(), 500);
@@ -169,10 +179,38 @@ class AgentHub extends require('events').EventEmitter {
       socket.destroy();
       return;
     }
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onInbound(ws));
+    // 并发握手上限：到顶直接回 503，不占用握手名额。
+    // 回一个明确的 HTTP 状态而不是静默断开——便于运维区分「面板拒绝」与「网络不通」。
+    if (this.inflight >= MAX_INFLIGHT_HANDSHAKES) {
+      logDedup('inbound-busy', `[agent-inbound] 并发握手已达上限 ${MAX_INFLIGHT_HANDSHAKES}，拒绝新连接`);
+      try {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+      } catch {}
+      socket.destroy();
+      return;
+    }
+    this.inflight++;
+    let released = false;
+    // 无论走哪条路径结束，都必须归还名额，否则一次失败会永久吃掉一个名额
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.inflight--;
+    };
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      // 兜底：连接断开也归还（例如客户端在握手中途断开，promise 未必走到 settle）
+      ws.once('close', release);
+      this.onInbound(ws, release);
+    });
   }
 
-  onInbound(ws) {
+  onInbound(ws, release = () => {}) {
+    // 同一个 socket 只能跑一次握手。
+    // handleUpgrade 的回调与 wss 的 'connection' 事件**都可能**走到这里，
+    // 而对同一 socket 跑两次会互相打架（发两次 challenge、两套状态、两次 attach）。
+    // 实测当前只触发一次，但这个守卫让「将来 ws 库行为变化」不至于变成难查的偶发故障。
+    if (ws._bnInboundStarted) return;
+    ws._bnInboundStarted = true;
     runHandshake(ws, {
       role: 'server',
       resolveHello: (msg) => {
@@ -181,14 +219,17 @@ class AgentHub extends require('events').EventEmitter {
         return { serverId: server.id, token: Buffer.from(server.token, 'base64url') };
       },
     })
-      .then((keys) => this.attach(ws, ws._mcpServerId, keys))
+      .then((keys) => {
+        this.attach(ws, ws._mcpServerId, keys);
+      })
       .catch((e) => {
         const id = ws._mcpServerId || '未知身份';
         logDedup('in-hs|' + id, `[agent-inbound] ${id} 握手失败: ${e.message}`);
         try {
           ws.close(4002, 'handshake failed');
         } catch {}
-      });
+      })
+      .finally(release);
   }
 
   // ================= outbound：面板连到 Agent =================
