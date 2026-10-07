@@ -193,6 +193,8 @@ export function MapPanel({
   }, [requestRegion]);
 
   // 尺寸变化与可见性变化都要重绘（隐藏期间 clientWidth 为 0，不能画）
+  // ⚠ 依赖里同样必须有 phase：理由与滚轮 effect 完全相同 —— wrapRef 只在 ready
+  //   阶段存在，空/不充分的依赖会让观察器永远挂不上（窗口缩放时不重绘）。
   useEffect(() => {
     if (!visible) return;
     scheduleDraw();
@@ -201,7 +203,7 @@ export function MapPanel({
     const ro = new ResizeObserver(() => scheduleDraw());
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [visible, scheduleDraw]);
+  }, [visible, scheduleDraw, phase]);
 
   useEffect(() => {
     return () => {
@@ -252,6 +254,11 @@ export function MapPanel({
   //   被动监听里调用 preventDefault() 是**无效的**（浏览器会忽略并可能打印警告）。
   //   结果就是：滚轮缩放地图的同时，整个页面也跟着上下滚动 —— 这正是用户报的那个 bug。
   //   唯一可靠做法是自己用 { passive: false } 绑原生监听，再阻止默认行为。
+  // ⚠ 依赖里**必须**有 phase：主树（含 wrapRef 那个 div）只在 ready 阶段才渲染，
+  //   而这个 effect 在挂载时最先跑 —— 那一刻 phase 还是 'loading'，wrapRef.current
+  //   是 null，于是直接 return 且**空依赖数组让它永不再试** → 滚轮监听从未挂上，
+  //   表现为「滚轮不缩放、页面照样滚」。这正是上一轮那个 preventDefault 修复
+  //   看起来生效、实际空转的原因。
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -263,7 +270,7 @@ export function MapPanel({
     };
     el.addEventListener('wheel', handler, { passive: false });
     return () => el.removeEventListener('wheel', handler);
-  }, []);
+  }, [phase]);
 
   /** 居中到世界坐标 */
   const doCenterOn = (bx: number, bz: number) => {
