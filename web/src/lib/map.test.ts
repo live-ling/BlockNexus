@@ -63,7 +63,7 @@ describe('regionRange：视口覆盖哪些区域', () => {
 
 describe('regionRect：绘制位置', () => {
   it('相机在区域原点时偏移为 0，尺寸 = 512 × zoom', () => {
-    expect(regionRect(0, 0, V(0, 0, 1))).toEqual({ dx: 0, dy: 0, size: REGION_BLOCKS })
+    expect(regionRect(0, 0, V(0, 0, 1))).toEqual({ dx: 0, dy: 0, dw: REGION_BLOCKS, dh: REGION_BLOCKS })
   })
 
   it('相机右移后区域左移（世界向左滑）', () => {
@@ -75,13 +75,42 @@ describe('regionRect：绘制位置', () => {
   it('zoom 同时影响偏移与尺寸', () => {
     const r = regionRect(1, 0, V(0, 0, 2))
     expect(r.dx).toBe(REGION_BLOCKS * 2)
-    expect(r.size).toBe(REGION_BLOCKS * 2)
+    expect(r.dw).toBe(REGION_BLOCKS * 2)
   })
 
   it('负坐标区域位置正确', () => {
     const r = regionRect(-1, -1, V(0, 0, 1))
     expect(r.dx).toBe(-REGION_BLOCKS)
     expect(r.dy).toBe(-REGION_BLOCKS)
+  })
+
+  // 这条是本模块存在的核心理由：非整数缩放下相邻区域必须无缝
+  it('横向相邻区域共享边界像素（非整数缩放下不留 1px 缝）', () => {
+    for (const zoom of [0.37, 0.5, 0.73, 1.3, 2.7, 3.14159]) {
+      for (const camX of [0, -137.4, 512.5, -1024.9]) {
+        const view = V(camX, 0, zoom)
+        const a = regionRect(0, 0, view)
+        const b = regionRect(1, 0, view)
+        expect(b.dx).toBe(a.dx + a.dw)
+      }
+    }
+  })
+
+  it('纵向相邻区域同样无缝', () => {
+    for (const zoom of [0.37, 1.3, 2.7]) {
+      const view = V(0, -333.25, zoom)
+      const a = regionRect(0, 0, view)
+      const b = regionRect(0, 1, view)
+      expect(b.dy).toBe(a.dy + a.dh)
+    }
+  })
+
+  it('整块区域不会算出 0 宽/0 高（否则 drawImage 会抛错）', () => {
+    for (const zoom of [0.05, 0.5, 1, 8]) {
+      const r = regionRect(0, 0, V(0, 0, zoom))
+      expect(r.dw).toBeGreaterThan(0)
+      expect(r.dh).toBeGreaterThan(0)
+    }
   })
 })
 

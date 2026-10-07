@@ -21,6 +21,18 @@ export const ZOOM_MAX = 8;
 export type View = { camX: number; camZ: number; zoom: number };
 
 /**
+ * 把 `-0` 归一成 `+0`。
+ *
+ * `Math.round(-0.185)` 返回的是 **`-0`**（IEEE 754 里存在负零）。
+ * 传给 `drawImage` 本身无害，但它会漏进 `Object.is` 比较、`Map` 键、
+ * 以及 JSON 序列化（`JSON.stringify(-0)` 是 `"0"`），是一类很难查的意外。
+ * 纯粹的数值坐标函数不该吐出负零，这里统一归一。
+ */
+function n0(v: number): number {
+  return v === 0 ? 0 : v;
+}
+
+/**
  * 视口覆盖到的 region 下标范围（闭区间）。
  * 返回 null 表示视口尺寸无效（隐藏时 clientWidth/Height 为 0），调用方应跳过绘制。
  */
@@ -44,19 +56,23 @@ export function regionRange(
 
 /**
  * 某个 region 在画布上的绘制矩形（CSS 像素）。
- * 用世界坐标算偏移，所以缩放不会累积误差。
+ *
+ * ⚠ 关键是**两端都取整**，而不是「取整起点 + 固定宽度」：
+ *   非整数缩放级别下，相邻两个 region 各自用 `(rx*512 - camX) * zoom` 求左边界、
+ *   再配一个固定 `512 * zoom` 宽度时，前一格的右边界与后一格的左边界会因浮点误差
+ *   取整到**不同像素** → 中间留下 **1px 缝**（地图上表现为一道道网格线）。
+ *   把每格的**左右、上下边界都从世界坐标算出并取整**，相邻格就共享同一个边界像素。
  */
 export function regionRect(
   rx: number,
   rz: number,
   view: View,
-): { dx: number; dy: number; size: number } {
-  const size = REGION_BLOCKS * view.zoom;
-  return {
-    dx: (rx * REGION_BLOCKS - view.camX) * view.zoom,
-    dy: (rz * REGION_BLOCKS - view.camZ) * view.zoom,
-    size,
-  };
+): { dx: number; dy: number; dw: number; dh: number } {
+  const x0 = n0(Math.round((rx * REGION_BLOCKS - view.camX) * view.zoom));
+  const x1 = n0(Math.round(((rx + 1) * REGION_BLOCKS - view.camX) * view.zoom));
+  const y0 = n0(Math.round((rz * REGION_BLOCKS - view.camZ) * view.zoom));
+  const y1 = n0(Math.round(((rz + 1) * REGION_BLOCKS - view.camZ) * view.zoom));
+  return { dx: x0, dy: y0, dw: x1 - x0, dh: y1 - y0 };
 }
 
 /** 世界坐标 → 画布坐标 */

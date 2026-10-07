@@ -98,8 +98,30 @@ function encodeNbt(obj) {
   return Buffer.concat([nb, ...body]);
 }
 
-/** 把值序列按位宽打包成 long 数组（测试用；是 readPacked 的逆运算） */
+/**
+ * 按 **MC 1.16+ 的填充式**打包：每个 long 放 `floor(64/bits)` 个值，
+ * 装不下的整个值跳到下一个 long，**不跨边界**。
+ *
+ * ⚠ 这个函数必须**独立于读取实现**、只按 MC 格式规范写。
+ *   我第一版两边同源地按「连续式」打包/解包 —— 测试全绿，却把位布局这个
+ *   严重 bug 整个漏了过去（自洽但错）。现在互证手段有两条：
+ *     · 长度：9bit/256 值 → 填充式 **37** 个 long，连续式 36 个（长度本身即判别依据）
+ *     · 手算样本：见「位解包」那组用例
+ */
 function packBits(values, bits) {
+  const per = Math.floor(64 / bits);
+  const nLongs = Math.ceil(values.length / per);
+  const longs = new Array(nLongs).fill(0n);
+  for (let i = 0; i < values.length; i++) {
+    const li = Math.floor(i / per);
+    const off = (i % per) * bits;
+    longs[li] |= BigInt(values[i]) << BigInt(off);
+  }
+  return longs;
+}
+
+/** 按 **1.15- 的连续式**打包（值可跨 long），用来验证读取器的自动判别 */
+function packBitsStream(values, bits) {
   const nLongs = Math.ceil((values.length * bits) / 64);
   const longs = new Array(nLongs).fill(0n);
   for (let i = 0; i < values.length; i++) {
@@ -126,7 +148,7 @@ function buildRegion(chunks) {
     const kind = c.kind ?? 2;
     const payload = kind === 1 ? zlib.gzipSync(c.nbt) : kind === 2 ? zlib.deflateSync(c.nbt) : c.nbt;
     const len = Buffer.alloc(4);
-    len.writeUInt32BE(payload.length, 0);
+    len.writeUInt32BE(payload.length + 1, 0); // MC：length **含**压缩类型字节（实测 gzip 会因此炸）
     const type = Buffer.from([kind]);
     let blob = Buffer.concat([len, type, payload]);
     const sectors = Math.ceil(blob.length / 4096) || 1;
@@ -183,17 +205,63 @@ function makeChunk({ topY = 64, blockName = 'minecraft:stone', paletteExtra = []
   });
 }
 
-// ==================== 位解包：与手工算好的期望值比对 ====================
-// 这是**独立于打包器**的验证：期望值是我按「LSB 优先、值可跨 long」手算出来的。
+// ==================== 位布局：两种格式与自动判别 ====================
+// 这组是整个模块最要紧的验证。MC 1.16+ 起是「填充式」（值不跨 long），
+// 1.15- 是「连续式」（值可跨）。我第一版把两者搞反了，而测试因为
+// 「打包器与解包器同源」照样全绿 —— 所以这里刻意用**手工算好的常量**做锚点。
 {
-  // 0x123 = 0b100100011，4 bit 一组 → [3, 2, 1, 0]
-  const longs = [0x123n];
-  const got = [0, 1, 2, 3].map((i) => A.readPacked(longs, 4, i));
-  check('位解包 4bit：[3,2,1,0]（手工算的期望值）', JSON.stringify(got) === '[3,2,1,0]', JSON.stringify(got));
+  // --- 手算锚点 1：4bit 是两种布局**唯一重合**的常见位宽，可当基准 ---
+  // 0x123 = 0b100100011，从最低位起每 4 bit 一组 → [3, 2, 1, 0]
+  const longs4 = [0x123n];
+  const got4 = [0, 1, 2, 3].map((i) => A.readPadded(longs4, 4, i));
+  check('4bit 填充式：[3,2,1,0]（手算锚点）', JSON.stringify(got4) === '[3,2,1,0]', JSON.stringify(got4));
+  check(
+    '4bit 时两种布局结果相同（长度也相同，所以随便读都对）',
+    JSON.stringify(got4) === JSON.stringify([0, 1, 2, 3].map((i) => A.readStream(longs4, 4, i))),
+  );
 
-  // 5 bit 跨 long 边界：value12 占 bit 60..64，long0 全 1、long1 只有最低位 1 → 0b11111 = 31
-  const span = [0xffffffffffffffffn, 0x1n];
-  check('位解包 5bit 跨 long：value12 = 31（手工算的期望值）', A.readPacked(span, 5, 12) === 31, String(A.readPacked(span, 5, 12)));
+  // --- 手算锚点 2：5bit 时两布局**必然不同**，这是判别力的来源 ---
+  // 填充式 5bit：每 long 放 floor(64/5)=12 个值。value12 在第 2 个 long 的 bit 0。
+  const pad5 = [0xffffffffffffffffn, 0x1n];
+  check('5bit 填充式：value12 落在下一 long 起始 → 1', A.readPadded(pad5, 5, 12) === 1, String(A.readPadded(pad5, 5, 12)));
+  check('5bit 填充式：value11 是第 1 个 long 的最高一组（bit 55..59，全 1）→ 31', A.readPadded(pad5, 5, 11) === 31, String(A.readPadded(pad5, 5, 11)));
+  // 连续式 5bit：value12 占 bit 60..64，跨 long → 0b11111 = 31
+  check('5bit 连续式：value12 跨 long → 31', A.readStream(pad5, 5, 12) === 31, String(A.readStream(pad5, 5, 12)));
+  check('两布局在 5bit 上确实不同（判别力所在）', A.readPadded(pad5, 5, 12) !== A.readStream(pad5, 5, 12));
+
+  // --- 用**长度**自动判别（不依赖 DataVersion，新旧存档都能读）---
+  check('9bit/256 值：填充式需 37 个 long', A.paddedLength(256, 9) === 37, String(A.paddedLength(256, 9)));
+  check('9bit/256 值：连续式需 36 个 long', A.streamLength(256, 9) === 36, String(A.streamLength(256, 9)));
+  check('layoutOf：长度 37 → padded', A.layoutOf(37, 9, 256) === 'padded');
+  check('layoutOf：长度 36 → stream', A.layoutOf(36, 9, 256) === 'stream');
+  check('5bit/4096 值：填充 342 / 连续 320', A.paddedLength(4096, 5) === 342 && A.streamLength(4096, 5) === 320);
+  check('layoutOf：长度 342 → padded（5bit）', A.layoutOf(342, 5, 4096) === 'padded');
+  check('layoutOf：长度 320 → stream（5bit）', A.layoutOf(320, 5, 4096) === 'stream');
+  check('8bit 时两布局长度相同（512）', A.paddedLength(4096, 8) === A.streamLength(4096, 8));
+
+  // --- 位宽由长度精确反推（不用 length*64/count 四舍五入，后者会进位出错）---
+  check('bitsFromLength：37 → 9', A.bitsFromLength(37, 256) === 9, String(A.bitsFromLength(37, 256)));
+  check('bitsFromLength：36 → 9', A.bitsFromLength(36, 256) === 9, String(A.bitsFromLength(36, 256)));
+  check('bitsFromLength：342 → 5', A.bitsFromLength(342, 4096) === 5, String(A.bitsFromLength(342, 4096)));
+
+  // --- 往返：两种布局各自独立打包 → 读取器都要能还原 ---
+  const vals256 = Array.from({ length: 256 }, (_, i) => (i * 7) % 100);
+  for (const [name, packer, wantLayout] of [
+    ['填充式（1.16+）', packBits, 'padded'],
+    ['连续式（1.15-）', packBitsStream, 'stream'],
+  ]) {
+    const longs = packer(vals256, 9);
+    const layout = A.layoutOf(longs.length, 9, 256);
+    const back = vals256.map((_, i) => A.readPacked(longs, 9, i, layout));
+    check(`${name} 9bit 往返一致（长度 ${longs.length} → 判为 ${layout}）`, JSON.stringify(back) === JSON.stringify(vals256) && layout === wantLayout, `layout=${layout}`);
+  }
+
+  // --- 5bit 的往返（真实地形里调色板 17+ 项就会走这条）---
+  const vals4096 = Array.from({ length: 4096 }, (_, i) => (i * 13) % 32);
+  const p5 = packBits(vals4096, 5);
+  const l5 = A.layoutOf(p5.length, 5, 4096);
+  const b5 = vals4096.map((_, i) => A.readPacked(p5, 5, i, l5));
+  check('5bit 填充式 4096 值往返一致（真实地形的常见位宽）', JSON.stringify(b5) === JSON.stringify(vals4096) && l5 === 'padded', `layout=${l5}`);
 
   // 位宽反推
   check('位宽最低 4（调色板 2 项）', A.bitsFor(2) === 4);
@@ -266,7 +334,7 @@ for (const [kind, label] of [[1, 'gzip'], [2, 'zlib'], [3, '未压缩']]) {
   const nbt = makeChunk();
   const payload = zlib.deflateSync(nbt);
   const header = Buffer.alloc(8192);
-  const blob = Buffer.concat([Buffer.from([0, 0, 0, payload.length, 0x82]), payload]); // 0x82 = 外置 + zlib
+  const blob = Buffer.concat([Buffer.from([0, 0, 0, payload.length + 1, 0x82]), payload]); // 0x82 = 外置 + zlib
   const padded = Buffer.concat([blob, Buffer.alloc(Math.ceil(blob.length / 4096) * 4096 - blob.length)]);
   const sectors = padded.length / 4096;
   header.writeUInt32BE((2 << 8) | sectors, 0);

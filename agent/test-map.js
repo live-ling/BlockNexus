@@ -126,7 +126,7 @@ function buildRegion(chunks) {
   for (const c of chunks) {
     const payload = zlib.deflateSync(c.nbt);
     const len = Buffer.alloc(4);
-    len.writeUInt32BE(payload.length, 0);
+    len.writeUInt32BE(payload.length + 1, 0); // MC：length **含**压缩类型字节（实测 gzip 会因此炸）
     let blob = Buffer.concat([len, Buffer.from([2]), payload]);
     const sectors = Math.ceil(blob.length / 4096) || 1;
     if (blob.length < sectors * 4096) blob = Buffer.concat([blob, Buffer.alloc(sectors * 4096 - blob.length)]);

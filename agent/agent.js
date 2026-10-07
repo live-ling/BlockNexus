@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.4.0';
+const AGENT_VERSION = '0.4.2';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -4546,6 +4546,15 @@ function parseNbt(buf) {
   let p = 0;
 
   const u8 = () => buf[p++];
+  // ⚠ 标签**类型**是无符号的（0..12），但 TAG_BYTE 的**负载**是**有符号**的。
+  //   踩过的坑：用 u8 读负载时，1.18+ 主世界的节号 -4 会被读成 252，
+  //   于是 `sections.find(s => Number(s.Y) === secY)` 对负节号**永远匹配不上** →
+  //   顶部方块落在 y<0 的列全部变成空白。
+  const i8 = () => {
+    const v = buf.readInt8(p);
+    p += 1;
+    return v;
+  };
   const i16 = () => {
     const v = buf.readInt16BE(p);
     p += 2;
@@ -4583,7 +4592,7 @@ function parseNbt(buf) {
   function payload(type) {
     switch (type) {
       case TAG.BYTE:
-        return u8();
+        return i8();
       case TAG.SHORT:
         return i16();
       case TAG.INT:
@@ -4679,7 +4688,12 @@ function readChunk(buf, cx, cz) {
 
   const len = buf.readUInt32BE(start);
   const type = buf.readUInt8(start + 4);
-  const body = buf.subarray(start + 5, start + 5 + len);
+  // ⚠ `len` **包含**那个压缩类型字节（Region file format：remaining (length-1) bytes
+  //   are the compressed chunk data）。所以数据是 `len - 1` 字节，即结束于 `start+4+len`。
+  // 踩过的坑：原先取 `start+5+len` 会多读 1 字节 —— zlib 容忍尾随垃圾所以看不出问题，
+  //   但 **gzip 不容忍**（Z_BUF_ERROR），于是所有 gzip 压缩的区块全部解析失败被跳过 →
+  //   地图上整片空白，而且只报 warning，很难联想到是长度差 1。
+  const body = buf.subarray(start + 5, start + 4 + len);
 
   // 最高位 0x80：数据外置到 .mcc。这里无法拿到那个文件（调用方只给了本文件），
   // 如实抛出而不是静默返回 null —— 「以为区块是空的」和「读不了」必须能区分。
@@ -4708,19 +4722,88 @@ function readChunk(buf, cx, cz) {
  * @param {number} bits 每个值的位宽
  * @param {number} index 值序号
  */
-function readPacked(longs, bits, index) {
+/** 填充式布局里每个 long 能放几个值（向下取整，剩的位浪费掉） */
+function valuesPerLong(bits) {
+  return Math.floor(64 / bits);
+}
+/** 填充式所需的 long 数 */
+function paddedLength(count, bits) {
+  return Math.ceil(count / valuesPerLong(bits));
+}
+/** 连续式所需的 long 数（值可跨 long） */
+function streamLength(count, bits) {
+  return Math.ceil((count * bits) / 64);
+}
+
+/**
+ * 判定某个 packed 数组用的是哪种位布局。
+ *
+ * ⚠ 这是本模块最要紧的一处，也是我第一版**搞反了**的地方：
+ *   · **MC 1.16+ 是「填充式」**：每个 long 固定塞 `floor(64/bits)` 个值，
+ *     装不下的整个值跳到下一个 long，**不跨边界**。
+ *     wiki（Chunk format，block_states.data）：「The indices are **not** packed across
+ *     multiple elements of the array … it starts instead at the first (lowest) bit of
+ *     the next 64-bit integer.」
+ *   · **MC 1.15- 才是「连续式」**：值可跨 long 边界。
+ *   我原先按连续式实现，等于在读 1.15- 的布局。在 `bits` 整除 64（4/8）时两种布局
+ *   完全相同，所以小调色板的用例侥幸能过；而 `bits = 5/6/7/9`（调色板 17+ 项、
+ *   以及 9 bit 的高度图）从第 `floor(64/bits)` 个值起就全错 →
+ *   读到的是上一个值的高位残留 + 填充位 → **随机方块 → 满屏噪点**。
+ *   高度图同时错位 → `secY` 落到错误的节 → 两个错误叠加。
+ *
+ * 判别依据：**数组长度**。两种布局的长度在 bits 不整除 64 时必然不同
+ *   （9 bit/256 值：填充 37、连续 36；5 bit/4096 值：填充 342、连续 320），
+ * 而 bits 整除 64 时长度相同、布局也相同 → 随便选哪个都对。
+ * 这样不必依赖 DataVersion 就能同时兼容新旧存档。
+ */
+function layoutOf(len, bits, count) {
+  const pad = paddedLength(count, bits);
+  const strm = streamLength(count, bits);
+  if (len === pad) return 'padded';
+  if (len === strm) return 'stream';
+  // 长度对不上任何一种（截断/异常）：按更接近的那个走
+  return len >= pad ? 'padded' : 'stream';
+}
+
+/** 按「值数 + 数组长度」精确反推位宽（比 length*64/count 再四舍五入可靠） */
+function bitsFromLength(len, count) {
+  for (let b = 4; b <= 16; b++) {
+    if (paddedLength(count, b) === len || streamLength(count, b) === len) return b;
+  }
+  return 9;
+}
+
+/** 填充式读取：每 long 独立，值不跨边界 */
+function readPadded(longs, bits, index) {
+  const per = valuesPerLong(bits);
+  const li = Math.floor(index / per);
+  const lo = longs[li];
+  if (lo === undefined) return 0;
+  const off = (index % per) * bits;
+  return Number((lo >> BigInt(off)) & ((1n << BigInt(bits)) - 1n));
+}
+
+/**
+ * 连续式读取（1.15-）：按连续位流处理，值**会**跨 long 边界。
+ * 用 BigInt 是因为 long 是 64 位无符号位流，Number 超过 2^53 会静默丢精度。
+ */
+function readStream(longs, bits, index) {
   const bit = index * bits;
   const li = Math.floor(bit / 64);
   const off = bit % 64;
   const lo = longs[li];
   if (lo === undefined) return 0;
-  const mask = (1n << BigInt(bits)) - 1n;
   let v = lo >> BigInt(off);
-  if (off + bits > 64) {
-    const next = longs[li + 1] ?? 0n;
-    v |= next << BigInt(64 - off);
-  }
-  return Number(v & mask);
+  if (off + bits > 64) v |= (longs[li + 1] ?? 0n) << BigInt(64 - off);
+  return Number(v & ((1n << BigInt(bits)) - 1n));
+}
+
+/**
+ * 按指定布局读取第 `index` 个值。
+ * @param {'padded'|'stream'} layout
+ */
+function readPacked(longs, bits, index, layout = 'padded') {
+  return layout === 'stream' ? readStream(longs, bits, index) : readPadded(longs, bits, index);
 }
 
 /**
@@ -4731,6 +4814,25 @@ function bitsFor(paletteSize) {
   let bits = 4;
   while (1 << bits < paletteSize) bits++;
   return bits;
+}
+
+/**
+ * 取调色板里的方块名。
+ *
+ * ⚠ MC 的 palette 有**三种**形态，都要兼容（1.21.5+ 起可能混用）：
+ *   · `[{ Name: 'minecraft:stone', Properties: {...} }, ...]` —— 最常见
+ *   · `['minecraft:stone', ...]` —— 全是默认状态时是**字符串列表**
+ *   · `[{ id: 'minecraft:stone' }, ...]` —— 新版用 `id` 键而不是 `Name`
+ * 只认 `e.Name` 时字符串项会变成 `undefined` → `names[i] = null` →
+ * 那一列被**静默丢弃**（地图上成片黑洞），且不报任何错，非常难查。
+ */
+function paletteNames(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((e) => {
+    if (typeof e === 'string') return e;
+    if (e && typeof e === 'object') return e.Name || e.id || null;
+    return null;
+  });
 }
 
 /**
@@ -4753,45 +4855,91 @@ function chunkColumns(chunk) {
 
   const motion = heightmaps.MOTION_BLOCKING;
   if (!Array.isArray(motion)) return null;
-  // 高度图位宽由「值数固定 256 + long 数组长度」**反推**，不要写死也不要猜。
-  // MC 用 ceil(log2(worldHeight+1))：主世界 384 高 → 9 bit → 36 个 long。
-  // （踩过的坑：想当然写 `bitsFor(4096)` 以为得到 9，实际得到 12——
-  //   bitsFor 算的是「表示 N 个不同值的位宽」，不是「位图总位数」。）
-  // 反推的好处：超高/模组世界（位宽不同）也自动适配。
-  const hBits = motion.length ? Math.round((motion.length * 64) / 256) : 9;
+  // 高度图位宽与布局：都用数组长度精确反推。
+  // 9 bit 时填充式是 7 值/long、需 37 个 long；连续式（1.15-）是 36 个。
+  // 原先我只按 `round(len*64/256)` 算位宽并一律按连续式读 → 现代存档从第 7 列起高度全错。
+  const hBits = motion.length ? bitsFromLength(motion.length, 256) : 9;
+  const hLayout = motion.length ? layoutOf(motion.length, hBits, 256) : 'padded';
+  const readH = (i) => readPacked(motion, hBits, i, hLayout);
 
   const names = new Array(CHUNK_SIZE * CHUNK_SIZE).fill(null);
   const heights = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
-  // 世界最低 Y：1.18+ 从 -64 开始（节号 -4 起）；旧格式从 0 开始
-  const minY = isLegacy ? 0 : -64;
 
-  /** 节号 → {palette, longs, bits}，只对真正用到的节做一次位宽准备 */
+  // 节号 → section 对象（不能按数组下标取：1.18+ 的节号可为负）
+  const secMap = new Map();
+  for (const s of sections) secMap.set(Number(s.Y), s);
+
+  /**
+   * 世界最低 Y：**不能写死 -64**。
+   *   主世界 1.18+ 是 -64..319，但**下界 0..127、末地 0..255**，旧格式一律从 0 起。
+   *   写死 -64 的后果：算出的 topY 整体偏移 64 → 找到错误的节 → **整张图错位成噪点**。
+   *
+   * 取法（自校验，不靠猜维度）：
+   *   MC 1.18+ 会把**全空气的节省掉**，所以「最小节号 × 16」通常就是 minY
+   *   （各维度底部都有实心层：主世界基岩 y=-64、下界基岩 y=0、末地末地石 y=0）。
+   *   但**虚空/超平坦**世界的底部节是空气、会被省掉，那时该推导就错了。
+   *   因此把三个候选都拿**采样列**试一遍，选「能命中真实存在的节」最多的那个：
+   *   解析结果自己会告诉我们哪个 minY 是对的。
+   */
+  const minSecY = Math.min(...sections.map((s) => Number(s.Y)));
+  const candidates = [];
+  for (const c of [Number.isFinite(minSecY) ? minSecY * 16 : null, -64, 0]) {
+    if (c !== null && !candidates.includes(c)) candidates.push(c);
+  }
+  const SAMPLE = [0, 17, 45, 90, 128, 160, 200, 255];
+  let minY;
+  // 1.18+ 的区块根节点带 `yPos` = **最低节的节号**（1.18 主世界是 -4）→ minY = yPos*16。
+  // 这是权威值，优先用它；比下面那套启发式可靠得多（启发式在候选相差 16 的整数倍时
+  // 会因为 secY±1 也存在而**平分**，而「第一个候选永远赢平分」意味着一旦首候选是错的
+  // 你只会看到颜色系统性不对，很难察觉）。
+  const yPos = Number(chunk.yPos);
+  if (Number.isFinite(yPos)) {
+    minY = yPos * 16;
+  } else {
+    // 没有 yPos（1.17- 或结构异常）时才回退到「候选 + 采样打分」
+    minY = candidates[0];
+    let bestScore = -1;
+    for (const cand of candidates) {
+      let score = 0;
+      for (const i of SAMPLE) {
+        const stored = readH(i);
+        if (!stored) continue;
+        // 高度图存的是「顶部方块 y + 1」
+        if (secMap.has(Math.floor((stored + cand - 1) / 16))) score++;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        minY = cand;
+      }
+    }
+  }
+
+  /** 节号 → {palette, longs, bits}，只对真正用到的节做一次准备 */
   const bySection = new Map();
 
   for (let i = 0; i < 256; i++) {
-    const stored = readPacked(motion, hBits, i);
+    const stored = readH(i);
     if (!stored) continue; // 该列无高度记录（未生成/全空气）
-    const topY = stored + minY - 1; // 高度图存的是「顶部方块 y + 1」
+    const topY = stored + minY - 1;
     const secY = Math.floor(topY / 16);
     const inSec = topY - secY * 16;
 
     let sec = bySection.get(secY);
     if (sec === undefined) {
-      // 找到该节号对应的 section 对象（节号在 1.18+ 可为负，所以不能按数组下标取）
-      const found = sections.find((s) => Number(s.Y) === secY);
+      const found = secMap.get(secY);
       if (!found) {
         bySection.set(secY, null);
         continue;
       }
       if (isLegacy) {
-        const pal = (found.Palette || []).map((e) => e && e.Name);
+        const pal = paletteNames(found.Palette);
         const longs = found.BlockStates || [];
-        sec = { pal, longs, bits: bitsFor(pal.length || 1) };
+        sec = { pal, longs, bits: bitsFor(pal.length || 1), layout: layoutOf(longs.length, bitsFor(pal.length || 1), 4096) };
       } else {
         const bs = found.block_states || {};
-        const pal = (bs.palette || []).map((e) => e && e.Name);
+        const pal = paletteNames(bs.palette);
         const longs = bs.data || [];
-        sec = { pal, longs, bits: bitsFor(pal.length || 1) };
+        sec = { pal, longs, bits: bitsFor(pal.length || 1), layout: layoutOf(longs.length, bitsFor(pal.length || 1), 4096) };
       }
       bySection.set(secY, sec);
     }
@@ -4801,7 +4949,7 @@ function chunkColumns(chunk) {
     const z = Math.floor(i / 16);
     const idx = inSec * 256 + z * 16 + x; // 节内顺序：Y → Z → X
     // 调色板只有 1 项时 MC 省略 data 数组（整节同一种方块）
-    const pi = sec.longs.length ? readPacked(sec.longs, sec.bits, idx) : 0;
+    const pi = sec.longs.length ? readPacked(sec.longs, sec.bits, idx, sec.layout) : 0;
     names[i] = sec.pal[pi] ?? null;
     heights[i] = topY;
   }
@@ -4884,6 +5032,14 @@ module.exports = {
   readRegionHeader,
   readChunk,
   readPacked,
+  readPadded,
+  readStream,
+  layoutOf,
+  paddedLength,
+  streamLength,
+  valuesPerLong,
+  bitsFromLength,
+  paletteNames,
   bitsFor,
   chunkColumns,
   readRegion,
@@ -5220,6 +5376,45 @@ const COLORS = {
   terracotta: [152, 94, 67],
   white_terracotta: [209, 178, 161],
   orange_terracotta: [161, 83, 37],
+
+  // ---------- 花岗岩类：在石头里成团生成，山地/海岸剖面大面积露出 ----------
+  // ⚠ 这三种早期漏掉了，实测「50 个常见方块里 35 个未命中」时它们排在最前。
+  //   缺它们的直接后果是整片山体渲染成品红 —— 就是用户看到的「满屏噪点」。
+  andesite: [136, 136, 137],
+  diorite: [207, 207, 208],
+  granite: [149, 103, 85],
+  polished_andesite: [132, 132, 133],
+  polished_diorite: [214, 214, 215],
+  polished_granite: [154, 106, 88],
+  smooth_quartz: [235, 232, 225],
+  smooth_sandstone: [220, 208, 160],
+  smooth_red_sandstone: [181, 97, 31],
+  smooth_stone: [158, 158, 158],
+  cut_sandstone: [216, 203, 155],
+  cut_red_sandstone: [181, 97, 31],
+  chiseled_sandstone: [216, 203, 155],
+  chiseled_red_sandstone: [181, 97, 31],
+  chiseled_quartz_block: [232, 229, 220],
+  chiseled_deepslate: [54, 54, 56],
+  cracked_deepslate_bricks: [62, 62, 64],
+  cracked_deepslate_tiles: [48, 48, 50],
+  smooth_basalt: [72, 72, 78],
+
+  // ---------- 1.17+ / 1.19+ 自然与建筑方块 ----------
+  sculk: [16, 24, 30],
+  sculk_vein: [14, 20, 26],
+  sculk_catalyst: [12, 26, 28],
+  sculk_shrieker: [18, 28, 32],
+  mangrove_roots: [94, 66, 44],
+  muddy_mangrove_roots: [70, 60, 48],
+  warped_nylium: [43, 104, 99],
+  crimson_nylium: [130, 40, 45],
+  nether_sprouts: [40, 120, 110],
+  bamboo_planks: [193, 168, 82],
+  bamboo_mosaic: [193, 168, 82],
+  ochre_froglight: [222, 214, 168],
+  verdant_froglight: [190, 214, 178],
+  pearlescent_froglight: [226, 200, 214],
   moss_block: [89, 109, 45],
   azalea_leaves: [76, 107, 32],
   flowering_azalea_leaves: [90, 120, 45],
@@ -5370,6 +5565,92 @@ function normalize(name) {
 }
 
 /**
+ * 可剥的后缀：形状变体。
+ *
+ * 为什么用「剥后缀」而不是把变体全列进色表：
+ *   MC 里每个方块几乎都有 stairs / slab / wall / fence / door / trapdoor / button /
+ *   pressure_plate / sign / pane / carpet 等形状变体，而且各自还有 16 种染色版与
+ *   5 种氧化态。全枚举是**几千条**，而它们的颜色本就与基础方块一致或极接近。
+ *   一条剥离规则就能覆盖，且新增方块时自动跟着生效。
+ *
+ * ⚠ 刻意**不**剥 `_block`：`coal_block` / `iron_block` 等是独立配色，剥掉会全变成煤/铁的原色。
+ */
+const STRIP_SUFFIX = [
+  '_stairs',
+  '_slab',
+  '_wall',
+  '_fence_gate',
+  '_fence',
+  '_trapdoor',
+  '_door',
+  '_button',
+  '_pressure_plate',
+  '_hanging_sign',
+  '_sign',
+  '_pane',
+  '_carpet',
+  '_bars',
+];
+
+/** 可剥的前缀：加工变体（颜色接近基础方块） */
+const STRIP_PREFIX = [
+  'polished_',
+  'smooth_',
+  'chiseled_',
+  'cut_',
+  'cracked_',
+  'mossy_',
+  'stripped_',
+  'waxed_',
+  'exposed_',
+  'weathered_',
+  'oxidized_',
+  'infested_',
+  'cobbled_',
+];
+
+/** 木头家族：`oak_stairs` 这类剥完只剩 `oak`，再退到 `oak_planks` */
+const WOODS = new Set([
+  'oak',
+  'spruce',
+  'birch',
+  'jungle',
+  'acacia',
+  'dark_oak',
+  'mangrove',
+  'cherry',
+  'bamboo',
+  'crimson',
+  'warped',
+]);
+
+/** 带递归的查表（剥前缀 → 剥后缀 → 木头退化），深度受规则数限制，不会无限递归 */
+function lookup(n, depth = 0) {
+  const hit = COLORS[n];
+  if (hit) return [hit[0], hit[1], hit[2]];
+  if (depth > 3) return null;
+
+  for (const p of STRIP_PREFIX) {
+    if (n.startsWith(p) && n.length > p.length) {
+      const r = lookup(n.slice(p.length), depth + 1);
+      if (r) return r;
+    }
+  }
+  for (const s of STRIP_SUFFIX) {
+    if (n.endsWith(s) && n.length > s.length) {
+      const base = n.slice(0, -s.length);
+      const r = lookup(base, depth + 1);
+      if (r) return r;
+      if (WOODS.has(base)) {
+        const w = COLORS[base + '_planks'];
+        if (w) return [w[0], w[1], w[2]];
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 方块名 → RGB。未知方块返回**品红**（刻意刺眼），透明方块返回 `null`。
  * @param {string} name
  * @returns {[number, number, number]|null}
@@ -5377,8 +5658,7 @@ function normalize(name) {
 function colorOf(name) {
   const n = normalize(name);
   if (!n || TRANSPARENT.has(n)) return null;
-  const c = COLORS[n];
-  return c ? [c[0], c[1], c[2]] : UNKNOWN;
+  return lookup(n) || UNKNOWN;
 }
 
 /**
