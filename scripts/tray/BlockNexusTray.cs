@@ -1,4 +1,4 @@
-﻿// BlockNexus 桌面外壳（WinForms + WebView2，系统自带 csc 编译）
+// BlockNexus 桌面外壳（WinForms + WebView2，系统自带 csc 编译）
 //
 // 双击 BlockNexus.exe：
 //   1) 立刻弹出**自己的桌面主窗口**（WebView2 先显示启动页），同一后台线程拉起
@@ -64,11 +64,23 @@ namespace BlockNexus
             public string szTip;
         }
 
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        // ⚠ 必须带 SetLastError = true：否则调用失败后 Marshal.GetLastWin32Error()
+        //   读到的是**上一次无关调用**留下的陈旧错误码，诊断会指向完全错误的方向。
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
+
+        /// <summary>查外壳托盘窗口是否存在（诊断用；找不到返回 IntPtr.Zero）</summary>
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
         private static Mutex _mutex;
         private static NotifyIcon _tray;
+        /// <summary>
+        /// 托盘图标是否注册成功。
+        /// 失败时必须让主窗口**保持可见**（见 MainForm.OnFormClosing）：否则用户关掉窗口后
+        /// 既没有图标可以唤回、也没有窗口，只能去任务管理器结束进程 —— 表现成「程序坏了」。
+        /// </summary>
+        private static volatile bool _trayOk;
         private static ToolStripMenuItem _itemOpen;
         private static ToolStripMenuItem _itemExit;
         private static string _root;
@@ -257,6 +269,8 @@ namespace BlockNexus
             public readonly WebView2 Web = new WebView2();
             public string PendingUrl;    // WebView2 未就绪时先挂起，初始化完成后补航
             private volatile bool _webReady;
+            /** 托盘不可用时的常驻提示条（null = 未创建） */
+            private Panel _notice;
 
             public MainForm()
             {
@@ -294,10 +308,89 @@ namespace BlockNexus
             private void OnFormClosing(object sender, FormClosingEventArgs e)
             {
                 if (_exitRequested) return;   // 完全退出：放行
-                // 点 X = 只藏窗口，后台继续
+
+                // ⚠ 托盘不可用时**绝不能**藏窗口。
+                //   藏了之后既没有托盘图标、也没有窗口 —— 用户只能去任务管理器结束进程，
+                //   表现成「程序坏了/被杀软删了」。这是比「看不到图标」严重得多的问题。
+                //   改为明确询问，并给出「以管理员重启」这条实测有效的出路。
+                if (!_trayOk)
+                {
+                    e.Cancel = true;
+                    string msg =
+                        "托盘图标不可用，关闭窗口后将无法再次打开（只能用任务管理器结束进程）。\r\n\r\n" +
+                        "是否尝试以管理员身份重启？（实测提权启动可以正常注册托盘图标）";
+                    var r = MessageBox.Show(msg, "BlockNexus", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+                    if (r == DialogResult.Yes)
+                    {
+                        RestartElevated();     // 成功后内部会 Application.Exit()
+                    }
+                    else if (r == DialogResult.No)
+                    {
+                        _exitRequested = true; // 用户明确选择退出
+                        Close();
+                    }
+                    return;
+                }
+
+                // 正常情况：点 X = 只藏窗口，后台继续
                 e.Cancel = true;
                 Hide();
                 LogStep("main form hidden (X clicked)");
+            }
+
+            /// <summary>
+            /// 托盘注册彻底失败时，在主窗口顶部显示常驻提示条。
+            ///
+            /// 刻意**不写失败原因**：根因未查明（已排除受限令牌、.NET 信任级别、AppContainer、
+            /// Smart App Control、第三方安全软件、清单、注册表 ACL），凭推测写「因为 XX」只会
+            /// 误导用户。这里只陈述现象 + 给出可操作动作。
+            /// </summary>
+            public void ShowTrayNotice(bool relaunched)
+            {
+                if (_notice != null) return;   // 幂等：可能被重试逻辑多次触发
+                var p = new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 46,
+                    BackColor = Color.FromArgb(255, 244, 214),
+                    Padding = new Padding(12, 8, 12, 8),
+                };
+                var lbl = new Label
+                {
+                    Dock = DockStyle.Fill,
+                    AutoSize = false,
+                    Text = relaunched
+                        ? "无法注册系统托盘图标（已以管理员身份运行过）。关闭窗口后将无法再次打开，请保留窗口或结束时用任务管理器。"
+                        : "无法注册系统托盘图标。关闭窗口后将无法再次打开（只能用任务管理器结束进程）。",
+                    ForeColor = Color.FromArgb(120, 70, 0),
+                };
+                var actions = new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Right,
+                    AutoSize = true,
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = false,
+                };
+                if (!relaunched)
+                {
+                    var b1 = new Button { Text = "以管理员身份重启", AutoSize = true };
+                    b1.Click += (s, e) => RestartElevated();
+                    actions.Controls.Add(b1);
+                }
+                var b2 = new Button { Text = relaunched ? "知道了" : "继续使用", AutoSize = true };
+                b2.Click += (s, e) =>
+                {
+                    // 只收起提示条；关闭行为仍然按 _trayOk 走（不隐藏窗口）
+                    try { Controls.Remove(p); p.Dispose(); } catch { }
+                    _notice = null;
+                };
+                actions.Controls.Add(b2);
+                p.Controls.Add(lbl);
+                p.Controls.Add(actions);
+                // 后添加的子控件先占位：先加 lbl(Fill) 再加 actions(Right)，
+                // actions 会拿到右侧贴边、lbl 让出那块 —— 与顶层 Dock 的规则一致。
+                Controls.Add(p);
+                _notice = p;
             }
 
             private void OnWebInitCompleted(object sender, CoreWebView2InitializationCompletedEventArgs e)
@@ -493,6 +586,7 @@ namespace BlockNexus
             // 诊断：用自有窗口直接向 Shell 注册探针图标，验证本进程此刻 Shell_NotifyIcon 是否可用。
             // NotifyIcon 的 NIM_ADD 失败时不抛错（图标静默消失），探针能把「Shell 拒绝」和「NotifyIcon 内部问题」区分开。
             bool shellAcceptsIcons = false;
+            int probeErr = 0;
             try
             {
                 var probeWnd = new NativeWindow();
@@ -508,30 +602,52 @@ namespace BlockNexus
                     szTip = "bn-probe",
                 };
                 shellAcceptsIcons = Shell_NotifyIcon(0x0 /* NIM_ADD */, ref nid);
-                LogStep("probe NIM_ADD=" + shellAcceptsIcons);
+                // 失败时保留 win32err：它是唯一能区分原因的信息
+                // （5=权限/完整性 1460=外壳未就绪 87=参数被拒 1400=窗口无效）。
+                if (!shellAcceptsIcons) probeErr = Marshal.GetLastWin32Error();
                 if (shellAcceptsIcons) Shell_NotifyIcon(0x2 /* NIM_DELETE */, ref nid);
                 probeWnd.DestroyHandle();
             }
-            catch (Exception ex) { LogStep("probe fail: " + ex.Message); }
+            catch (Exception ex) { LogStep("probe fail: " + ex.GetType().Name + ": " + ex.Message); }
+            LogStep("probe NIM_ADD=" + shellAcceptsIcons + " win32err=" + probeErr);
 
-            // 探针失败（shell 拒绝注册）时延迟重试几次 NIM_ADD；探针成功则说明图标已注册，不再折腾
-            if (!shellAcceptsIcons)
+            if (shellAcceptsIcons)
             {
-                var readdTimer = new System.Windows.Forms.Timer { Interval = 5000 };
-                int readds = 0;
-                readdTimer.Tick += (s, e) =>
+                _trayOk = true;
+            }
+            else
+            {
+                // 先假定是**暂时**失败，按 2s 间隔重试真图标，上限 60s。
+                //
+                // 这条覆盖最真实的常见原因：用户把程序加进启动项 → 开机时 Explorer 的
+                // 托盘还没就绪 → NIM_ADD 返回 1460(ERROR_TIMEOUT)。原先只重试 2 次
+                // （5s/10s）就放弃，对开机自启场景太短，用户会以为「偶尔没有图标」。
+                //
+                // 重试的是**真图标**（翻转 _tray.Visible），不是探针：探针只回答
+                // 「这一刻行不行」，而这里要解决的是「图标到底挂上没有」。
+                var retry = new System.Windows.Forms.Timer { Interval = 2000 };
+                int tries = 0;
+                retry.Tick += (s, e) =>
                 {
-                    readds++;
-                    try
+                    tries++;
+                    try { _tray.Visible = false; _tray.Visible = true; } catch { }
+                    int err2 = 0;
+                    if (TryProbeTray(out err2))
                     {
-                        _tray.Visible = false;
-                        _tray.Visible = true;
-                        LogStep("tray icon re-added (pass " + readds + ")");
+                        retry.Stop();
+                        _trayOk = true;
+                        LogStep("tray icon registered after retry #" + tries);
+                        return;
                     }
-                    catch (Exception ex) { LogStep("tray re-add fail: " + ex.Message); }
-                    if (readds >= 2) readdTimer.Stop();
+                    if (tries >= 30)   // 2s × 30 ≈ 60s
+                    {
+                        retry.Stop();
+                        _trayOk = false;
+                        LogStep("tray icon registration failed after " + tries + " tries, win32err=" + err2);
+                        OnTrayUnavailable();
+                    }
                 };
-                readdTimer.Start();
+                retry.Start();
             }
 
             // 左键直接打开主页
@@ -539,6 +655,115 @@ namespace BlockNexus
             {
                 if (e.Button == MouseButtons.Left) ShowMainWindowSafe();
             };
+        }
+
+        /// <summary>
+        /// 探针：用**独立临时窗口 + 独立 uID** 尝试向 Shell 注册一个图标，随后立刻删掉。
+        ///
+        /// 为什么需要：NotifyIcon 的 NIM_ADD 失败时**不抛异常**（图标静默消失），
+        /// 调用方无从得知，而这是唯一能提前发现「本进程用不了托盘」的手段。
+        /// 独立窗口保证不污染真图标；失败时给出 Win32 错误码（5=权限/完整性、
+        /// 1460=外壳未就绪、87=参数被拒、1400=窗口无效）。
+        /// </summary>
+        private static bool TryProbeTray(out int err)
+        {
+            err = 0;
+            try
+            {
+                var w = new NativeWindow();
+                w.CreateHandle(new CreateParams());
+                var nid = new NOTIFYICONDATA
+                {
+                    cbSize = (uint)Marshal.SizeOf(typeof(NOTIFYICONDATA)),
+                    hWnd = w.Handle,
+                    uID = 0x5A5A,
+                    uFlags = 0x1 | 0x2 | 0x4, // NIF_MESSAGE | NIF_ICON | NIF_TIP
+                    uCallbackMessage = 0x500 + 0x5A5A,
+                    hIcon = _tray.Icon.Handle,
+                    szTip = "bn-probe",
+                };
+                bool ok = Shell_NotifyIcon(0x0 /* NIM_ADD */, ref nid);
+                if (ok) Shell_NotifyIcon(0x2 /* NIM_DELETE */, ref nid);
+                else err = Marshal.GetLastWin32Error();
+                w.DestroyHandle();
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                LogStep("probe exception: " + ex.GetType().Name + ": " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 托盘注册彻底失败（重试 60s 后仍不行）时的降级入口。
+        /// 做法是「告诉用户 + 让窗口留着」，而不是继续重试或静默接受。
+        /// </summary>
+        private static void OnTrayUnavailable()
+        {
+            try
+            {
+                var f = _form;
+                if (f == null || !f.IsHandleCreated) return;
+                f.BeginInvoke((Action)(() =>
+                {
+                    try
+                    {
+                        f.ShowTrayNotice(Environment.GetCommandLineArgs().Length > 0 && HasRelaunchFlag());
+                    }
+                    catch (Exception ex) { LogStep("ShowTrayNotice fail: " + ex.Message); }
+                }));
+            }
+            catch (Exception ex) { LogStep("OnTrayUnavailable fail: " + ex.Message); }
+        }
+
+        /** 本次进程是否由「以管理员身份重启」拉起（防 UAC 循环） */
+        private static bool HasRelaunchFlag()
+        {
+            try
+            {
+                foreach (var a in Environment.GetCommandLineArgs())
+                    if (string.Equals(a, "--relaunched", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// 以管理员身份重启自己。
+        ///
+        /// 只在用户点按钮时触发，**绝不自动提权**：绝大多数用户不需要，而代价是每次启动
+        /// 都弹 UAC，且提权后 UIPI 会拦住与普通权限窗口的交互（以后若要加「拖文件到窗口」
+        /// 之类会失效）。带 `--relaunched` 传递，保证重启后仍失败时不再引导提权。
+        /// </summary>
+        private static bool RestartElevated()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = Application.ExecutablePath,
+                    Arguments = "--relaunched",
+                    UseShellExecute = true,   // runas 动词要求 UseShellExecute=true
+                    Verb = "runas",
+                };
+                Process.Start(psi);
+                _exitRequested = true;        // 放行 FormClosing，真正退出
+                Application.Exit();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // 最常见的是用户在 UAC 弹窗上点了「否」（抛 Win32Exception 1223）
+                LogStep("RestartElevated fail: " + ex.GetType().Name + ": " + ex.Message);
+                MessageBox.Show(
+                    "无法以管理员身份重启（可能你在 UAC 提示上点了“否”）。\r\n\r\n" +
+                    "可以手动右键 BlockNexus.exe 选择“以管理员身份运行”。",
+                    "BlockNexus",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return false;
+            }
         }
 
         /// <summary>
@@ -574,6 +799,13 @@ namespace BlockNexus
                     string exe = null;
                     try { exe = Application.ExecutablePath; } catch { }
                     if (string.IsNullOrEmpty(exe)) return true;
+                    // ⚠ 必须遍历**全部**匹配项，不能命中第一条就 return：
+                    //   Windows 会为同一个 exe 累积多条 NotifyIconSettings 记录
+                    //   （每次以不同方式注册/不同 hWnd+uID 都可能新增一条），
+                    //   而**只有当前实例真正用的那条**被提升才有意义。
+                    //   原先「处理第一条就返回」在有重复条目时会稳定地提升错的那条 →
+                    //   用户开了「其他系统托盘图标」开关也依然看不到图标。
+                    bool found = false;
                     foreach (var sub in key.GetSubKeyNames())
                     {
                         using (var k = key.OpenSubKey(sub))
@@ -582,20 +814,26 @@ namespace BlockNexus
                             var p = k.GetValue("ExecutablePath") as string;
                             if (string.IsNullOrEmpty(p)) continue;
                             if (!string.Equals(p, exe, StringComparison.OrdinalIgnoreCase)) continue;
+                            found = true;
                             using (var w = key.OpenSubKey(sub, true))
                             {
                                 if (w != null && w.GetValue("IsPromoted") == null)
                                 {
                                     w.SetValue("IsPromoted", 1, RegistryValueKind.DWord);
-                                    LogStep("promote: IsPromoted=1 set");
+                                    LogStep("promote: IsPromoted=1 set on " + sub);
                                 }
                             }
-                            return true;
                         }
                     }
+                    if (found) return true;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // ⚠ 绝不能静默吞掉：catch {} 会让上层把「权限不足/异常」误报成
+                //   「注册项从未出现」，把排查引向完全错误的方向（我就被它误导过）。
+                LogStep("promote: exception: " + ex.GetType().Name + ": " + ex.Message);
+            }
             return false;
         }
 
