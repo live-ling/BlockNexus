@@ -549,12 +549,15 @@ export function ManualInstallDialog({
   const [panelHostIsLocalOnly, setPanelHostIsLocalOnly] = useState(false);
   useEffect(() => {
     if (!open) return;
-    api<ServerSummary>(`/servers/${server.id}?token=1`)
+    // 这里只读 panelHost，**不要**带 ?token=1：带了就会把 Agent token 拉进响应体，
+    // 而这份数据用不上——凭据应当只在真正需要它的那一次请求里出现（见下方安装命令处）。
+    api<ServerSummary>(`/servers/${server.id}`)
       .then((s) => {
         const h = s.panelHost || '127.0.0.1';
         setPanelHostIsLocalOnly(h === '127.0.0.1' || h === 'localhost' || h === '::1');
       })
       .catch(() => {});
+    // 这一处要用 s.token 拼安装命令，所以确实需要 ?token=1
     api<ServerSummary>(`/servers/${server.id}?token=1`)
       .then((s) => {
         const outbound = (s.agent.mode || 'outbound') === 'outbound';

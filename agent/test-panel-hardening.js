@@ -23,13 +23,27 @@ function check(desc, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'} | ${desc}${!ok && detail ? '\n       ' + detail : ''}`);
 }
 
-const fakeHub = { on() {}, request: async () => ({}), status: () => 'offline' };
+// 覆盖面按 panel/api.js 里实际用到的 hub.* 补齐：
+// 之前只有 on/request/status，所以任何走到 /servers/:id 的用例都会 500
+// （真实原因被包装成 internal.error，容易误判成业务 bug）。
+const fakeHub = {
+  on() {},
+  request: async () => ({}),
+  status: () => 'offline',
+  isOnline: () => false,
+  getLatency: () => null,
+  getOnlineSince: () => null,
+  conns: new Map(),
+  stopOutbound() {},
+  syncOutbound() {},
+};
 const fakeBus = { on() {}, emit() {} };
 
 function makeConfig() {
   const data = {
     panel: { port: 0, username: 'admin', passwordHash: { salt: '', hash: '' }, authEnabled: false },
-    servers: [],
+    // 放一台 server：用于验证「回凭据的响应必须禁缓存」
+    servers: [{ id: 'srv1', name: 's1', host: '10.0.0.9', token: 'SECRET-AGENT-TOKEN', ssh: { port: 22, user: 'root', auth: 'password' }, agent: { mode: 'outbound', host: '', port: 3099 } }],
     settings: {
       domain: '',
       adminEmail: 'admin@example.com',
@@ -43,7 +57,7 @@ function makeConfig() {
     save() {},
     verifyCredentials: () => false,
     listServers: () => data.servers,
-    getServer: () => null,
+    getServer: (id) => data.servers.find((s) => s.id === id) || null,
     updateServer: () => null,
   };
 }
@@ -384,6 +398,33 @@ function jsonPost(base, p, body, headers = {}) {
       );
     } finally {
       await localPanel.close();
+    }
+  }
+
+  // ================= 回凭据的响应必须禁缓存 =================
+  // Agent token 等价于该服务器的登录凭据。它出现在**响应体**里（URL 上的 ?token=1
+  // 只是个开关、不含秘密），所以真正的泄露面是「响应被浏览器/中间代理缓存下来」。
+  {
+    const panel = await makePanel();
+    try {
+      const withToken = await fetch(`${panel.base}/api/servers/srv1?token=1`);
+      const bodyToken = await withToken.json();
+      check(
+        '?token=1 才返回 token（默认不返回）',
+        bodyToken.token === 'SECRET-AGENT-TOKEN',
+        JSON.stringify(bodyToken.token),
+      );
+      check(
+        '回 token 的响应带 Cache-Control: no-store',
+        /no-store/.test(withToken.headers.get('cache-control') || ''),
+        `Cache-Control=${withToken.headers.get('cache-control')}`,
+      );
+
+      const plain = await fetch(`${panel.base}/api/servers/srv1`);
+      const bodyPlain = await plain.json();
+      check('不带 ?token=1 时不回 token', bodyPlain.token === undefined, JSON.stringify(bodyPlain.token));
+    } finally {
+      await panel.close();
     }
   }
 

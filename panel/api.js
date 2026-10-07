@@ -1075,9 +1075,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.get('/servers/:id', (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
+    const revealToken = req.query.token === '1';
+    // 回凭据的响应**禁止任何缓存**：Agent token 等价于该服务器的登录凭据，
+    // 一旦被浏览器/中间代理缓存，就可能被后续请求或他人取到。
+    // 其余端点已经有 no-cache 之类的处理，这一条是最需要它的。
+    if (revealToken) res.setHeader('Cache-Control', 'no-store');
     // 与列表接口一致：附上面板随附的 Agent 版本与自动更新状态（设置页的版本比对要用）
     res.json({
-      ...sanitize(server, { revealToken: req.query.token === '1' }),
+      ...sanitize(server, { revealToken }),
       agentBundled: BUNDLED_AGENT_VERSION,
       agentUpdate: agentUpdateState.get(server.id) || null,
     });
