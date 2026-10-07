@@ -2,11 +2,12 @@
 // 路由 #/server/<serverId>/instance/<name>
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, Ban, CalendarClock, CloudDownload, FolderOpen, Globe, LogOut, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, CalendarClock, CloudDownload, FolderOpen, Globe, LogOut, Map as MapIcon, MoreVertical, Pencil, Play, Puzzle, RotateCw, Settings2, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, Terminal, Trash2, Users, Activity } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog } from '@/components/backup-dialog';
 import { ConsolePanel } from '@/components/console-panel';
 import { ConfirmDialog, EditInstanceDialog, ReinstallDialog } from '@/components/dialogs';
+import { MapPanel } from '@/components/map-panel';
 import { FileManagerDialog } from '@/components/file-manager';
 import { BanListDialog } from '@/components/ban-list-dialog';
 import { ModManagerDialog } from '@/components/mod-manager';
@@ -87,7 +88,7 @@ export function InstanceDetailPage({
   >(null);
   const [bansOpen, setBansOpen] = useState(false);
   // 主区视图：终端 / AI 日志分析 / spark 性能
-  const [mainView, setMainView] = useState<'console' | 'ai' | 'spark'>('console');
+  const [mainView, setMainView] = useState<'console' | 'ai' | 'spark' | 'map'>('console');
   const [, forceTick] = useState(0);
 
   const loadServer = useCallback(() => {
@@ -516,6 +517,14 @@ export function InstanceDetailPage({
                 <Activity className="h-3.5 w-3.5" /> Spark
               </Button>
             )}
+            {/* 地图：世界文件在实例目录里，与服务端是否运行无关，所以常驻显示 */}
+            <Button
+              size="sm"
+              variant={mainView === 'map' ? 'secondary' : 'ghost'}
+              onClick={() => setMainView('map')}
+            >
+              <MapIcon className="h-3.5 w-3.5" /> {$('instanceDetail.tab.map')}
+            </Button>
           </div>
           {/* 两个面板都常驻挂载，只切换可见性：
               条件渲染会在切走时卸载组件，AI 的对话记录与进行中的流会一起丢失，
@@ -543,6 +552,15 @@ export function InstanceDetailPage({
               visible={mainView === 'spark'}
               heightClass="h-[45vh] lg:h-[60vh]"
               onOpenMods={() => setModsOpen(true)}
+            />
+          </div>
+          {/* 地图用 visible 而非条件渲染：切回来时要重画（隐藏期间画布尺寸为 0） */}
+          <div className={mainView === 'map' ? '' : 'hidden'}>
+            <MapPanel
+              serverId={server.id}
+              instance={instance.name}
+              visible={mainView === 'map'}
+              heightClass="h-[45vh] lg:h-[60vh]"
             />
           </div>
         </div>
