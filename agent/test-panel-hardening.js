@@ -298,6 +298,31 @@ function jsonPost(base, p, body, headers = {}) {
     }
   }
 
+  // ================= H3 AI baseUrl 的 SSRF 地址守卫 =================
+  {
+    const { assertRemoteTargetAllowed } = require(path.join(__dirname, '..', 'panel', 'api.js'));
+    const allow = (url) => {
+      try {
+        assertRemoteTargetAllowed(new URL(url));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // 必须拒绝：链路本地 / 云元数据（SSRF 最典型的变现目标，无正当用途）
+    check('拒绝 IPv4 云元数据 169.254.169.254', !allow('http://169.254.169.254/latest/meta-data/'));
+    check('拒绝 IPv6 链路本地 fe80::1', !allow('http://[fe80::1]/x'));
+    check('拒绝 AWS IPv6 元数据 fd00:ec2::254', !allow('http://[fd00:ec2::254]/x'));
+    check('拒绝元数据主机名 metadata.google.internal', !allow('http://metadata.google.internal/x'));
+
+    // 必须放行：这些是**正当用法**，一刀切挡掉会废掉产品能力
+    // ⚠ 回环尤其重要——本地面板最常见的 AI 配置就是本机 Ollama（127.0.0.1:11434）
+    check('放行回环（本机 Ollama / LM Studio）', allow('http://127.0.0.1:11434/v1'));
+    check('放行局域网推理机', allow('http://192.168.1.50:8000/v1'));
+    check('放行公网 API', allow('https://api.deepseek.com'));
+  }
+
   console.log(`\n${pass}/${total} panel-hardening cases passed`);
   process.exit(pass === total ? 0 : 1);
 })().catch((e) => {

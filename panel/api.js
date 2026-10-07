@@ -142,6 +142,43 @@ function readBodyCapped(res, req, maxBytes = MAX_REMOTE_BODY, label = '响应') 
   });
 }
 
+/**
+ * SSRF 防护：拒绝明显不该作为「AI 接口地址 / 下载地址」的目标。
+ *
+ * 为什么**只挡链路本地与云元数据**，而不挡回环/私网：
+ *   · 本地面板最常见的 AI 配置就是**本机跑的 Ollama / LM Studio**（127.0.0.1:11434）
+ *     或局域网内的推理机；一刀切挡掉回环/私网会直接废掉这些正当用法。
+ *   · 而 169.254.169.254（AWS/GCP/Azure 实例元数据）与 fe80::/10 没有任何正当的
+ *     AI / 下载用途，却是 SSRF 最典型的变现目标（窃取实例凭据）——挡它零代价。
+ *
+ * ⚠ 两点必须说清，别把它当成完整的 SSRF 防护：
+ *   1) 这里只查**字面**主机名，不查 DNS 解析结果。攻击者用「自己域名解析到
+ *      169.254.169.254」仍可绕过。要堵死必须解析后再查，且要防重绑定（解析与
+ *      实际连接用同一 IP），成本明显更高——本项目的场景下不值当。
+ *   2) 真正的放大器是「面板默认不开鉴权 + 反代暴露」（审计 H5）。开了鉴权时，
+ *      能改 baseUrl 的人本来就已经有面板的完整权限（含以 root 读写服务器文件）。
+ */
+function assertRemoteTargetAllowed(u) {
+  const host = String((u && u.hostname) || '')
+    .replace(/^\[|\]$/g, '')
+    .toLowerCase();
+  if (!host) throw new Error('地址缺少主机名');
+
+  // IPv4 字面量：169.254.0.0/16 = 链路本地（含云元数据 169.254.169.254）
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    const [a, b] = host.split('.').map(Number);
+    if (a === 169 && b === 254) throw new Error('不允许访问链路本地地址（云元数据）');
+    return;
+  }
+  // IPv6：fe80::/10 链路本地；fd00:ec2::254 是 AWS 的元数据地址
+  if (/^fe[89ab][0-9a-f]:/.test(host)) throw new Error('不允许访问链路本地地址');
+  if (host === 'fd00:ec2::254') throw new Error('不允许访问云元数据地址');
+
+  // 常见元数据主机名（字面匹配；DNS 绕过见上方说明）
+  const METADATA_HOSTS = ['metadata.google.internal', 'metadata.goog', 'instance-data'];
+  if (METADATA_HOSTS.includes(host)) throw new Error('不允许访问云元数据地址');
+}
+
 function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const router = express.Router();
   const sessions = new Map(); // sid -> expires
@@ -2173,6 +2210,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         return reject(new Error('AI 接口地址无效'));
       }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return reject(new Error('AI 接口地址需为 http(s)'));
+      try {
+        assertRemoteTargetAllowed(u);
+      } catch (e) {
+        return reject(e);
+      }
       const mod = u.protocol === 'http:' ? require('http') : require('https');
       const req = mod.get(
         u,
@@ -2211,6 +2253,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         return reject(new Error('AI 接口地址无效'));
       }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return reject(new Error('AI 接口地址需为 http(s)'));
+      try {
+        assertRemoteTargetAllowed(u);
+      } catch (e) {
+        return reject(e);
+      }
       const mod = u.protocol === 'http:' ? require('http') : require('https');
       const body = { model, messages, stream: true, temperature: 0.2, stream_options: { include_usage: true } };
       if (maxTokens) body.max_tokens = maxTokens;
@@ -3159,4 +3206,4 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   return router;
 }
 
-module.exports = { createApi, __setTestHook, langOf, readBodyCapped, MAX_REMOTE_BODY };
+module.exports = { createApi, __setTestHook, langOf, readBodyCapped, MAX_REMOTE_BODY, assertRemoteTargetAllowed };
