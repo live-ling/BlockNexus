@@ -252,6 +252,73 @@ const COLORS = {
   moss_block: [89, 109, 45],
   azalea_leaves: [76, 107, 32],
   flowering_azalea_leaves: [90, 120, 45],
+
+  // ---------- 1.20 / 1.21 / 1.21.4 新增方块 ----------
+  // 用户的紫色色块多半来自这里：我这份色表是按旧版写的，新版新增的整族方块都没收录。
+  // 颜色取社区通行的近似值（不追求与材质逐像素一致，只求「一眼认得出来」）。
+  moss_carpet: [89, 109, 45],
+  pale_moss_block: [120, 124, 106],
+  pale_hanging_moss: [110, 116, 98],
+  pale_oak_log: [117, 112, 99],
+  pale_oak_planks: [226, 220, 205],
+  pale_oak_leaves: [112, 128, 92],
+  pale_oak_wood: [117, 112, 99],
+  pale_oak_sapling: [112, 128, 92],
+  creaking_heart: [96, 78, 58],
+  resin_block: [222, 132, 44],
+  resin_bricks: [214, 124, 40],
+  resin_clump: [226, 140, 48],
+  // 凝灰岩族（1.21）
+  polished_tuff: [104, 105, 100],
+  tuff_bricks: [98, 99, 94],
+  chiseled_tuff: [100, 101, 96],
+  tuff_slab: [104, 105, 100],
+  // 铜族（1.21 的灯泡/格栅/门）
+  copper_bulb: [196, 124, 74],
+  copper_grate: [192, 107, 79],
+  chiseled_copper: [192, 107, 79],
+  copper_door: [192, 107, 79],
+  copper_trapdoor: [192, 107, 79],
+  cut_copper_stairs: [192, 107, 79],
+  // 竹子族（1.20）
+  bamboo_block_stripped: [200, 180, 100],
+  bamboo_door: [193, 168, 82],
+  bamboo_trapdoor: [193, 168, 82],
+  bamboo_shelf: [193, 168, 82],
+  // 实用方块 / 结构方块
+  decorated_pot: [150, 96, 66],
+  chiseled_bookshelf: [156, 127, 74],
+  crafter: [120, 96, 70],
+  trial_spawner: [66, 88, 96],
+  vault: [70, 92, 100],
+  heavy_core: [110, 110, 118],
+  suspicious_sand: [216, 202, 160],
+  suspicious_gravel: [136, 126, 126],
+  short_dry_grass: [150, 130, 70],
+  tall_dry_grass: [150, 130, 70],
+  spore_blossom: [200, 120, 160],
+  cave_vines: [86, 122, 56],
+  cave_vines_plant: [86, 122, 56],
+  pointed_dripstone: [134, 107, 92],
+  lightning_rod: [192, 107, 79],
+  chain: [90, 90, 96],
+  sculk_sensor: [16, 26, 32],
+  calibrated_sculk_sensor: [18, 30, 36],
+  sculk_catalyst_block: [12, 26, 28],
+  amethyst_bud: [150, 110, 200],
+  small_amethyst_bud: [150, 110, 200],
+  medium_amethyst_bud: [150, 110, 200],
+  large_amethyst_bud: [150, 110, 200],
+  // 常见但先前漏掉的
+  smooth_deepslate: [72, 72, 75],
+  deepslate_tile_slab: [54, 54, 56],
+  infested_stone: [110, 110, 110],
+  infested_stone_bricks: [118, 118, 118],
+  infested_mossy_stone_bricks: [112, 122, 104],
+  infested_cobblestone: [108, 108, 108],
+  infested_cracked_stone_bricks: [114, 114, 114],
+  infested_chiseled_stone_bricks: [116, 116, 116],
+  infested_deepslate_block: [75, 75, 77],
   scaffolding: [174, 140, 86],
   campfire: [109, 80, 58],
   lantern: [190, 150, 80],
@@ -480,6 +547,19 @@ function lookup(n, depth = 0) {
         if (w) return [w[0], w[1], w[2]];
       }
     }
+  }
+
+  // 家族兜底：MC 命名高度规律，很多方块只是「同族不同名」，逐个列进表不如一条规则。
+  //   · `*_wood` 是带树皮的木头，颜色≈对应的 `*_log`
+  //   · `*_hyphae`（诡异/绯红菌柄的带皮版）同理 ≈ `*_stem`
+  // 这两族在新版里数量不少（每个木种都有），且野外/建筑里都会出现。
+  if (n.endsWith('_wood')) {
+    const r = COLORS[n.slice(0, -5) + '_log'];
+    if (r) return [r[0], r[1], r[2]];
+  }
+  if (n.endsWith('_hyphae')) {
+    const r = COLORS[n.slice(0, -7) + '_stem'];
+    if (r) return [r[0], r[1], r[2]];
   }
   return null;
 }

@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.4.4';
+const AGENT_VERSION = '0.4.5';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -4371,6 +4371,9 @@ module.exports = {
         save,
         regions: regions.map((r) => [r.rx, r.rz]),
         version: saveVersion(regions),
+        // 该存档渲染时遇到过的「色表里没有的方块」——界面据此提示用户补色，
+        // 而不是让用户对着紫色截图猜（附上限避免响应无限膨胀）
+        unknown: [...((this._mapUnknown && this._mapUnknown.get(save)) || [])].sort().slice(0, 40),
       });
     }
     return { saves };
@@ -4460,6 +4463,8 @@ module.exports = {
    * @returns {{png: string, version: string, cached: boolean, bytes: number, warns: string[]}}
    */
   mapRegion(name, save, rx, rz, opts = {}) {
+    // 「缺色方块」按存档累积（懒初始化；成员变量放在实例上，避免多实例互相污染）
+    if (!this._mapUnknown) this._mapUnknown = new Map();
     const s = assertSaveName(save);
     const root = this.instDir(name);
     const X = Math.trunc(Number(rx));
@@ -4492,14 +4497,22 @@ module.exports = {
     const img = anvil.readRegion(regionBuf, { onWarn: (m) => warns.push(m) });
     const out = this.mapRenderPng(img);
 
+    // 累积「色表里没有的方块」到本存档，供 mapSaves 上报给界面。
+    // 只增不减：一旦发现某个方块缺色，用户界面就应当一直提示它，直到我们补上。
+    if (out.unknown.length) {
+      const cur = this._mapUnknown.get(s) || new Set();
+      for (const n of out.unknown) cur.add(n);
+      this._mapUnknown.set(s, cur);
+    }
+
     // 原子写：并发请求下不能让别人读到半个 PNG。先写临时名再 rename。
     fs.mkdirSync(cacheDir, { recursive: true });
     const tmp = pngPath + '.tmp' + process.pid;
-    fs.writeFileSync(tmp, out);
+    fs.writeFileSync(tmp, out.buf);
     fs.renameSync(tmp, pngPath);
     fs.writeFileSync(sigPath, sig);
 
-    return { png: out.toString('base64'), version: sig, cached: false, bytes: out.length, warns };
+    return { png: out.buf.toString('base64'), version: sig, cached: false, bytes: out.buf.length, warns };
   },
 
   /**
@@ -4538,6 +4551,8 @@ module.exports = {
     // 调色板索引 → 已着色 RGB 的缓存：同一区域往往只有十几种方块，
     // 明暗只有 4 档，所以「方块 × 明暗」的组合数很少，缓存后省掉大量查表与乘法。
     const shaded = new Array(names.length * 4);
+    /** 本区域出现过的、色表里没有的方块名（渲染成品红）—— 供诊断上报 */
+    const unknown = new Set();
 
     for (let pz = 0; pz < size; pz++) {
       // 明暗取样行：**pz=0 时把取样行抬到 1**，即第一行直接复用第二行的档位。
@@ -4560,6 +4575,12 @@ module.exports = {
         const base = palette.colorOf(name);
         if (!base) continue; // 空气/透明方块
 
+        // 诊断：记下**未识别**的方块名（渲染成品红）。
+        // 为什么必须有：用户看到紫色色块时**没法知道缺的是哪个方块**，
+        // 只能截图给我们猜 —— 那样永远补不全。让它自己报出来才是系统性解法。
+        // 用引用相等判断：colorOf 对已知方块返回新数组，对未知方块返回 UNKNOWN 这个常量。
+        if (base === palette.UNKNOWN) unknown.add(name);
+
         const diff = heights[sampleRow + px] - heights[northRow + px];
         const shade = diff > 0 ? 0 : diff === 0 ? 1 : diff > -2 ? 2 : 3;
         const key = pi * 4 + shade;
@@ -4576,7 +4597,7 @@ module.exports = {
         rgba[o + 3] = 255;
       }
     }
-    return png.encodePng(rgba, size, size);
+    return { buf: png.encodePng(rgba, size, size), unknown: [...unknown] };
   },
 };
 };
@@ -5514,6 +5535,73 @@ const COLORS = {
   moss_block: [89, 109, 45],
   azalea_leaves: [76, 107, 32],
   flowering_azalea_leaves: [90, 120, 45],
+
+  // ---------- 1.20 / 1.21 / 1.21.4 新增方块 ----------
+  // 用户的紫色色块多半来自这里：我这份色表是按旧版写的，新版新增的整族方块都没收录。
+  // 颜色取社区通行的近似值（不追求与材质逐像素一致，只求「一眼认得出来」）。
+  moss_carpet: [89, 109, 45],
+  pale_moss_block: [120, 124, 106],
+  pale_hanging_moss: [110, 116, 98],
+  pale_oak_log: [117, 112, 99],
+  pale_oak_planks: [226, 220, 205],
+  pale_oak_leaves: [112, 128, 92],
+  pale_oak_wood: [117, 112, 99],
+  pale_oak_sapling: [112, 128, 92],
+  creaking_heart: [96, 78, 58],
+  resin_block: [222, 132, 44],
+  resin_bricks: [214, 124, 40],
+  resin_clump: [226, 140, 48],
+  // 凝灰岩族（1.21）
+  polished_tuff: [104, 105, 100],
+  tuff_bricks: [98, 99, 94],
+  chiseled_tuff: [100, 101, 96],
+  tuff_slab: [104, 105, 100],
+  // 铜族（1.21 的灯泡/格栅/门）
+  copper_bulb: [196, 124, 74],
+  copper_grate: [192, 107, 79],
+  chiseled_copper: [192, 107, 79],
+  copper_door: [192, 107, 79],
+  copper_trapdoor: [192, 107, 79],
+  cut_copper_stairs: [192, 107, 79],
+  // 竹子族（1.20）
+  bamboo_block_stripped: [200, 180, 100],
+  bamboo_door: [193, 168, 82],
+  bamboo_trapdoor: [193, 168, 82],
+  bamboo_shelf: [193, 168, 82],
+  // 实用方块 / 结构方块
+  decorated_pot: [150, 96, 66],
+  chiseled_bookshelf: [156, 127, 74],
+  crafter: [120, 96, 70],
+  trial_spawner: [66, 88, 96],
+  vault: [70, 92, 100],
+  heavy_core: [110, 110, 118],
+  suspicious_sand: [216, 202, 160],
+  suspicious_gravel: [136, 126, 126],
+  short_dry_grass: [150, 130, 70],
+  tall_dry_grass: [150, 130, 70],
+  spore_blossom: [200, 120, 160],
+  cave_vines: [86, 122, 56],
+  cave_vines_plant: [86, 122, 56],
+  pointed_dripstone: [134, 107, 92],
+  lightning_rod: [192, 107, 79],
+  chain: [90, 90, 96],
+  sculk_sensor: [16, 26, 32],
+  calibrated_sculk_sensor: [18, 30, 36],
+  sculk_catalyst_block: [12, 26, 28],
+  amethyst_bud: [150, 110, 200],
+  small_amethyst_bud: [150, 110, 200],
+  medium_amethyst_bud: [150, 110, 200],
+  large_amethyst_bud: [150, 110, 200],
+  // 常见但先前漏掉的
+  smooth_deepslate: [72, 72, 75],
+  deepslate_tile_slab: [54, 54, 56],
+  infested_stone: [110, 110, 110],
+  infested_stone_bricks: [118, 118, 118],
+  infested_mossy_stone_bricks: [112, 122, 104],
+  infested_cobblestone: [108, 108, 108],
+  infested_cracked_stone_bricks: [114, 114, 114],
+  infested_chiseled_stone_bricks: [116, 116, 116],
+  infested_deepslate_block: [75, 75, 77],
   scaffolding: [174, 140, 86],
   campfire: [109, 80, 58],
   lantern: [190, 150, 80],
@@ -5742,6 +5830,19 @@ function lookup(n, depth = 0) {
         if (w) return [w[0], w[1], w[2]];
       }
     }
+  }
+
+  // 家族兜底：MC 命名高度规律，很多方块只是「同族不同名」，逐个列进表不如一条规则。
+  //   · `*_wood` 是带树皮的木头，颜色≈对应的 `*_log`
+  //   · `*_hyphae`（诡异/绯红菌柄的带皮版）同理 ≈ `*_stem`
+  // 这两族在新版里数量不少（每个木种都有），且野外/建筑里都会出现。
+  if (n.endsWith('_wood')) {
+    const r = COLORS[n.slice(0, -5) + '_log'];
+    if (r) return [r[0], r[1], r[2]];
+  }
+  if (n.endsWith('_hyphae')) {
+    const r = COLORS[n.slice(0, -7) + '_stem'];
+    if (r) return [r[0], r[1], r[2]];
   }
   return null;
 }

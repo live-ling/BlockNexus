@@ -32,7 +32,7 @@ import {
   zoomAround,
 } from '@/lib/map';
 
-type Save = { save: string; regions: [number, number][]; version: string };
+type Save = { save: string; regions: [number, number][]; version: string; unknown?: string[] };
 
 export function MapPanel({
   serverId,
@@ -417,6 +417,21 @@ export function MapPanel({
           {refreshing ? $('map.refreshing') : $('map.refresh')}
         </Button>
         {note && <span className="text-[11px] text-muted-foreground">{note}</span>}
+
+        {/* 缺色方块提示：紫色色块 = 色表里没有这个方块。
+            把这些名字直接显示出来，用户报障时就不用截图猜了。 */}
+        {(() => {
+          const unk = saves.find((s) => s.save === cur)?.unknown || [];
+          if (!unk.length) return null;
+          return (
+            <span
+              className="text-[11px] text-amber-600 dark:text-amber-400"
+              title={unk.join('\n')}
+            >
+              {$('map.unknownBlocks', unk.length)}
+            </span>
+          );
+        })()}
 
         <div className="ml-auto flex items-center gap-1">
           <Button

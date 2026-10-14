@@ -386,6 +386,7 @@ export const zh = {
   'map.coordZ': 'Z 坐标',
   'map.go': '跳转',
   'map.refresh': '重新生成',
+  'map.unknownBlocks': '{0} 种方块未着色（显示为紫色），鼠标悬停看名字',
   'map.refreshHint': '清掉服务端已缓存的地图并重新渲染（升级 Agent 后地图不对时用它）',
   'map.refreshing': '重新生成中…',
   'map.refreshDone': '已清掉 {0} 张缓存图，正在重新渲染',

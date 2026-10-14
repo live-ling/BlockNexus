@@ -380,6 +380,7 @@ export const en = {
   'map.coordZ': 'Z coordinate',
   'map.go': 'Go',
   'map.refresh': 'Regenerate',
+  'map.unknownBlocks': '{0} block types have no color (shown purple) — hover for names',
   'map.refreshHint': 'Clear the server-side map cache and re-render (use when the map looks wrong after an Agent upgrade)',
   'map.refreshing': 'Regenerating…',
   'map.refreshDone': 'Cleared {0} cached images, re-rendering now',
