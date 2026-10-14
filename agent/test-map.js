@@ -272,7 +272,15 @@ function mgrFor() {
   indices[2 * size + 0] = 2;
   heights[2 * size + 0] = 64;
 
-  const out = m.mapRenderPng({ size, indices, heights, palette });
+  // mapRenderPng 现在返回 { buf, unknown }：buf 是 PNG，unknown 是色表里没有的方块名
+  const { buf: out, unknown } = m.mapRenderPng({ size, indices, heights, palette });
+  check('渲染结果回传了缺色方块清单', Array.isArray(unknown), typeof unknown);
+  check(
+    '未知方块出现在缺色清单里',
+    unknown.includes('minecraft:definitely_not_real'),
+    JSON.stringify(unknown),
+  );
+  check('已知方块不会被误报为缺色', !unknown.includes('minecraft:stone'), JSON.stringify(unknown));
   // 用 anvil 的解析器反向确认尺寸（PNG 头）
   const w = out.readUInt32BE(16);
   const h = out.readUInt32BE(20);

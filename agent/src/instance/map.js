@@ -129,6 +129,9 @@ module.exports = {
         save,
         regions: regions.map((r) => [r.rx, r.rz]),
         version: saveVersion(regions),
+        // 该存档渲染时遇到过的「色表里没有的方块」——界面据此提示用户补色，
+        // 而不是让用户对着紫色截图猜（附上限避免响应无限膨胀）
+        unknown: [...((this._mapUnknown && this._mapUnknown.get(save)) || [])].sort().slice(0, 40),
       });
     }
     return { saves };
@@ -218,6 +221,8 @@ module.exports = {
    * @returns {{png: string, version: string, cached: boolean, bytes: number, warns: string[]}}
    */
   mapRegion(name, save, rx, rz, opts = {}) {
+    // 「缺色方块」按存档累积（懒初始化；成员变量放在实例上，避免多实例互相污染）
+    if (!this._mapUnknown) this._mapUnknown = new Map();
     const s = assertSaveName(save);
     const root = this.instDir(name);
     const X = Math.trunc(Number(rx));
@@ -250,14 +255,22 @@ module.exports = {
     const img = anvil.readRegion(regionBuf, { onWarn: (m) => warns.push(m) });
     const out = this.mapRenderPng(img);
 
+    // 累积「色表里没有的方块」到本存档，供 mapSaves 上报给界面。
+    // 只增不减：一旦发现某个方块缺色，用户界面就应当一直提示它，直到我们补上。
+    if (out.unknown.length) {
+      const cur = this._mapUnknown.get(s) || new Set();
+      for (const n of out.unknown) cur.add(n);
+      this._mapUnknown.set(s, cur);
+    }
+
     // 原子写：并发请求下不能让别人读到半个 PNG。先写临时名再 rename。
     fs.mkdirSync(cacheDir, { recursive: true });
     const tmp = pngPath + '.tmp' + process.pid;
-    fs.writeFileSync(tmp, out);
+    fs.writeFileSync(tmp, out.buf);
     fs.renameSync(tmp, pngPath);
     fs.writeFileSync(sigPath, sig);
 
-    return { png: out.toString('base64'), version: sig, cached: false, bytes: out.length, warns };
+    return { png: out.buf.toString('base64'), version: sig, cached: false, bytes: out.buf.length, warns };
   },
 
   /**
@@ -296,6 +309,8 @@ module.exports = {
     // 调色板索引 → 已着色 RGB 的缓存：同一区域往往只有十几种方块，
     // 明暗只有 4 档，所以「方块 × 明暗」的组合数很少，缓存后省掉大量查表与乘法。
     const shaded = new Array(names.length * 4);
+    /** 本区域出现过的、色表里没有的方块名（渲染成品红）—— 供诊断上报 */
+    const unknown = new Set();
 
     for (let pz = 0; pz < size; pz++) {
       // 明暗取样行：**pz=0 时把取样行抬到 1**，即第一行直接复用第二行的档位。
@@ -318,6 +333,12 @@ module.exports = {
         const base = palette.colorOf(name);
         if (!base) continue; // 空气/透明方块
 
+        // 诊断：记下**未识别**的方块名（渲染成品红）。
+        // 为什么必须有：用户看到紫色色块时**没法知道缺的是哪个方块**，
+        // 只能截图给我们猜 —— 那样永远补不全。让它自己报出来才是系统性解法。
+        // 用引用相等判断：colorOf 对已知方块返回新数组，对未知方块返回 UNKNOWN 这个常量。
+        if (base === palette.UNKNOWN) unknown.add(name);
+
         const diff = heights[sampleRow + px] - heights[northRow + px];
         const shade = diff > 0 ? 0 : diff === 0 ? 1 : diff > -2 ? 2 : 3;
         const key = pi * 4 + shade;
@@ -334,6 +355,6 @@ module.exports = {
         rgba[o + 3] = 255;
       }
     }
-    return png.encodePng(rgba, size, size);
+    return { buf: png.encodePng(rgba, size, size), unknown: [...unknown] };
   },
 };
