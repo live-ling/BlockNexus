@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.4.3';
+const AGENT_VERSION = '0.4.4';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -4258,6 +4258,7 @@ const anvil = __require("src/instance/anvil.js");
 const png = __require("src/png.js");
 const palette = __require("src/instance/map-palette.js");
 const { mapCacheRoot } = __require("src/instance/map-cache.js");
+const { AGENT_VERSION } = __require("src/config.js");
 
 /** 常见世界目录名（Paper/Vanilla 默认；自定义名由 server.properties 的 level-name 或扫描补上） */
 const DEFAULT_WORLDS = ['world', 'world_nether', 'world_the_end'];
@@ -4272,14 +4273,44 @@ const DIM_SUFFIX = /(_nether|_the_end|\/DIM-?1)$/;
 const SIG_SUFFIX = '.sig';
 
 /**
- * 单个区域的签名：只要文件大小或修改时间变了，签名就变。
+ * 递归数某个目录下的 PNG 张数（只用于回报「清掉了多少」；目录不存在时返回 0）。
+ * 不抛异常：缓存目录本来就可能不存在，那不是错误。
+ */
+function countPng(dir) {
+  let n = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) n += countPng(path.join(dir, e.name));
+    else if (/\.png$/i.test(e.name)) n++;
+  }
+  return n;
+}
+
+/**
+ * 单个区域的签名。
  *
- * 用「大小 + mtime」而不是内容哈希：读一遍几十 MB 的区域文件只为算哈希太贵，
- * 而这两个字段对「世界被改过」的判定已经足够（地图缓存是派生数据，偶发漏判
- * 只是显示旧图，重新打开即可，不是正确性问题）。
+ * ⚠ 必须把**渲染版本**算进去，不能只看文件的 size+mtime。
+ *
+ * 踩过的坑：签名原先只有 `${size}-${mtime}`，于是「**渲染代码改了、世界文件没变**」
+ * 时缓存完全不会失效 —— 用户升级 Agent 之后，看到的仍然是**旧版本渲染出来的图**
+ * （例如修位布局之前那批满是噪点的 PNG），而且没有任何入口能让他重新生成。
+ * 现在带上 AGENT_VERSION：任何 Agent 升级都会让全部缓存一次性失效并重渲染。
+ *
+ * 代价：每次升级 Agent 后首屏要把用到的区域重渲染一遍（之后照旧走缓存）。
+ * 这个代价我们接受 —— 「绝不拿旧渲染糊弄用户」比省那几百毫秒重要得多。
+ *
+ * 用 AGENT_VERSION 而不是自建一个 MAP_RENDER_VERSION：后者要靠人记得在每次
+ * 改动渲染逻辑时递增，**一旦忘记就退回上面那个坑**；而 AGENT_VERSION 是
+ * 发布流程强制递增的，不会漏。代价是「与渲染无关的 Agent 改动也会清缓存」，
+ * 属于安全方向的过度保守。
  */
 function regionSig(r) {
-  return `${r.size}-${Math.round(r.mtime)}`;
+  return `${AGENT_VERSION}-${r.size}-${Math.round(r.mtime)}`;
 }
 
 /** 整个存档的版本号：所有区域签名串起来做 FNV-1a（快，且文件一变就变） */
@@ -4469,6 +4500,25 @@ module.exports = {
     fs.writeFileSync(sigPath, sig);
 
     return { png: out.toString('base64'), version: sig, cached: false, bytes: out.length, warns };
+  },
+
+  /**
+   * 清空地图缓存，强制下次重新渲染。
+   *
+   * 为什么需要显式入口：把渲染版本纳入签名后，**升级 Agent 会自动失效**；
+   * 但用户可能因为别的原因想强制重来（怀疑图不对、手动改过世界而 mtime 没变等），
+   * 原先没有任何入口 —— 只能删实例目录下的 `.blocknexus-map/`，对普通用户不现实。
+   *
+   * @param {string} name 实例名
+   * @param {string} [save] 只清某个世界（含 `world/DIM-1` 这类嵌套名）；省略则清整个实例
+   * @returns {{ok: boolean, removed: number}} removed = 删掉的 PNG 张数
+   */
+  mapClearCache(name, save) {
+    const base = mapCacheRoot(this.instDir(name));
+    const dir = save ? path.join(base, assertSaveName(save)) : base;
+    const removed = countPng(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { ok: true, removed };
   },
 
   /**
@@ -6033,6 +6083,8 @@ class Agent {
         return m.mapSaves(p.name);
       case 'instance.map.region':
         return m.mapRegion(p.name, p.save, p.x, p.z, { force: !!p.force });
+      case 'instance.map.clearCache':
+        return m.mapClearCache(p.name, p.save || null);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.backupSchedule.set':

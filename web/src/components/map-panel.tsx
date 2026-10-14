@@ -12,7 +12,7 @@
 //     每帧只画一次。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Crosshair, Minus, Plus } from 'lucide-react';
+import { Crosshair, Minus, Plus, RefreshCw } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,6 +51,10 @@ export function MapPanel({
   const [phase, setPhase] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
   const [msg, setMsg] = useState('');
   const [zoomUi, setZoomUi] = useState(DEFAULT_ZOOM);
+  /** 「重新生成」进行中 */
+  const [refreshing, setRefreshing] = useState(false);
+  /** 「重新生成」的结果提示（成功显示清掉几张 / 失败显示原因） */
+  const [note, setNote] = useState('');
   /**
    * 光标处的世界方块坐标读数。
    * 为什么必须有：`worldToScreen/screenToWorld` 纯函数虽然有单测，但「用户看到的位置对不对」
@@ -331,6 +335,32 @@ export function MapPanel({
     scheduleDraw();
   };
 
+  /**
+   * 重新生成：清掉**服务端**的渲染缓存，并清掉**前端**的 Image 缓存。
+   *
+   * 两边都必须清 —— 只清服务端的话，前端内存里那份旧图仍会被接着画出来，
+   * 用户会以为按钮没生效（这正是「重载」类功能最常见的假成功）。
+   */
+  const regenerate = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setNote('');
+    try {
+      const r = await api<{ removed?: number }>(
+        `/servers/${serverId}/instances/${encodeURIComponent(instance)}/map/refresh`,
+        { method: 'POST', body: { save: cur } },
+      );
+      imgsRef.current.clear();
+      inflightRef.current.clear();
+      setNote($('map.refreshDone', typeof r?.removed === 'number' ? r.removed : 0));
+      scheduleDraw();
+    } catch (e) {
+      setNote($('map.refreshFailed') + '：' + errText(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   if (phase === 'loading') {
     return <div className={`grid place-items-center text-xs text-muted-foreground ${heightClass}`}>{$('common.loading')}</div>;
   }
@@ -372,6 +402,21 @@ export function MapPanel({
           </Select>
         )}
         <span className="text-[11px] text-muted-foreground">{$('map.regionCount', totalRegions)}</span>
+
+        {/* 重新生成：清服务端缓存 + 清前端缓存，强制按当前 Agent 版本重渲染。
+            升级 Agent 后如果图不对（例如旧版渲染出来的图），点这个就能重来。 */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8"
+          disabled={refreshing}
+          title={$('map.refreshHint')}
+          onClick={regenerate}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? $('map.refreshing') : $('map.refresh')}
+        </Button>
+        {note && <span className="text-[11px] text-muted-foreground">{note}</span>}
 
         <div className="ml-auto flex items-center gap-1">
           <Button

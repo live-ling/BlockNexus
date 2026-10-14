@@ -400,6 +400,57 @@ function mgrFor() {
   check('合法的两级存档名可用（world/DIM-1）', ok);
 }
 
+// ==================== 缓存签名必须包含渲染版本 ====================
+// 这是本次「升级 Agent 后旧图不失效」那个坑的回归网。
+// 签名原先只有 size+mtime，于是「渲染代码改了、世界文件没变」时缓存永远命中，
+// 用户升级后看到的仍是旧渲染（修位布局前那批噪点图），且没有任何入口能重来。
+{
+  const m = mgrFor();
+  m.mapRegion('i3', 'world', 0, 0);   // 确保有一份缓存
+  const sigPath = path.join(tmpRoot, 'i3', MAP_CACHE_DIR, 'world', '0.0.png.sig');
+  let sig = '';
+  try {
+    sig = fs.readFileSync(sigPath, 'utf8');
+  } catch {}
+  const { AGENT_VERSION } = require(path.join(__dirname, '..', 'agent', 'src', 'config.js'));
+  check('签名文件已生成', sig.length > 0, sigPath);
+  check('签名以 AGENT_VERSION 开头（渲染版本变了即失效）', sig.startsWith(AGENT_VERSION + '-'), sig);
+}
+
+// ==================== 清空缓存（强制重新生成）====================
+{
+  const m = mgrFor();
+  const before = m.mapRegion('i3', 'world', 0, 0);
+  check('清空前命中缓存', before.cached === true, String(before.cached));
+
+  const cleared = m.mapClearCache('i3', 'world');
+  check('mapClearCache 返回 ok 与删除张数', cleared.ok === true && cleared.removed >= 1, JSON.stringify(cleared));
+
+  const after = m.mapRegion('i3', 'world', 0, 0);
+  check('清空后不再命中缓存（会重新渲染）', after.cached === false, String(after.cached));
+  check('重新渲染的内容与之前一致（世界本身没变）', after.png === before.png);
+
+  // 幂等：目录已不存在时再清一次不该报错
+  let ok = true;
+  try {
+    m.mapClearCache('i3', 'world');
+  } catch {
+    ok = false;
+  }
+  check('重复清空不报错（缓存目录不存在也安全）', ok);
+
+  // 不带 save = 清整个实例
+  check('可清整个实例的缓存', m.mapClearCache('i3').ok === true);
+  // 非法存档名仍被拒
+  let threw = false;
+  try {
+    m.mapClearCache('i3', '../etc');
+  } catch {
+    threw = true;
+  }
+  check('清缓存同样拒绝非法存档名', threw);
+}
+
 // 清理
 try {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
