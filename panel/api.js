@@ -2209,8 +2209,19 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // 之后走 Agent 的落盘缓存，就是纯读文件。所以超时给得比较宽。
   const MAP_TIMEOUT = 60000;
 
-  /** 存档名只允许单段路径（Agent 侧还会再校验一次，这里是早筛） */
-  const MAP_SAVE_RE = /^[\w.-]+$/;
+  /**
+   * 存档标识只允许**一级或两级**路径段。
+   * 放宽到两级是为了表达原版的多维度嵌套（`world/DIM-1`、`world/DIM1`）；
+   * 每一段仍必须是安全的单段名（字母数字与 `_ . -`）且显式拒绝 `.` / `..` ——
+   * **放宽的是层数，不是字符集**，`../../etc` 依旧被挡。
+   */
+  const MAP_SAVE_RE = /^[\w.-]+(\/[\w.-]+)*$/;
+  function mapSaveOk(s) {
+    const v = String(s || '');
+    const segs = v.split('/');
+    if (!MAP_SAVE_RE.test(v) || segs.length > 2) return false;
+    return segs.every((seg) => seg !== '.' && seg !== '..');
+  }
 
   router.get('/servers/:id/instances/:name/map', async (req, res, next) => {
     const server = requireServer(req, res);
@@ -2227,7 +2238,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const server = requireServer(req, res);
     if (!server) return;
     if (!INST_NAME_RE.test(req.params.name)) return fail(res, 'instance.name-invalid');
-    if (!MAP_SAVE_RE.test(req.params.save)) return fail(res, 'map.save-invalid');
+    if (!mapSaveOk(req.params.save)) return fail(res, 'map.save-invalid');
     try {
       // 复用 saves 接口：它已经带上每个世界的版本号，不必再开一个 Agent 动作
       const r = await agentRead(server, 'instance.map.saves', { name: req.params.name }, MAP_TIMEOUT);
@@ -2243,7 +2254,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const server = requireServer(req, res);
     if (!server) return;
     if (!INST_NAME_RE.test(req.params.name)) return fail(res, 'instance.name-invalid');
-    if (!MAP_SAVE_RE.test(req.params.save)) return fail(res, 'map.save-invalid');
+    if (!mapSaveOk(req.params.save)) return fail(res, 'map.save-invalid');
     // `:z` 可能带 `.png` 后缀（前端按图片 URL 用，浏览器与调试都更直观）
     const zRaw = String(req.params.z).replace(/\.png$/i, '');
     const x = Number(req.params.x);
