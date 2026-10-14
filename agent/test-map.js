@@ -364,6 +364,42 @@ function mgrFor() {
   check('备份 tar 命令带 --exclude 地图缓存目录', /--exclude=\.\/\$\{MAP_CACHE_DIR\}|--exclude=\.\/\.blocknexus-map/.test(backupSrc));
 }
 
+// ==================== 原版多维度布局（world/DIM-1、world/DIM1）====================
+// 原版服务端把维度嵌在主世界目录**里面**；Paper 才是独立目录。
+// 原先只扫顶层目录 → 原版服务端永远只有主世界可选（用户看到「没有维度切换」）。
+{
+  makeInstance('i5', {
+    world: { regions: [{ x: 0, z: 0, chunks: [{ cx: 0, cz: 0, nbt: makeChunk('minecraft:stone', 64) }] }] },
+    'world/DIM-1': { regions: [{ x: 0, z: 0, chunks: [{ cx: 0, cz: 0, nbt: makeChunk('minecraft:netherrack', 40) }] }] },
+    'world/DIM1': { regions: [{ x: 0, z: 0, chunks: [{ cx: 0, cz: 0, nbt: makeChunk('minecraft:end_stone', 60) }] }] },
+  });
+  const m = mgrFor();
+  const names = m.mapSaves('i5').saves.map((s) => s.save);
+  check('原版布局：主世界被发现', names.includes('world'), JSON.stringify(names));
+  check('原版布局：下界（world/DIM-1）被发现', names.includes('world/DIM-1'), JSON.stringify(names));
+  check('原版布局：末地（world/DIM1）被发现', names.includes('world/DIM1'), JSON.stringify(names));
+  check('主世界排在数组首位（默认选中它）', names[0] === 'world', JSON.stringify(names));
+
+  // 放宽到两级后，穿越必须仍然被拒（放宽的是层数，不是字符集）
+  for (const bad of ['..', '../etc', 'a/b/c', 'world/..', 'world/../../etc', '/world', 'world/']) {
+    let threw = false;
+    try {
+      m.mapRegion('i5', bad, 0, 0);
+    } catch {
+      threw = true;
+    }
+    check(`嵌套放宽后仍拒绝穿越：${JSON.stringify(bad)}`, threw);
+  }
+  // 反向：合法的两级名必须能用
+  let ok = true;
+  try {
+    m.mapRegion('i5', 'world/DIM-1', 0, 0);
+  } catch {
+    ok = false;
+  }
+  check('合法的两级存档名可用（world/DIM-1）', ok);
+}
+
 // 清理
 try {
   fs.rmSync(tmpRoot, { recursive: true, force: true });

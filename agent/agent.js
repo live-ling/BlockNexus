@@ -100,7 +100,7 @@ if (process.platform === 'win32') {
 
 // ---------------------------- src/config.js ----------------------------
 __modules["src/config.js"] = function (module, exports, __require, __dirname, __filename) {
-'use strict';
+﻿'use strict';
 // BlockNexus Agent — 配置与版本常量
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
 
@@ -111,7 +111,7 @@ const state = __require("src/state.js");
 // Agent 脚本版本：面板读取本文件头部的这个常量判断远端是否落后（不一致自动更新）
 // 0.3.6：握手 HKDF info 标签由 'mcpan/*' 改为 'blocknexus/*'（更名兼容期结束）。
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
-const AGENT_VERSION = '0.4.2';
+const AGENT_VERSION = '0.4.3';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -4262,6 +4262,12 @@ const { mapCacheRoot } = __require("src/instance/map-cache.js");
 /** 常见世界目录名（Paper/Vanilla 默认；自定义名由 server.properties 的 level-name 或扫描补上） */
 const DEFAULT_WORLDS = ['world', 'world_nether', 'world_the_end'];
 
+/**
+ * 判断某个存档标识是否指向「非主世界维度」。
+ * 覆盖两种布局：Paper 的 `world_nether` 后缀，原版的 `world/DIM-1` 嵌套。
+ */
+const DIM_SUFFIX = /(_nether|_the_end|\/DIM-?1)$/;
+
 /** 缓存文件后缀 */
 const SIG_SUFFIX = '.sig';
 
@@ -4289,13 +4295,27 @@ function saveVersion(regions) {
   return (h >>> 0).toString(36) + '-' + regions.length;
 }
 
-/** 非法存档名一律拒绝（防目录穿越；与其它模块同一条纪律） */
+/**
+ * 校验存档标识，防目录穿越。
+ *
+ * 允许**一级或两级**路径：原版的多维度是嵌套的（`world/DIM-1`），
+ * 必须能表达它，否则原版服务端的下界/末地就无法访问。
+ * 但每一段都必须是安全的单段名（字母数字与 `_ . -`），且显式拒绝 `.` / `..`，
+ * 所以 `../../etc` 这类穿越仍然被挡住 —— 放宽的是**层数**，不是**字符集**。
+ */
 function assertSaveName(save) {
-  const s = String(save || '');
-  if (!s || s.includes('/') || s.includes('\\') || s === '.' || s === '..' || s.includes('..')) {
+  const s = String(save || '').replace(/\\/g, '/');
+  if (!s || s.startsWith('/') || s.endsWith('/') || s.includes('//')) {
     throw new Error('存档名非法');
   }
-  return s;
+  const segs = s.split('/');
+  if (segs.length > 2) throw new Error('存档名层级过深');
+  for (const seg of segs) {
+    if (!seg || seg === '.' || seg === '..' || !/^[\w.-]+$/.test(seg)) {
+      throw new Error('存档名非法');
+    }
+  }
+  return segs.join('/');
 }
 
 module.exports = {
@@ -4331,22 +4351,36 @@ module.exports = {
    */
   mapWorldDirs(name) {
     const root = this.instDir(name);
-    const cand = new Set(DEFAULT_WORLDS);
+    const tops = new Set(DEFAULT_WORLDS);
 
     // server.properties 的 level-name（用户可能改成 my_world 之类）
     try {
       const props = fs.readFileSync(path.join(root, 'server.properties'), 'utf8');
       const m = /^\s*level-name\s*=\s*(.+?)\s*$/m.exec(props);
-      if (m && m[1] && !m[1].includes('/') && !m[1].includes('\\')) cand.add(m[1]);
+      if (m && m[1] && !m[1].includes('/') && !m[1].includes('\\')) tops.add(m[1]);
     } catch {}
 
-    // 扫描实例根目录下所有「含 region/*.mca」的目录（覆盖 Paper 的多世界与自定义名）
+    // 扫描实例根目录下的所有目录（覆盖 Paper 的多世界与自定义名）
     try {
       for (const e of fs.readdirSync(root, { withFileTypes: true })) {
-        if (!e.isDirectory()) continue;
-        cand.add(e.name);
+        if (e.isDirectory()) tops.add(e.name);
       }
     } catch {}
+
+    // ⚠ 两种服务端的多维度布局都要认：
+    //   · **原版（vanilla）**：维度嵌在主世界目录**里面** ——
+    //       world/DIM-1/region（下界）、world/DIM1/region（末地）
+    //   · **Paper / Bukkit**：各自独立目录 ——
+    //       world_nether/region、world_the_end/region
+    //   原先只扫顶层目录，于是**原版服务端永远只有主世界可选** ——
+    //   用户看到的就是「没有维度切换」。
+    //   （参考实现 OPanel 干脆不做其它维度，所以没有可借鉴的枚举逻辑。）
+    const cand = new Set();
+    for (const t of tops) {
+      cand.add(t);
+      cand.add(`${t}/DIM-1`);
+      cand.add(`${t}/DIM1`);
+    }
 
     const out = [];
     for (const d of cand) {
@@ -4354,7 +4388,11 @@ module.exports = {
         if (this.mapRegionFiles(root, d).length) out.push(d);
       } catch {}
     }
-    return out.sort();
+    // 主世界排前面（默认选中它），其余按名字稳定排序
+    return out.sort((a, b) => {
+      const rank = (s) => (DIM_SUFFIX.test(s) ? 1 : 0);
+      return rank(a) - rank(b) || a.localeCompare(b);
+    });
   },
 
   /**
