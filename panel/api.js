@@ -2250,6 +2250,29 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
   });
 
+  /**
+   * 清空地图缓存（强制下次重新渲染）。
+   *
+   * 为什么需要它：Agent 侧的缓存签名原先只看区域文件的 size+mtime，所以
+   * 「渲染代码改了、世界文件没变」时旧图不会失效 —— 用户升级 Agent 后
+   * 仍然看到旧渲染（例如修位布局之前那批噪点图），而当时**没有任何入口能重来**。
+   * 现在签名已带上 AGENT_VERSION（升级即自动失效），这个接口用于**用户主动重来**。
+   */
+  router.post('/servers/:id/instances/:name/map/refresh', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    if (!INST_NAME_RE.test(req.params.name)) return fail(res, 'instance.name-invalid');
+    const b = req.body || {};
+    const save = b.save === undefined || b.save === null || b.save === '' ? null : String(b.save);
+    if (save !== null && !mapSaveOk(save)) return fail(res, 'map.save-invalid');
+    try {
+      // 递归删目录是重活，给足超时
+      res.json(await agent(server)('instance.map.clearCache', { name: req.params.name, save }, MAP_TIMEOUT));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.get('/servers/:id/instances/:name/map/:save/:x/:z', async (req, res, next) => {
     const server = requireServer(req, res);
     if (!server) return;

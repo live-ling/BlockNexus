@@ -260,6 +260,8 @@ class Agent {
         return m.mapSaves(p.name);
       case 'instance.map.region':
         return m.mapRegion(p.name, p.save, p.x, p.z, { force: !!p.force });
+      case 'instance.map.clearCache':
+        return m.mapClearCache(p.name, p.save || null);
       case 'instance.watchdog.set':
         return m.setWatchdog(p.name, p.watchdog || {});
       case 'instance.backupSchedule.set':
