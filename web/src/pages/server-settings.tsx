@@ -359,14 +359,28 @@ export function ServerSettingsPage({
                   ],
                 ] as [string, string][])),
             [
+              // 连接方向只说方向：地址交给下一行，同一串地址不在这张卡里说两遍
               $('serverSettings.field.mode'),
               outbound
-                ? $('serverSettings.mode.outbound', `${server.agent.host || server.host}:${server.agent.port || 3099}`)
-                : $('serverSettings.mode.inbound'),
+                ? $('serverSettings.agent.meta.outbound')
+                : $('serverSettings.agent.meta.inbound'),
             ],
-            ...(outbound
-              ? []
-              : [[$('serverSettings.field.panelUrl'), server.agent.panelUrl] as [string, string]]),
+            [
+              outbound ? $('serverSettings.agent.meta.addr') : $('serverSettings.field.panelUrl'),
+              (outbound
+                ? `${server.agent.host || server.host}:${server.agent.port || 3099}`
+                : server.agent.panelUrl) || '—',
+            ],
+            // 下面三行原先在 Agent 卡底部：它们讲的是 Agent 落在哪、实例放哪，
+            // 和连接信息本来就是一回事，放一起看少一次来回滚动
+            [
+              server.isLocal ? $('serverSettings.field.dirLabel') : $('serverSettings.agent.meta.dir'),
+              (server.isLocal ? server.localAgent?.dir : server.agent.installDir) || '—',
+            ],
+            [
+              $('serverSettings.agent.meta.instancesDir'),
+              server.info?.instancesDir || server.localAgent?.instancesDir || '—',
+            ],
           ]}
         />
         <p className="text-[11px] text-muted-foreground">
@@ -391,6 +405,22 @@ export function ServerSettingsPage({
         }
         badge={<AgentStatePill server={server} />}
       >
+        {/* 版本现状：落后时由下面的对照区接管——两者占同一个位置、只显示一处，
+            所以同一组版本号永远不会在同一张卡里说两遍 */}
+        {server.info && !outdated && (
+          <p className="text-[11px] text-muted-foreground">
+            {$('serverSettings.sys.agentRemote')}{' '}
+            {server.info.agentVersion ? (
+              `v${agentVersionText(server.info.agentVersion)}`
+            ) : (
+              $('serverSettings.sys.agentLegacyVersion')
+            )}{' '}
+            {/* 译文是 '· 本地 v{0}'（自带 v）→ 这里只能传裸版本号，
+                否则会渲染成「本地 vv0.5.0」 */}
+            {$('serverSettings.sys.agentLocal', agentVersionText(server.agentBundled))}
+          </p>
+        )}
+
         {/* ② 版本对照区：只在落后时渲染，不落后就完全不出现 */}
         {outdated && (
           <div className="grid gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-amber-500/10">
@@ -584,28 +614,7 @@ export function ServerSettingsPage({
               : $('serverSettings.agent.localStopped')}
           </p>
         )}
-
-        {/* ④ 元信息：地址/目录，空值一律显式写「—」 */}
-        <InfoGrid
-          rows={[
-            [
-              outbound ? $('serverSettings.agent.meta.addr') : $('serverSettings.field.panelUrl'),
-              outbound
-                ? `${server.agent.host || server.host}:${server.agent.port || 3099} · ${
-                    $('serverSettings.agent.meta.outbound')
-                  }`
-                : `${server.agent.panelUrl || '—'} · ${$('serverSettings.agent.meta.inbound')}`,
-            ],
-            [
-              server.isLocal ? $('serverSettings.field.dirLabel') : $('serverSettings.agent.meta.dir'),
-              (server.isLocal ? server.localAgent?.dir : server.agent.installDir) || '—',
-            ],
-            [
-              $('serverSettings.agent.meta.instancesDir'),
-              server.info?.instancesDir || server.localAgent?.instancesDir || '—',
-            ],
-          ]}
-        />
+        {/* 监听地址 / 安装目录 / 实例目录已并入上面的「连接信息」卡 */}
       </SettingsCard>
 
       {/* Java 环境（多版本安装/切换/卸载） */}
@@ -638,26 +647,7 @@ export function ServerSettingsPage({
               [$('serverSettings.field.os'), `${server.info.os} · ${server.info.arch}`],
               ['Node', server.info.node],
               [
-                'Agent',
-                <span
-                  key="agent"
-                  className={
-                    outdated ? 'text-amber-600 dark:text-amber-400' : undefined
-                  }
-                >
-                  {$('serverSettings.sys.agentRemote')}{' '}
-                  {server.info.agentVersion ? (
-                    `v${agentVersionText(server.info.agentVersion)}`
-                  ) : (
-                    <span className="text-muted-foreground">{$('serverSettings.sys.agentLegacyVersion')}</span>
-                  )}{' '}
-                  {/* 译文是 '· 本地 v{0}'（自带 v）→ 这里只能传裸版本号，
-                      否则会渲染成「本地 vv0.5.0」 */}
-                  {$('serverSettings.sys.agentLocal', agentVersionText(server.agentBundled))}
-                  {outdated ? $('serverSettings.sys.agentOutdatedSuffix') : ''}
-                </span>,
-              ],
-              [
+                // Agent 版本那行已移进「Agent 守护进程」卡（那里才是它该待的地方）
                 $('serverSettings.field.memory'),
                 server.stats
                   ? `${fmtMB(server.stats.memUsedMB)} / ${fmtMB(server.stats.memTotalMB)}`
@@ -670,7 +660,8 @@ export function ServerSettingsPage({
                     $('serverSettings.sys.diskPartition', server.info.instancesDir)
                   : '—',
               ],
-              [$('serverSettings.field.instancesDir'), server.info.instancesDir],
+              // 实例目录已随另外两行一起移进「连接信息」卡，这里不再重复（分区归属
+              // 由上面磁盘那行的括号说明，不需要单独一行路径）
             ]}
           />
         ) : (
@@ -760,6 +751,9 @@ export function JavaCard({
   // 切换/卸载进行中：值为给用户看的提示文案（同步 RPC，返回即结束；期间冻结整卡控件）
   const [acting, setActing] = useState('');
   const [confirmTarget, setConfirmTarget] = useState<JavaEntry | null>(null);
+  // 版本列表默认收起：装过五六个版本时这一列能占掉半屏。
+  // 收起不丢信息——数量在计数位、当前版本在卡片头部徽章。
+  const [listOpen, setListOpen] = useState(false);
   const frozen = javaBusy || !!acting;
 
   const refresh = useCallback(() => {
@@ -914,15 +908,27 @@ export function JavaCard({
             </div>
           ) : !javas ? (
             <p className="text-[11px] text-muted-foreground">{$('serverSettings.sys.waiting')}</p>
+          ) : total === 0 ? (
+            <p className="text-[11px] text-muted-foreground">{$('serverSettings.java.emptyHint')}</p>
           ) : (
             <div className="grid gap-2">
-              <div className="flex items-center gap-2">
+              {/* 折叠头：整行可点，箭头状态与 aria-expanded 一起给出开合状态 */}
+              <button
+                type="button"
+                aria-expanded={listOpen}
+                onClick={() => setListOpen((v) => !v)}
+                className="flex items-center gap-2 rounded-md py-0.5 text-left"
+              >
+                <ChevronRight
+                  className={cn(
+                    'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform',
+                    listOpen && 'rotate-90',
+                  )}
+                />
                 <span className="text-[12.5px] font-medium">{$('serverSettings.java.installed')}</span>
                 <span className="ml-auto font-mono text-[11px] text-muted-foreground">{total}</span>
-              </div>
-              {total === 0 ? (
-                <p className="text-[11px] text-muted-foreground">{$('serverSettings.java.emptyHint')}</p>
-              ) : (
+              </button>
+              {listOpen && (
                 // 用 subgrid 把每行的 [圆点|名称|徽章|按钮|图标] 五列对齐，
                 // 系统包的锁占位也照样占住最后一列——右侧动作列位不会随行态跳动
                 <div
