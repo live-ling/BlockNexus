@@ -57,7 +57,9 @@ export function BackupDialog({
       if (e.event !== 'backup.updated' || e.data?.instance !== instance) return;
       setPending(null);
       load();
-      if (e.data.done) {
+      // 只提示**手动**备份的结果：定时备份的提示由实例详情页负责（见下方说明）。
+      // 两边若都提示，定时备份完成时（对话框恰好开着）会弹两条一模一样的 toast。
+      if (e.data.done && e.data.trigger !== 'schedule') {
         if (e.data.ok)
           success($('backup.toast.done'), typeof e.data.file === 'string' ? e.data.file : undefined);
         else error($('backup.toast.failed'), typeof e.data.error === 'string' ? e.data.error : undefined);

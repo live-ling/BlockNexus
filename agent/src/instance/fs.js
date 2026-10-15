@@ -7,6 +7,14 @@ const fs = require('fs');
 const path = require('path');
 const { runCmd, tarCmd } = require('../util.js');
 const { MAP_CACHE_DIR } = require('./map-cache.js');
+const { PLAYER_DATA } = require('./playerdata.js');
+const { PLAYER_DATA_DIR } = PLAYER_DATA;
+
+/**
+ * 实例根目录下这些点号目录属于工具内部数据（地图缓存、玩家统计与聊天记录），
+ * 在文件管理器里露出只会让用户困惑「这是什么、能不能删」，因此根级隐藏。
+ */
+const INTERNAL_ROOT_DIRS = new Set([MAP_CACHE_DIR, PLAYER_DATA_DIR]);
 
 // 传输会话数量上限。
 // 之所以除了「时间过期」还要有「数量上限」：gcTransferSessions 每 10 分钟才跑一次，
@@ -58,13 +66,12 @@ module.exports = {
     const root = this.instanceRoot(name);
     const dir = this.resolveSafe(root, rel);
     if (!fs.existsSync(dir)) throw new Error('目录不存在');
-    // 是否是实例根目录（决定要不要隐藏地图缓存目录）
+    // 是否是实例根目录（决定要不要隐藏工具内部数据目录）
     const atRoot = !rel || rel === '.' || rel === '/' || rel === path.sep;
     const entries = fs.readdirSync(dir, { withFileTypes: true })
-      // 地图缓存目录是工具内部数据（派生自 world/*.mca，删了会自动重建），
-      // 在文件管理器里露出只会让用户困惑「这是什么、能不能删」。
-      // 只过滤**实例根目录**下这个名字：用户自己建的同名目录在子目录里仍然可见。
-      .filter((e) => !(atRoot && e.name === MAP_CACHE_DIR));
+      // 工具内部数据（地图缓存 / 玩家统计与聊天记录）在实例根目录隐藏，
+      // 只过滤**根目录**下这些名字：用户自己建的同名目录在子目录里仍然可见。
+      .filter((e) => !(atRoot && INTERNAL_ROOT_DIRS.has(e.name)));
     return entries
       .map((e) => {
         const full = path.join(dir, e.name);

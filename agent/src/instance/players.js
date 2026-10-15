@@ -1,5 +1,5 @@
 'use strict';
-// BlockNexus Agent — 玩家跟踪与 SLP 查询
+// BlockNexus Agent — 玩家跟踪、SLP 查询、聊天行解析入口（数据落盘见 playerdata.js）
 // 源码模块：由 agent/build.js 打包成单文件 agent/agent.js 部署（勿直接改产物）。
 
 const fs = require('fs');
@@ -169,6 +169,11 @@ module.exports = {
             list = [];
             if (rec.players) rec.players.clear(); // SLP 实测无人：清掉跟踪集里可能过期的鬼影
           }
+          // 在线时长统计的第二个真相源：SLP 与「控制台跟踪」互相独立，
+          // 面板/Agent 重启后没有 join 行可听，就靠这里把在服里的玩家补开会话
+          // （起点=首次看到他在线，属少算不错算）；SLP 权威报 0 人时结算全部会话。
+          this.playerSeenOnline(rec, list);
+          if (r.online === 0) this.closeAllPlayerSessions(rec);
           out[rec.meta.name] = {
             // 个别服务端/代理的状态响应不带 players 对象：用跟踪数兜底
             online: r.online ?? (tracked.length || null),
@@ -225,32 +230,40 @@ module.exports = {
   //   加入：  Steve joined the game
   //   离开：  Steve left the game / Steve lost connection: ...
   //   名单：  There are 2 of a max of 20 players online: Steve, Alex
+  //
+  // 返回值 = 本行描述的事件（供玩家在线时长统计累计会话）：
+  //   { type: 'join'|'leave', name } / { type: 'list', names } / null（不是玩家相关行）
+  // 日志前缀统一走 stripLogPrefix（一个或多个 [] 段 + 冒号）：vanilla/Paper 是
+  // `[时间] [线程/级别]:`，Forge 系还多一段 `[mod/Class]:`——只认一段的老写法在
+  // Forge 日志上会完全失效（连在线名单都跟不到）。
   trackPlayers(rec, line) {
     if (!rec.players) rec.players = new Set();
+    const body = this.stripLogPrefix(line);
     const name = '([^\\s]{1,32})';
-    let m = new RegExp(`^\\S*\\s*\\[[^\\]]*\\]:\\s*${name} joined the game\\s*$`).exec(line);
+    let m = new RegExp(`^${name} joined the game\\s*$`).exec(body);
     if (m) {
       rec.players.add(m[1]);
-      return;
+      return { type: 'join', name: m[1] };
     }
-    m = new RegExp(`^\\S*\\s*\\[[^\\]]*\\]:\\s*${name} left the game\\s*$`).exec(line);
+    m = new RegExp(`^${name} left the game\\s*$`).exec(body);
     if (m) {
       rec.players.delete(m[1]);
-      return;
+      return { type: 'leave', name: m[1] };
     }
-    m = new RegExp(`^\\S*\\s*\\[[^\\]]*\\]:\\s*${name} lost connection`).exec(line);
+    m = new RegExp(`^${name} lost connection`).exec(body);
     if (m) {
       rec.players.delete(m[1]);
-      return;
+      return { type: 'leave', name: m[1] };
     }
-    m = /There are (\d+) of a max of (\d+) players online:?\s*(.*)$/.exec(line);
+    m = /There are (\d+) of a max of (\d+) players online:?\s*(.*)$/.exec(body);
     if (m) {
-      rec.players = new Set(
-        (m[3] || '')
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-      );
+      const names = (m[3] || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      rec.players = new Set(names);
+      return { type: 'list', names };
     }
+    return null;
   }
 };

@@ -232,7 +232,7 @@ class Agent {
       case 'instance.delete':
         return m.delete(p.name, { backupFirst: !!p.backupFirst });
       case 'instance.edit':
-        return m.edit(p.name, { note: p.note, address: p.address });
+        return m.edit(p.name, { note: p.note, address: p.address, memoryMB: p.memoryMB, tracking: p.tracking });
       case 'instance.domainCheck':
         return m.domainCheck(p.name);
       case 'instance.modsList':
@@ -274,6 +274,18 @@ class Agent {
         return m.prepareUninstall({ keepBackups: !!p.keepBackups });
       case 'instance.players':
         return m.playersSnapshot();
+      // ---------- 玩家统计与聊天记录（数据在 Agent 侧解析并落盘，面板只读） ----------
+      case 'instance.players.stats':
+        return m.playersStats(p.name);
+      case 'instance.chat.log':
+        return m.chatLog(p.name, {
+          limit: p.limit,
+          before: p.before,
+          player: p.player,
+          q: p.q,
+        });
+      case 'instance.chat.clear':
+        return m.chatClear(p.name);
       case 'instance.setcore':
         return m.setcore(p.name, p.filename);
       case 'instance.logLine':

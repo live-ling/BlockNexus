@@ -1,7 +1,7 @@
 // App：左侧窄导航栏（logo）+ 底部中央展开式操作条（beUI ExpandableActionBar）+ 登录态管理
 
 import { useCallback, useEffect, useState } from 'react';
-import { LogOut, Server, Settings, ShieldAlert } from 'lucide-react';
+import { LogOut, Boxes, Server, Settings, ShieldAlert } from 'lucide-react';
 import {
   ExpandableActionBar,
   type ExpandableActionBarItem,
@@ -13,6 +13,7 @@ import { InstanceDetailPage } from '@/pages/instance-detail';
 import { ServerDetailPage } from '@/pages/server-detail';
 import { ServerSettingsPage } from '@/pages/server-settings';
 import { ServersPage } from '@/pages/servers';
+import { InstancesPage } from '@/pages/instances';
 import { ApiError, api, type Me, type ServerSummary } from '@/lib/api';
 import { $ } from '@/lib/i18n';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
@@ -20,7 +21,9 @@ import { useToastHelpers } from '@/lib/toast';
 import { navigate, routeFromLocation, type Route } from '@/lib/router';
 
 // 路由形态（history 路由，旧 #/hash 链接仍兼容）：
-//   /                        服务器列表
+//   /                        实例总览（默认落地页：所有服务器的所有游戏实例）
+//   /instances               同上（显式写法）
+//   /servers                 服务器列表（卡片：Agent 状态、系统信息、资源占用）
 //   /settings                面板设置
 //   /about                   关于页（设置页底部进入）
 //   /reset?token=…           重置密码（忘记密码邮件里的链接）
@@ -181,6 +184,13 @@ export function App() {
           onOpenInstance={(name) => (navigate(`/server/${route.serverId}/instance/${encodeURIComponent(name)}`))}
           onOpenSettings={() => (navigate(`/server/${route.serverId}/settings`))}
         />
+      ) : route.name === 'instances' ? (
+        // 默认落地页：所有服务器的所有游戏实例（按服务器分组）
+        <InstancesPage
+          me={me}
+          servers={servers}
+          onAdd={(s) => setServers((cur) => [...cur, { ...s, online: false }])}
+        />
       ) : (
         <ServersPage
           me={me}
@@ -216,12 +226,12 @@ window.addEventListener('unhandledrejection', (e) => {
 
 /** 左侧窄导航（logo）+ 底部中央展开式操作条（参考 beUI expandable-action-bar demo） */
 function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () => void }) {
-  const isServersPage = route.name === 'servers';
-  const isServerArea =
-    route.name === 'servers' ||
-    route.name === 'server' ||
-    route.name === 'server-settings' ||
-    route.name === 'instance';
+  // 「实例」区：实例总览 + 实例详情（详情页是全屏不显示导航的，但在概览里点进去也算同一区）
+  const isInstanceArea = route.name === 'instances' || route.name === 'instance';
+  // 「服务器」区：服务器列表 / 服务器详情 / 服务器设置。
+  // 注意不再包含 instance——实例详情的所有权归「实例」区，
+  // 否则从总览点进实例详情时，两个导航项会同时高亮。
+  const isServerArea = route.name === 'servers' || route.name === 'server' || route.name === 'server-settings';
   // 关于页从设置页进入，导航上仍高亮「面板设置」
   const isSettings = route.name === 'settings' || route.name === 'about';
 
@@ -232,15 +242,23 @@ function NavRail({ me, route, onLogout }: { me: Me; route: Route; onLogout: () =
       icon: (
         <img src="/logo.png" alt="BlockNexus" className="h-6 w-6 max-w-none rounded-full object-cover ring-1 ring-border" />
       ),
-      active: isServersPage,
+      // logo 是「回家」：默认落地页现在是实例总览
+      active: isInstanceArea,
       onClick: () => (navigate('/')),
+    },
+    {
+      id: 'instances',
+      label: $('nav.instances'),
+      icon: <Boxes className="h-[18px] w-[18px]" />,
+      active: isInstanceArea,
+      onClick: () => (navigate('/instances')),
     },
     {
       id: 'servers',
       label: $('nav.servers'),
       icon: <Server className="h-[18px] w-[18px]" />,
       active: isServerArea,
-      onClick: () => (navigate('/')),
+      onClick: () => (navigate('/servers')),
     },
     {
       id: 'settings',

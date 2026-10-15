@@ -1,7 +1,7 @@
 // 实例控制台：内嵌终端卡片（页面内联，非弹窗/抽屉），SSE 实时日志 + 指令输入
 // 输入区样式参考 beUI agents/prompt-input：自增高输入 + 右下角圆形发送按钮
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { Eraser, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api, errText, type ServerSummary } from '@/lib/api';
@@ -36,7 +36,7 @@ function consoleLineClass(text: string): string {
     text.match(/^\s*(SEVERE|WARNING|WARN|ERROR|FATAL|DEBUG|TRACE)\s*[:：]/)?.[1] ??
     '';
   if (lvl === 'ERROR' || lvl === 'FATAL' || lvl === 'SEVERE') return 'text-red-400';
-  if (lvl === 'WARN' || lvl === 'WARNING') return 'text-amber-300';
+  if (lvl === 'WARN' || lvl === 'WARNING') return 'text-amber-400';
   if (lvl === 'DEBUG' || lvl === 'TRACE') return 'text-zinc-500';
   // 堆栈与异常（部分服务端不带级别前缀直接打印）
   if (/Exception|Caused by:/.test(text)) return 'text-red-400';
@@ -44,6 +44,11 @@ function consoleLineClass(text: string): string {
   // 启动就绪（原版/Paper/Forge 通用的 Done (x.xxx)s!）
   if (/Done \([\d.,]+s\)/.test(text)) return 'text-emerald-400';
   return '';
+}
+
+/** 供父级调用的动作：清空已拉取的日志（实例详情页页签栏的「清空」按钮） */
+export interface ConsolePanelHandle {
+  clear: () => void;
 }
 
 interface Props {
@@ -54,6 +59,14 @@ interface Props {
   onClose?: () => void;
   /** 日志区域高度类名 */
   heightClass?: string;
+  /**
+   * 嵌入实例详情页的深色终端容器（#0B0B0F 圆角卡片）：不再自带卡片边框/背景/头部，
+   * 页签栏与搜索框由页面提供（页签要跨面板共享，不能塞进单个面板里）。
+   */
+  embedded?: boolean;
+  /** 日志关键字过滤（页面的搜索框）；空串不过滤 */
+  query?: string;
+  ref?: Ref<ConsolePanelHandle>;
 }
 
 export function ConsolePanel({
@@ -62,6 +75,9 @@ export function ConsolePanel({
   instanceStatus,
   onClose,
   heightClass = 'h-[40vh]',
+  embedded = false,
+  query = '',
+  ref,
 }: Props) {
   const [lines, setLines] = useState<string[]>([]);
   const [cmd, setCmd] = useState('');
@@ -74,6 +90,17 @@ export function ConsolePanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const followingRef = useRef(true);
   const { error: toastError } = useToastHelpers();
+
+  // 清屏：嵌入模式下由页面页签栏的按钮触发（面板不渲染自己的头部）
+  useImperativeHandle(ref, () => ({ clear: () => setLines([]) }), []);
+
+  // 实例未运行（也不在启动中）时控制台不可写入：发送按钮禁用，输入框给出原因
+  const idle = status !== 'running' && status !== 'starting';
+  // 关键字过滤只影响显示，不动已拉取的缓冲区
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? lines.filter((l) => l.toLowerCase().includes(q)) : lines;
+  }, [lines, query]);
 
   // 自增高：用一个隐藏镜像元素量出文本高度，再写回 textarea（与 beUI prompt-input 同思路）
   const measureRef = useRef<HTMLDivElement>(null);
@@ -142,15 +169,16 @@ export function ConsolePanel({
     });
   }, [server.id, instance]);
 
-  // 自动跟随滚动
+  // 自动跟随滚动（依赖过滤后的列表：搜索后行数变少也要跟到新的末尾）
   useEffect(() => {
     const el = scrollRef.current;
     if (el && followingRef.current) el.scrollTop = el.scrollHeight;
-  }, [lines]);
+  }, [shown]);
 
   const send = async () => {
     const c = cmd.trim();
-    if (!c) return;
+    // 实例未运行时后端没有可写入的控制台：与禁用发送按钮保持一致（Enter 路径也拦下）
+    if (!c || idle) return;
     setCmd('');
     setHistIndex(null);
     setDraft('');
@@ -202,53 +230,80 @@ export function ConsolePanel({
   };
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-[#0a0d12] shadow-lg">
-      <div className="flex items-center gap-2 border-b border-zinc-800 bg-[#10141c] px-3 py-2">
-        <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/90" />
-        <b className="text-xs font-semibold text-zinc-200">
-          {server.name} / {instance}
-        </b>
-        <span className="text-xs text-zinc-500">{statusLabel(status)}</span>
-        <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100"
-            onClick={() => setLines([])}
-          >
-            <Eraser className="h-3.5 w-3.5" /> {$('console.clear')}
-          </Button>
-          {onClose && (
+    <div
+      className={
+        embedded
+          ? // 嵌进页面的深色卡片：不自带边框/背景/头部，高度由页面（h-screen 链）决定，
+            // 这里只负责填满父容器（父容器高度是定值，flex-1 不会形成高度反馈）
+            'flex min-h-0 flex-1 flex-col'
+          : 'overflow-hidden rounded-xl border border-zinc-800 bg-[#0a0d12] shadow-lg'
+      }
+    >
+      {/* 嵌入模式由页面的页签栏承担头部（实例名/状态/清空），面板不再重复 */}
+      {!embedded && (
+        <div className="flex items-center gap-2 border-b border-zinc-800 bg-[#10141c] px-3 py-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/90" />
+          <b className="text-xs font-semibold text-zinc-200">
+            {server.name} / {instance}
+          </b>
+          <span className="text-xs text-zinc-500">{statusLabel(status)}</span>
+          <div className="ml-auto flex items-center gap-1">
             <Button
               variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
-              aria-label={$('console.close')}
-              onClick={onClose}
+              size="sm"
+              className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100"
+              onClick={() => setLines([])}
             >
-              <X className="h-4 w-4" />
+              <Eraser className="h-3.5 w-3.5" /> {$('console.clear')}
             </Button>
-          )}
+            {onClose && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                aria-label={$('console.close')}
+                onClick={onClose}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       <div
         ref={scrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
           followingRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
         }}
-        className={`console-scroll no-scrollbar ${heightClass} overflow-y-auto p-3 font-mono text-xs leading-relaxed text-zinc-300`}
+        className={`console-scroll no-scrollbar ${heightClass} overflow-y-auto font-mono ${
+          embedded
+            ? 'px-3.5 py-2.5 text-[12.5px] leading-5 text-zinc-400'
+            : 'p-3 text-xs leading-relaxed text-zinc-300'
+        }`}
       >
-        {lines.map((text, i) => (
-          <div key={i} className={consoleLineClass(text)}>
+        {shown.map((text, i) => (
+          // whitespace-pre-wrap：日志里的缩进（堆栈、对齐的表格）不能被折叠掉
+          <div key={i} className={`whitespace-pre-wrap break-words ${consoleLineClass(text)}`}>
             {text}
           </div>
         ))}
-        {!lines.length && <div className="text-zinc-600">{$('console.empty')}</div>}
+        {!shown.length && (
+          <div className="text-zinc-600">
+            {lines.length && query.trim() ? $('console.search.empty') : $('console.empty')}
+          </div>
+        )}
       </div>
       {/* 指令输入：自增高 + 右下角圆形发送（参考 beUI prompt-input） */}
-      <div className="border-t border-zinc-800 bg-[#10141c] p-2">
-        <div className="flex items-start gap-2 rounded-xl border border-zinc-700/60 bg-[#0a0d12] px-2.5 py-1.5 transition-colors focus-within:border-zinc-600">
+      <div className={embedded ? 'shrink-0 bg-[#131318] px-3.5 py-3' : 'border-t border-zinc-800 bg-[#10141c] p-2'}>
+        <div
+          className={`flex items-start gap-2 transition-colors ${
+            embedded
+              ? // min-h-9：发送按钮 28px + 上下 4px = 36px，与设计稿的输入框高度一致（多行时再自增）
+                'min-h-9 rounded-lg border border-zinc-800 bg-[#1C1C21] px-2.5 py-1 focus-within:border-zinc-700'
+              : 'rounded-xl border border-zinc-700/60 bg-[#0a0d12] px-2.5 py-1.5 focus-within:border-zinc-600'
+          }`}
+        >
           <span aria-hidden className="select-none font-mono text-xs leading-5 text-emerald-500/80">
             &gt;
           </span>
@@ -270,17 +325,21 @@ export function ConsolePanel({
               spellCheck={false}
               autoComplete="off"
               aria-label={$('console.input.aria')}
-              placeholder={$('console.input.placeholder')}
+              placeholder={idle ? $('instanceDetail.cmd.idle') : $('console.input.placeholder')}
               className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent font-mono text-xs leading-5 text-zinc-200 outline-none placeholder:text-zinc-600"
             />
           </div>
           <Button
             size="icon"
             onClick={() => void send()}
-            disabled={!cmd.trim()}
+            disabled={!cmd.trim() || idle}
             aria-label={$('console.send')}
-            title={$('console.send.tooltip')}
-            className="size-7 shrink-0 rounded-full"
+            title={idle ? $('instanceDetail.cmd.idle') : $('console.send.tooltip')}
+            className={
+              embedded
+                ? 'size-7 shrink-0 rounded-full bg-emerald-500 text-white hover:bg-emerald-500/90 disabled:opacity-40'
+                : 'size-7 shrink-0 rounded-full'
+            }
           >
             <Send className="size-3.5" />
           </Button>

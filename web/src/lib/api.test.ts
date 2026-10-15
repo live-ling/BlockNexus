@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, api, errText } from './api'
-import { __resetLanguageForTest, setLanguage } from './i18n'
+import { ApiError, agentOutdated, agentVersionText, api, errText } from './api'
+import { $, __resetLanguageForTest, setLanguage } from './i18n'
 
 /**
  * 错误契约测试：后端返回 `{ error, code }`，前端必须把 code 带到 ApiError 上。
@@ -121,5 +121,39 @@ describe('ApiError 本身', () => {
     expect(e.code).toBeUndefined()
     expect(e.status).toBe(500)
     expect(e).toBeInstanceOf(Error)
+  })
+})
+
+describe('agentVersionText / agentOutdated（版本号展示契约）', () => {
+  // 回归背景：系统信息那行「远端 v0.5.0 · 本地 v{0}」的 v 由**译文**提供，
+  // 而调用点又拼了一次 → 页面显示「本地 vv0.5.0」。约定收敛到 agentVersionText：
+  // 它只返回裸版本号，v 前缀由译文或调用点二选一负责。
+  it('返回裸版本号（不带 v）', () => {
+    expect(agentVersionText('0.5.0')).toBe('0.5.0')
+  })
+
+  it('剥掉远端可能自带的 v 前缀（避免调用点再拼一次变成 vv）', () => {
+    expect(agentVersionText('v0.5.0')).toBe('0.5.0')
+    expect(agentVersionText('V0.5.0')).toBe('0.5.0')
+  })
+
+  it('缺值时用兜底（默认 —，可覆盖）', () => {
+    expect(agentVersionText(undefined)).toBe('—')
+    expect(agentVersionText(null)).toBe('—')
+    expect(agentVersionText('')).toBe('—')
+    expect(agentVersionText('  ')).toBe('—')
+    expect(agentVersionText(undefined, '?')).toBe('?')
+  })
+
+  it('与译文拼接后恰好只有一个 v（这就是页面上那行的最终形态）', () => {
+    expect(`· ${$('serverSettings.sys.agentLocal', agentVersionText('0.5.0'))}`).toContain('本地 v0.5.0')
+    expect(`· ${$('serverSettings.sys.agentLocal', agentVersionText('0.5.0'))}`).not.toContain('vv')
+  })
+
+  it('agentOutdated：远端与随附版本不一致即为落后（随附版本缺失时不算）', () => {
+    expect(agentOutdated({ info: { agentVersion: '0.4.5' }, agentBundled: '0.5.0' } as never)).toBe(true)
+    expect(agentOutdated({ info: { agentVersion: '0.5.0' }, agentBundled: '0.5.0' } as never)).toBe(false)
+    expect(agentOutdated({ info: null, agentBundled: '0.5.0' } as never)).toBe(true)
+    expect(agentOutdated({ info: { agentVersion: '0.4.5' }, agentBundled: '' } as never)).toBe(false)
   })
 })

@@ -301,11 +301,14 @@ server → client  {t:'ready',  proof = HMAC(kProof,'auth2'||nonceC||nonceP)}
 - `POST .../:name/reinstall` :1717 — 清残留重装（可选换核心/版本/构建）
 - `POST .../:name/setcore` :2275 — 指认上传的 jar 为核心
 - `DELETE .../:name` :2259 — 删除（可选先备份 / force）
-- `PUT .../:name` :2288 — 编辑备注/地址/内存
+- `PUT .../:name` :2288 — 编辑备注/地址/内存，以及 `tracking`（玩家统计 / 聊天记录两个开关）
 
-**控制台 / 玩家 / 网络（5 条）**
+**控制台 / 玩家 / 网络（8 条）**
 - `GET .../:name/console?tail=` :1906（tail 上限 1000，`:1914`）
 - `GET /servers/:id/players` :1667 — 全部运行中实例的在线人数与名单（SLP + 控制台跟踪）
+- `GET .../:name/players/stats` — 玩家在线时长统计（累计/会话数/首次与最近在线；数据在 Agent 侧落盘）
+- `GET .../:name/chat?limit&before&player&q` — 聊天记录（`before` 是**字节偏移游标**，过滤条件按纯文本）
+- `POST .../:name/chat/clear` — 清空聊天记录（不可恢复，前端二次确认）
 - `GET .../:name/domain-check` :1896 — SRV/A + TCP 连通探测
 - `GET .../:name/banlist` :1845
 - `POST .../:name/banlist/unban` :1855
@@ -359,9 +362,9 @@ server → client  {t:'ready',  proof = HMAC(kProof,'auth2'||nonceC||nonceP)}
 - 匿名可达：`/login`、`/logout`、`/me`、`/license`、三个找回密码接口、`/agent.js`（`panel/api.js:323`、`:385`、`:2900`；`panel/server.js:49`）。
 - 无请求级限流（除登录与找回密码），无配额、无审计。
 
-### 4.4 Agent action inventory（RPC 动作全集，61 个）
+### 4.4 Agent action inventory（RPC 动作全集，64 个）
 
-面板几乎所有业务路由都只是「取 serverId → `hub.request(serverId, '<action>', params, timeoutMs)` → 把 Agent 返回值原样 `res.json()`」的薄转发（典型：`panel/api.js:1699`、`:2354`、`:2559`）。因此**真正的业务能力边界由 Agent 的动作表决定**——`agent/src/agent.js:196-341` 的 `switch (action)` 共 61 个 case，未匹配抛「未知操作: …」（`agent/src/agent.js:338-339`）：
+面板几乎所有业务路由都只是「取 serverId → `hub.request(serverId, '<action>', params, timeoutMs)` → 把 Agent 返回值原样 `res.json()`」的薄转发（典型：`panel/api.js:1699`、`:2354`、`:2559`）。因此**真正的业务能力边界由 Agent 的动作表决定**——`agent/src/agent.js:196-341` 的 `switch (action)` 共 64 个 case，未匹配抛「未知操作: …」（`agent/src/agent.js:338-339`）：
 
 | 分组 | 动作（行号均指 `agent/src/agent.js`） |
 | --- | --- |
@@ -371,6 +374,7 @@ server → client  {t:'ready',  proof = HMAC(kProof,'auth2'||nonceC||nonceP)}
 | 实例生命周期（5） | `instance.start` :222、`instance.stop` :224、`instance.restart` :226、`instance.delete` :232、`instance.edit` :234 |
 | 控制台 / 运维（4） | `instance.command` :228、`instance.console` :230、`instance.logLine` :272、`agent.prepareUninstall` :266 |
 | 网络 / 玩家 / 封禁（5） | `instance.domainCheck` :236、`instance.players` :268、`instance.banList` :250、`instance.banUnban` :252、`instance.setcore`（见上） |
+| 玩家统计 / 聊天记录（3） | `instance.players.stats`、`instance.chat.log`、`instance.chat.clear`（均在 `agent/src/instance/playerdata.js` 实现；`instance.edit` 额外接受 `tracking` 开关） |
 | Mod / spark（6） | `instance.modsList` :238、`instance.modsToggle` :240、`instance.modsDelete` :242、`instance.spark.stats` :244、`instance.spark.profiler` :246、`instance.spark.health` :248 |
 | 图标 / 配置 / 调度（6） | `instance.iconGet` :254、`instance.iconSet` :256、`instance.watchdog.set` :258、`instance.backupSchedule.set` :260、`instance.properties.get` :262、`instance.properties.set` :264 |
 | 备份（5） | `backup.create` :276、`backup.list` :282、`backup.restore` :284、`backup.delete` :290、`backup.download.begin` :292 |
@@ -436,7 +440,18 @@ server → client  {t:'ready',  proof = HMAC(kProof,'auth2'||nonceC||nonceP)}
 **④ 玩家名单与在线人数**
 - `PlayersSnapshot` 类型：`{online, max, list?, running, unreachable?}`（`web/src/lib/api.ts:179-190`）。
 - UI 消费：在线 `X/Y` 与玩家名列表（`web/src/pages/instance-detail.tsx:345-346`、`:567-620`）。
-- 数据来源在两处（Agent 侧）：SLP 协议响应 `players.sample` 与**控制台行跟踪**合并去重（`agent/src/instance/players.js:132-182`），跟踪规则见 `players.js:224-255`（`joined the game`/`left the game`/`lost connection`/`There are N of a max of M`）。
+- 数据来源在两处（Agent 侧）：SLP 协议响应 `players.sample` 与**控制台行跟踪**合并去重（`agent/src/instance/players.js:132-182`），跟踪规则见 `players.js:224-255`（`joined the game`/`left the game`/`lost connection`/`There are N of a max of M`）；
+  `trackPlayers` 现在**返回事件**（`{type:'join'|'leave'|'list'}`）供在线时长统计消费，日志前缀改为「一个或多个 `[]` 段 + 冒号」的容错写法（vanilla / Paper / Forge 都能吃）。
+
+**④b 玩家在线时长统计（本仓库新增能力）**
+- Agent 侧解析 + 落盘：`agent/src/instance/playerdata.js`（`players.json`，`<实例目录>/.blocknexus-data/`，权限 0600；每实例最多 1000 人，装载上限 4MB，损坏文件改名留档）。
+- 会话成对由四个入口保证：控制台 join/leave、控制台 `list` 名单校准、SLP 名单补录、实例进程退出结算；60 秒节拍推进心跳点，Agent 被硬杀时按心跳结算（最多丢 1 分钟，不重复计）。
+- 前端：右侧在线玩家栏显示「本次在线」，底部「玩家统计」按钮打开统计表（排序/搜索），口径 = 已结算历史 + 当前会话。
+
+**④c 聊天记录（本仓库新增能力）**
+- 只记录玩家聊天 / `/me` 表情 / 私聊（**不记**加入离开等系统消息）；Agent 侧追加写 `chat.ndjson`（2MB 上限后轮转保留最新 75%），逐条经 `sendEvent('chat', …)` 推给面板实时显示。
+- 读取走 `chatLog`：只读文件尾部 512KB 窗口（内存与文件大小无关），分页用**字节偏移游标**（同一毫秒多条不重不漏），过滤条件一律按纯文本（不构造正则）。
+- 前端：实例详情页「聊天」页签（历史分页 + SSE 实时追加 + 按玩家/关键词过滤 + 二次确认清空）。渲染只走 React 文本节点，见 `web/src/components/chat-line.tsx` 与 `chat-line.test.tsx` 的逃逸用例。
 
 **⑤ server-icon（服务器列表图标）**
 - 前端本地裁切成 64×64 PNG 后 base64 提交（`panel/api.js:1883-1893`）；Agent 侧校验 PNG magic 与 ≤200 KB（`agent/src/instance/serverinfo.js:73-81`）；读取回裸 PNG（`panel/api.js:1868-1881`）。
@@ -462,7 +477,7 @@ server → client  {t:'ready',  proof = HMAC(kProof,'auth2'||nonceC||nonceP)}
 | **物品 / 背包渲染** | `inventory\|ItemStack\|item id\|minecraft:` | **不存在**。无物品图标、无背包/箱子/末影箱/潜影盒编辑器，无 slot 概念。 |
 | **Gamerule 元数据** | `gamerule\|gamerules\|keepInventory\|doDaylightCycle` | **不存在**。没有任何 gamerule 类型（bool/int）、默认值或说明表；只能靠控制台手敲指令。 |
 | **地图 / region 渲染** | `region\|\.mca\|anvil\|chunk render\|level\.dat` | **不存在**（`region-file-compression` 只是 properties 键名 `properties.ts:121`；`role="region"` 是 aria 属性）。无 Anvil/MCA 解析、无区块渲染、无 `canvas` 地图查看器。 |
-| **聊天 / § 格式化码** | `§\|\\u00a7\|colorCode\|stripColor\|legacy color` | 前端**不存在**。全仓库唯一的 `§` 处理是 **Agent 侧剥离 spark 输出**：`line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g,'').replace(/§./g,'')`（`agent/src/instance/spark.js:80`）。**MOTD 在 UI 里按纯文本显示**，`§` 颜色码不会被转成 HTML/CSS。 |
+| **聊天 / § 格式化码** | `§\|\\u00a7\|colorCode\|stripColor\|legacy color` | **§ 富文本仍不存在**（全文唯一的 `§` 处理是 Agent 侧剥离 spark 输出：`agent/src/instance/spark.js:80`，MOTD 在 UI 里仍是纯文本）。**但聊天记录本身已实现**（见 §6.1 ④c）：Agent 侧解析玩家聊天并落盘，前端以纯文本渲染——刻意不做 `§` → HTML/CSS，避免给玩家可控文本开注入面。 |
 | **材质 / 资源包加载** | `textures\|assets\|minecraft-assets\|icons/minecraft\|mcasset` | **不存在**。无任何 MC 官方材质或图标资源（`web/public` 只有项目 logo）。 |
 | **玩家皮肤 / 头像** | `skin\|avatar\|crafatar\|minotar\|mc-heads` | **不存在**（`avatar` 唯一命中是 AI 聊天组件的头像占位，`web/src/components/agents/message.tsx:47`）。玩家名单只有纯文字名字，无头图。 |
 | **白名单 / OP 管理 UI** | `whitelist\|op\.json\|ops\.json` | **不存在**专门的 UI（`whitelist.json` 仅作为 plugin-config 可扫描的配置文件之一被提及）。`/op`、`/deop` 只能通过控制台或玩家快捷菜单的下发指令实现。 |
@@ -566,8 +581,11 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
 | `test-start-singleflight.js` | 启动并发去重（只 spawn 一个 java）、进程归属、取消启动 | 抽 `start/doStart` 方法体 + 假 child + `check()` | **18** | 否 |
 | `test-watchdog-schedule.js` | 定时判定规则（触发窗口、20 小时去重、星期过滤、间隔上下限、非法输入） | 抽 `scheduleDue` 方法体 + `cases[]` 表驱动 | **12** | 否 |
 | `test-backup-schedule.js` | 接线断言 + `setBackupSchedule` 校验规则 + `pruneBackups` 保留份数（真实临时目录） | 源码文本断言 + stub `this` + 真实 fs | 3 段 | 否 |
-| `test-player-tracking.js` | 玩家进出/名单解析 + 控制台跨 chunk 拼行（含中文字节截断） | 抽 `trackPlayers`/`makeLineSplitter` + 表驱动 | 约 **10**（6 跟踪 + 4 拼行） | 否 |
+| `test-player-tracking.js` | 玩家进出/名单解析 + 控制台跨 chunk 拼行（含中文字节截断）+ Forge 多段日志前缀 | 抽 `trackPlayers`/`makeLineSplitter` + 表驱动 | **13**（跟踪）+ 4（拼行） | 否 |
+| `test-player-stats.js` | 在线时长统计：会话成对（join/leave/掉线）、控制台名单校准、SLP 补录、落盘后跨进程续算（含硬杀按心跳结算）、1000 人上限淘汰、开关、文件权限 | 真实 `InstanceManager` + `_nowOverride` 注入时钟（不 sleep）+ `check()` | **36** | 否（真实临时目录） |
+| `test-chat-log.js` | 聊天解析（vanilla/Paper/Forge/表情/私聊/控制字符/截断）、NDJSON 落盘与事件推送、字节游标分页（无重无漏）、过滤按字面量、2MB 轮转、清空、路径安全、文件权限 | 真实 `InstanceManager` + 真实 fs + 表驱动 | **54** | 否 |
 | `test-fs-ops.js` | 文件管理（复制/移动/压缩/解压/路径越界/目标已存在） | 抽 `fs.js` 方法体 + 真实临时目录 + 系统 `tar` | **16** | 否 |
+| `test-chat-api.js` | 面板转发（参数规范化、鉴权边界 401）+ Agent 侧 action 派发 + 一条**端到端**（面板路由 → 真 Agent → 真落盘：喂聊天行 → 等待时间片落盘 → 读出 → 清空） | 同进程 express + 假 hub + 真实 `InstanceManager`/`Agent` | **29** | 否（本地端口） |
 | `e2e-panel-install.js` | 端到端：隔离面板 + 真 Agent（listen 模式），加密通道上传断点续传（含 Agent 重启后续传）、面板代下全链路、安装失败自动兜底 | `report(name, ok, detail)` + 真实 HTTP/WS/文件 | **8** | 本地起进程，不需外网 |
 | `e2e-reset-code.js` | 找回密码三段式与限流（发码冷却/窗口、错码锁定、单码全局上限、票据一次性、过期、关闭保护即失效、旧 token 兼容） | `report()` + 注入更短窗口的 `limiterOpts`（第 4 参数）+ 假 SMTP | **24** | 否 |
 
@@ -710,7 +728,7 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
 27. **物品 / 背包 / 容器渲染**：不存在（无 ItemStack、无物品图标、无背包编辑器）。
 28. **Gamerule 元数据与可视化**：不存在。
 29. **地图 / region（Anvil/MCA）解析与渲染**：不存在，无任何世界可视化。
-30. **聊天/§ 富文本渲染**：前端不存在（MOTD 按纯文本显示）；唯一 `§` 处理在 Agent 侧剥离 spark 输出（`agent/src/instance/spark.js:80`）。
+30. **聊天/§ 富文本渲染**：前端**没有 § 富文本**（MOTD 按纯文本显示；唯一 `§` 处理在 Agent 侧剥离 spark 输出，`agent/src/instance/spark.js:80`）。**但聊天内容本身已可查看**：Agent 侧解析玩家聊天/表情/私聊并落盘，前端「聊天」页签以纯文本渲染（刻意的取舍——玩家可控文本不进 HTML，也就没有 `§`→CSS 的转换）。
 31. **材质 / 图标资源管线**：不存在。
 32. **玩家皮肤/头像**：不存在（玩家名单只有名字文本）。
 33. **白名单 / OP 列表的专用 UI**：不存在。
@@ -816,6 +834,7 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
   "note": "", "address": "",
   "watchdog":       { "autoRestart": false, "restartDelaySec": 5, "schedules": [] },
   "backupSchedule": { "enabled": false, "keepCount": 0, "schedules": [] },
+  "tracking":       { "players": true, "chat": true },
   "eula": true,
   "installState": "downloading|ready|failed",
   "createdAt": 0,
@@ -829,6 +848,7 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
 - **实例注册表不存在**：列表 = 扫 `instancesDir` 下的目录 + 读同名 `blocknexus.json`（`agent/src/instance/manager.js:34-60`），因此「删目录 = 删实例」，无数据库一致性可言。
 - 元数据文件名有历史迁移：首次扫描时 `mcpan.json` → `blocknexus.json`（`manager.js:47-54`）。
 - 世界存档、`server.properties`、`eula.txt`、`mods/`、`server-icon.png` 与元数据**同目录平铺**；备份另存于 `<instancesDir>/.backups/<name>/`（`agent/src/instance/backups.js:14-16`）。
+- **`<实例目录>/.blocknexus-data/`（本次新增，目录 0700）**：玩家统计 `players.json`（`{v,trackedSince,players:{name:{firstSeen,lastSeen,totalMs,sessions,openSince,hb}}}`）与聊天记录 `chat.ndjson`（一行一条 `{t,k,n,m}`，2MB 后轮转保留最新 75%），文件均 0600（`agent/src/instance/playerdata.js`）。两者**刻意不排除在备份之外**：`backupRestore` 会先清空实例目录再解包，排除就等于恢复一次备份丢一段历史（与 `.blocknexus-map` 这类可再生的派生数据不同）。文件管理器的实例根目录过滤同时隐藏 `.blocknexus-map` 与 `.blocknexus-data`（`agent/src/instance/fs.js`）。
 
 ### B.3 磁盘缓存（可丢，纯提速/兜底）
 
@@ -840,6 +860,6 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
 ### B.4 纯内存态（面板/Agent 重启即丢）
 
 - 面板：`sessions`（`panel/api.js:87`）、`sseClients`（`:88`）、`installing`（`:89`）、`taskLogs`（`:95`）、`statsCache`（`:147`）、`offlineNotified`（`:207`）、`agentUpdateState`/`agentUpdateTries`（`:246-247`）、`loginFails`（`:327`）、`forgotSent`/`verifyFails`/`resetTickets`/`codeTries`（`:397-400`）、`versionCache`（`:38`）、`panelInstalls`/`panelFallbackAt`（`:1514-1515`）、`javaRefreshing`（`:2477`）。
-- Agent：`uploads` / `downloads` 传输会话（`agent/src/instance/fs.js:201`）、`javaJob`（`manager.js:20`）、`bootstrapJobs`（`manager.js:21`）、实例控制台环形缓冲（**上限 500 行**，`manager.js:194`）、`rec.players` 跟踪集（`lifecycle.js:121`）、`crashTimes` 崩溃窗口（`watchdog.js:94`）。
+- Agent：`uploads` / `downloads` 传输会话（`agent/src/instance/fs.js:201`）、`javaJob`（`manager.js:20`）、`bootstrapJobs`（`manager.js:21`）、实例控制台环形缓冲（**上限 500 行**，`manager.js:194`）、`rec.players` 跟踪集（`lifecycle.js:121`）、`crashTimes` 崩溃窗口（`watchdog.js:94`）、**`rec.pstats` 玩家统计表（每实例 ≤1000 人）与 `rec.chatPending` 待落盘聊天缓冲（≤200 条）**（`agent/src/instance/playerdata.js`；两者都有数量上限，且 pstats 懒装载、聊天只在内存里停留 ≤1.5 秒）。
 
-**对比含义**：把面板进程杀掉再拉起，所有会话、限流计数、安装日志、Agent 更新退避状态、传输会话全部归零；已落盘的只有 `config.json`、每实例 `blocknexus.json` 与其世界文件。
+**对比含义**：把面板进程杀掉再拉起，所有会话、限流计数、安装日志、Agent 更新退避状态、传输会话全部归零；已落盘的只有 `config.json`、每实例 `blocknexus.json`、`.blocknexus-data/`（玩家统计与聊天记录）与其世界文件。

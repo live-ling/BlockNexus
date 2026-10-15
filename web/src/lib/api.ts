@@ -88,6 +88,19 @@ export function agentOutdated(s: Pick<ServerSummary, 'info' | 'agentBundled'>): 
   return !!s.agentBundled && remote !== s.agentBundled;
 }
 
+/**
+ * 版本号展示值：**只返回裸版本号**，'v' 前缀由调用方或译文负责。
+ *
+ * 为什么值得单独一个函数：系统信息里那行「远端 v0.5.0 · 本地 v{0}」的 'v' 由**译文**
+ * 提供，而调用点又拼了一次 'v'，于是渲染成「本地 vv0.5.0」——一处纯约定型的错，
+ * 静态检查与类型都拦不住。把「取值」收进一个具名函数后，调用点只可能传裸版本，
+ * 顺带把远端可能自带的 'v' 前缀也剥掉（`v0.5.0` → `0.5.0`）。
+ */
+export function agentVersionText(v: string | null | undefined, fallback = '—'): string {
+  const s = String(v ?? '').trim().replace(/^v/i, '');
+  return s || fallback;
+}
+
 /** 添加服务器前的 SSH 连接验证结果（POST /servers/ssh-check） */
 export interface SshCheckResult {
   ok: boolean;
@@ -176,6 +189,11 @@ export interface Instance {
   url?: string;
   /** 是否装了 spark（决定实例详情页要不要显示 Spark 标签页；老版本 Agent 不返回该字段） */
   sparkInstalled?: boolean;
+  /**
+   * 玩家在线时长统计与聊天记录的两个开关。
+   * 记录发生在 Agent 侧（面板离线也照记）；老版本 Agent 不返回该字段，按「全开」处理。
+   */
+  tracking?: { players: boolean; chat: boolean };
 }
 
 /** 运行中实例的在线人数快照：{ [实例名]: { online, max, list, running } } */
@@ -190,6 +208,61 @@ export type PlayersSnapshot = Record<
     unreachable?: boolean;
   }
 >;
+
+/**
+ * 单个玩家的在线时长统计（Agent 侧累计，见 agent/src/instance/playerdata.js）。
+ * `totalMs` 是**已结算**的历史会话总时长，不含当前这一节；当前会话由 `onlineSince`
+ * 表达，界面上把两者相加才是「累计」，避免同一段时间被算两遍。
+ */
+export interface PlayerStat {
+  name: string;
+  online: boolean;
+  /** 本次会话开始时刻（毫秒）；不在线为 null */
+  onlineSince: number | null;
+  /** 已结算的累计时长（毫秒），不含当前会话 */
+  totalMs: number;
+  /** 会话次数（含当前这次） */
+  sessions: number;
+  /** 首次被记录到的时刻（毫秒），0 表示未知 */
+  firstSeen: number;
+  /** 最近一次加入/离开的时刻（毫秒），0 表示未知 */
+  lastSeen: number;
+}
+
+export interface PlayersStats {
+  instance: string;
+  /** Agent 侧的时间（毫秒）：前端据此算时长，免受两端时钟差影响 */
+  now: number;
+  running: boolean;
+  /** 开始统计的时刻（早于它的在线时长不在统计范围内） */
+  trackedSince: number;
+  /** 玩家表已达上限（更早的玩家记录会被淘汰） */
+  truncated?: boolean;
+  players: PlayerStat[];
+}
+
+/** 一条聊天记录（t=毫秒时间戳，k=类型，n=玩家名，m=正文） */
+export interface ChatRecord {
+  t: number;
+  k: 'chat' | 'emote' | 'whisper' | string;
+  n: string;
+  m: string;
+}
+
+export interface ChatPage {
+  instance: string;
+  now: number;
+  /** 记录文件当前字节数（0 = 还没有记录） */
+  size: number;
+  /** 本页记录（旧 → 新） */
+  records: ChatRecord[];
+  /** 本页之前还有更早的记录 */
+  more: boolean;
+  /** 下一页游标（字节偏移，原样回传给 before） */
+  nextBefore: number;
+  /** 文件被轮转/清空过，游标失效：前端应清空重载 */
+  reset: boolean;
+}
 
 export interface McVersions {
   latest: string;
@@ -429,6 +502,20 @@ export interface JavaListResult {
   system: JavaEntry | null;
 }
 
+/**
+ * 版本列表里那一行的**完整版本号**（展示值，和 agentVersionText 同一类契约）：
+ *   · 系统包：raw 是 `java -version` 首行（openjdk version "17.0.10" 2024-01-16）→ 取引号里的部分
+ *   · 托管版本：Agent 只回目录名（Temurin JRE 解压出来是 jdk-21.0.5+9-jre，8 是 jdk8u432-b06）
+ *     → 剥掉 `jdk-` 前缀与 `-jre` 后缀
+ * 两个来源都取不到时返回空串：调用点据此退回路径或说明文案，而不是渲染 undefined。
+ */
+export function javaVersionText(entry: Pick<JavaEntry, 'name' | 'raw'>): string {
+  const quoted = entry.raw?.match(/"([^"]+)"/)?.[1];
+  if (quoted) return quoted;
+  const stripped = entry.name.replace(/^jdk-?/i, '').replace(/-jre$/i, '');
+  return stripped !== entry.name ? stripped : '';
+}
+
 export function listJavas(serverId: string): Promise<JavaListResult> {
   return api(`/servers/${serverId}/javas`);
 }
@@ -474,6 +561,42 @@ export function unbanTarget(
   return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/banlist/unban`, {
     method: 'POST',
     body: { kind, target },
+  });
+}
+
+// ---------- 玩家在线时长统计 与 聊天记录（数据由 Agent 解析并落盘） ----------
+
+export function getPlayersStats(serverId: string, instance: string): Promise<PlayersStats> {
+  return api<PlayersStats>(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/players/stats`);
+}
+
+/**
+ * 读取聊天记录。
+ * `before` 是**字节偏移游标**（上一页返回的 nextBefore），不是时间戳——
+ * 同一毫秒可能有多条记录，用时间戳做游标会漏记录。
+ * `player` / `q` 都是纯文本过滤（Agent 侧用 includes 匹配，不构造正则）。
+ */
+export function getChatLog(
+  serverId: string,
+  instance: string,
+  opts: { limit?: number; before?: number; player?: string; q?: string } = {},
+): Promise<ChatPage> {
+  const p = new URLSearchParams();
+  if (opts.limit) p.set('limit', String(opts.limit));
+  if (opts.before) p.set('before', String(opts.before));
+  if (opts.player) p.set('player', opts.player);
+  if (opts.q) p.set('q', opts.q);
+  const qs = p.toString();
+  return api<ChatPage>(
+    `/servers/${serverId}/instances/${encodeURIComponent(instance)}/chat${qs ? '?' + qs : ''}`,
+  );
+}
+
+/** 清空聊天记录（不可恢复：调用方必须先二次确认） */
+export function clearChatLog(serverId: string, instance: string): Promise<{ ok: boolean; removedBytes: number }> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(instance)}/chat/clear`, {
+    method: 'POST',
+    body: {},
   });
 }
 

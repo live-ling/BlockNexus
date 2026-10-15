@@ -107,6 +107,10 @@ function makeManager(logs = []) {
       }),
     trackPlayers: () => {},
     trackSpark: () => false,
+    // 玩家在线时长统计（playerdata.js）在 start/exit 两个节点上结算会话：
+    // 本测试只关心进程单飞，给个空实现即可
+    closeAllPlayerSessions: () => {},
+    flushPlayerStatsNow: () => {},
     stopAndWait: async () => true,
     scheduleAutoRestart: () => {},
   };

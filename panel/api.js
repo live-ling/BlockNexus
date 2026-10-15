@@ -347,41 +347,119 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
   }
 
-  // 离线通知降噪：同一次离线只发一封（24 小时后补发一封提醒，避免彻底沉寂）；
-  // 恢复在线后重新武装（下次离线再发）。抖动重连由 10 分钟最小间隔兜底。
-  const offlineNotified = new Map(); // serverId -> { at: 上次发信时间, open: 本次离线是否已发过 }
-  const OFFLINE_MIN_GAP = 10 * 60e3;
-  const OFFLINE_REMIND = 24 * 60 * 60e3;
+  // 离线通知降噪。要同时挡住两类噪音，缺一都会刷屏：
+  //   ① 抖动（掉线几秒又连上）——用「观察期」滤掉：掉线先记下时刻，持续
+  //      OFFLINE_GRACE 未恢复才算真故障，此时才发信。短暂中断完全不惊动用户。
+  //   ② 长期离线期间反复触发——用「一次一封 + 定时补发」兜住：
+  //      同一次故障只发一封，之后每 OFFLINE_REMIND 补发一封提醒（避免彻底沉寂），
+  //      补发由定时器主动发起，不依赖下一次 offline 事件（outbound 重连失败
+  //      根本不会触发 offline 事件，那样提醒永远不会到）。
+  // 恢复邮件只在「本次故障确实发过离线邮件」后才发，且受最小间隔约束。
+  const OFFLINE_GRACE = 2 * 60e3; // 掉线观察期：持续这么久才算故障
+  const OFFLINE_MIN_GAP = 10 * 60e3; // 两封离线邮件之间的最小间隔（抖动兜底）
+  const OFFLINE_REMIND = 24 * 60 * 60e3; // 长期离线的补发间隔
+  /** serverId -> { since, at, notified, timer }：since=本次掉线起点，at=上次发信时刻，notified=本次故障是否已发过 */
+  const offlineNotified = new Map();
+
+  /** 清掉某台服务器的离线跟踪与待发定时器（服务器被移除 / 恢复上线时调用） */
+  function clearOfflineTracking(serverId) {
+    const rec = offlineNotified.get(serverId);
+    if (rec && rec.timer) clearTimeout(rec.timer);
+    offlineNotified.delete(serverId);
+  }
+
   function maybeNotifyStatus(serverId, status) {
     const st = config.data.settings;
     if (!st.adminEmail || !smtpConfigured()) return;
-    const server = config.getServer(serverId);
-    const name = server ? server.name : serverId;
-    const now = new Date().toLocaleString('zh-CN', { hour12: false });
-    if (status === 'offline' && st.notify.offline) {
+
+    if (status === 'offline') {
+      if (!st.notify.offline) return;
+      // 已在跟踪本次掉线（重复 offline 事件，或已发过信正在等补发）：不动 since，保持计时连续
+      if (offlineNotified.has(serverId)) return;
+      // 观察期到了若仍处于离线，才判定为故障并发信
+      const timer = setTimeout(() => {
+        const cur = offlineNotified.get(serverId);
+        if (cur) void sendOfflineMail(serverId, cur);
+      }, OFFLINE_GRACE);
+      // 不挡进程退出：这只是提醒，退出时丢掉即可
+      if (timer.unref) timer.unref();
+      offlineNotified.set(serverId, { since: Date.now(), at: 0, notified: false, timer });
+      return;
+    }
+
+    if (status === 'online') {
       const rec = offlineNotified.get(serverId);
-      const gapOk = Date.now() - (rec ? rec.at : 0) >= OFFLINE_MIN_GAP;
-      const remindDue = rec && rec.open && Date.now() - rec.at >= OFFLINE_REMIND;
-      if (gapOk && (!rec || !rec.open || remindDue)) {
-        offlineNotified.set(serverId, { at: Date.now(), open: true });
-        sendMail(
-          st.adminEmail,
-          `[BlockNexus] 服务器离线：${name}`,
-          mailTpl.offlineMail({ name, host: server ? server.host : '?', time: now }),
-        ).catch((e) => console.error('[notify] 离线邮件发送失败:', e.message));
-      }
+      if (!rec) return;
+      // 抖动：观察期内就恢复了 → 本次不算故障，静默收尾（不发离线信也不发恢复信）
+      clearOfflineTracking(serverId);
+      // 只有本次故障确实发过离线信才通知恢复——否则用户会收到孤零零一封「已恢复」，
+      // 而他从没被告知这台服务器掉过线。
+      // 不用额外的冷却：观察期 + 每次故障只发一封，已经把抖动的上限压到「每 2 分钟最多一次」。
+      if (!rec.notified || !st.notify.recovery) return;
+      const server = config.getServer(serverId);
+      const name = server ? server.name : serverId;
+      const time = new Date().toLocaleString('zh-CN', { hour12: false });
+      sendMail(st.adminEmail, `[BlockNexus] 服务器已恢复：${name}`, mailTpl.recoveryMail({ name, time })).catch(
+        (e) => console.error('[notify] 恢复邮件发送失败:', e.message),
+      );
     }
-    if (status === 'online' && offlineNotified.has(serverId)) {
-      // 保留 at（抖动时离线邮件仍受最小间隔约束），只解除「本次离线已通知」标记
-      offlineNotified.set(serverId, { at: offlineNotified.get(serverId).at, open: false });
-      if (st.notify.recovery) {
-        sendMail(
-          st.adminEmail,
-          `[BlockNexus] 服务器已恢复：${name}`,
-          mailTpl.recoveryMail({ name, time: now }),
-        ).catch((e) => console.error('[notify] 恢复邮件发送失败:', e.message));
-      }
+  }
+
+  /**
+   * 发离线邮件，并排下一次补发。失败会退回「未通知」，让下一轮补发重试。
+   *
+   * 两道闸，各自管一件事（混在一起就会漏）：
+   *   · 最小间隔 OFFLINE_MIN_GAP——任意两封离线信之间至少隔这么久（全局速率上限）；
+   *   · 补发节奏 OFFLINE_REMIND——已发过信后，只有过了 24 小时才补发。
+   *
+   * @param {boolean} viaReminder 是否由补发定时器发起（决定要不要过 24 小时这一关）
+   */
+  async function sendOfflineMail(serverId, rec, viaReminder = false) {
+    const st = config.data.settings;
+    const server = config.getServer(serverId);
+    if (!server) {
+      clearOfflineTracking(serverId); // 服务器已被移除，停止跟踪
+      return;
     }
+    // 补发定时器之外，唯一的调用者是「观察期到了」这一条路径；把节奏判定也放在这里，
+    // 是为了将来若有人从别处（如状态轮询）调用，也不会退化成每次都发。
+    if (viaReminder && rec.notified && Date.now() - rec.at < OFFLINE_REMIND) return;
+    // 任意两封之间的最小间隔（rec.at 为上次实际发信时刻；从未发过时为 0）
+    if (rec.at && Date.now() - rec.at < OFFLINE_MIN_GAP) return;
+
+    const name = server.name;
+    const time = new Date().toLocaleString('zh-CN', { hour12: false });
+    const since = new Date(rec.since).toLocaleString('zh-CN', { hour12: false });
+    rec.notified = true; // 先置位，挡住并发路径重发
+    try {
+      await sendMail(
+        st.adminEmail,
+        `[BlockNexus] 服务器离线：${name}`,
+        mailTpl.offlineMail({ name, host: server.host || '?', time, since }),
+      );
+      rec.at = Date.now();
+    } catch (e) {
+      // 发信失败就退回「未通知」：下一轮补发还能重试，否则这一封就永远丢了
+      rec.notified = false;
+      console.error('[notify] 离线邮件发送失败:', e.message);
+    }
+    scheduleOfflineRemind(serverId);
+  }
+
+  /** 排下一次补发。成功发出后隔 OFFLINE_REMIND 提醒，失败则隔较短的间隔重试。 */
+  function scheduleOfflineRemind(serverId) {
+    const rec = offlineNotified.get(serverId);
+    if (!rec) return;
+    if (rec.timer) clearTimeout(rec.timer);
+    // 发信失败时（notified 被退回 false）不该让用户干等 24 小时才补上这一封，
+    // 所以用较短的最小间隔重试；成功发出后才是 24 小时一次的提醒节奏。
+    const wait = rec.notified ? OFFLINE_REMIND : OFFLINE_MIN_GAP;
+    const timer = setTimeout(() => {
+      const cur = offlineNotified.get(serverId);
+      if (cur) void sendOfflineMail(serverId, cur, true);
+    }, wait);
+    if (timer.unref) timer.unref();
+    rec.timer = timer;
   }
 
   // ---------- Agent 版本一致性：远端落后自动更新 ----------
@@ -852,6 +930,15 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       verifyFails,
       limits: { LOGIN_MAX_FAILS, LOGIN_LOCK_MS, LOGIN_MAX_TRACKED, LIMITER_MAX_TRACKED },
       pruneLoginFails,
+      // 离线/恢复邮件的降噪状态与时序常量：暴露给测试以便断言「抖动不发信、
+      // 长期离线只发一封」这类行为，而不必真的等 2 分钟
+      notify: {
+        offlineNotified,
+        maybeNotifyStatus,
+        clearOfflineTracking,
+        sendOfflineMail,
+        limits: { OFFLINE_GRACE, OFFLINE_MIN_GAP, OFFLINE_REMIND },
+      },
     });
   }
 
@@ -1175,6 +1262,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!server) return;
     const conn = hub.conns.get(server.id);
     if (conn) conn.kick('面板侧移除');
+    clearOfflineTracking(server.id); // 否则待发的离线补发定时器会一路留到进程退出
     config.removeServer(server.id);
     hub.syncOutbound();
     res.json({ ok: true });
@@ -1982,6 +2070,62 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
   });
 
+  // ---------- 玩家统计与聊天记录（数据由 Agent 解析并落盘，面板只做参数规范化 + 转发） ----------
+  // 面板离线期间 Agent 照常记录，重连后这里就能读到完整历史——这正是把存储放在 Agent
+  // 侧的原因（面板不保证长期在线，而控制台行是流式的，断开期间没人消费就永远丢了）。
+  // 参数在面板侧先规范化一遍，Agent 侧仍会独立再校验（纵深防御）。
+  const CHAT_LIMIT_DEFAULT = 100;
+  const CHAT_LIMIT_MAX = 300; // 与 Agent 的 CHAT_PAGE_MAX 对齐：单帧别太大
+  const CHAT_FILTER_MAX = 32; // 玩家名长度上限（与 MC 用户名上限一致）
+  const CHAT_KEYWORD_MAX = 64; // 关键词上限：只当纯文本用，不下发正则
+
+  // 玩家在线时长统计（本次在线 / 累计 / 会话数 / 首次与最近记录）
+  router.get('/servers/:id/instances/:name/players/stats', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agentRead(server, 'instance.players.stats', { name: req.params.name }, 15000));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // 聊天记录（分页用字节游标 before，返回 nextBefore；过滤条件一律当纯文本）
+  router.get('/servers/:id/instances/:name/chat', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const rawLimit = Number(req.query.limit);
+    const params = {
+      name: req.params.name,
+      limit: Math.min(
+        Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : CHAT_LIMIT_DEFAULT, 1),
+        CHAT_LIMIT_MAX,
+      ),
+      player: String(req.query.player || '').slice(0, CHAT_FILTER_MAX),
+      q: String(req.query.q || '').slice(0, CHAT_KEYWORD_MAX),
+    };
+    // before 是**字节偏移游标**（上一页的 nextBefore），不是时间戳：
+    // 同一毫秒可能有多条记录，用时间戳做游标会漏。非有限/负数视为未给。
+    const before = Number(req.query.before);
+    if (Number.isFinite(before) && before >= 0) params.before = Math.floor(before);
+    try {
+      res.json(await agentRead(server, 'instance.chat.log', params, 20000));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // 清空聊天记录（不可恢复：前端必须二次确认）
+  router.post('/servers/:id/instances/:name/chat/clear', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await agent(server)('instance.chat.clear', { name: req.params.name }, 15000));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // 核心目录：优先问 Agent（它和最终下载同一条网络），失败再由面板代拉
   router.get('/servers/:id/cores', async (req, res, next) => {
     const server = requireServer(req, res);
@@ -2719,19 +2863,18 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
   });
 
-  // 编辑实例元信息（备注 / 连接地址 / 最大内存）
+  // 编辑实例元信息（备注 / 连接地址 / 最大内存 / 玩家统计与聊天记录开关）
   router.put('/servers/:id/instances/:name', async (req, res, next) => {
     const server = requireServer(req, res);
     if (!server) return;
     const b = req.body || {};
+    const params = { name: req.params.name, note: b.note, address: b.address, memoryMB: b.memoryMB };
+    // 两个记录开关（players / chat）：记录在 Agent 侧，面板离线也照记。
+    // 只在请求里真的带了 tracking 时才下发——「缺字段 = 不动原值」是 Agent 侧的约定，
+    // 这里补一个 undefined 的键虽然当前也无害，但约定就该一眼看得出来。
+    if (b.tracking !== undefined) params.tracking = b.tracking;
     try {
-      res.json(
-        await agent(server)(
-          'instance.edit',
-          { name: req.params.name, note: b.note, address: b.address, memoryMB: b.memoryMB },
-          15000,
-        ),
-      );
+      res.json(await agent(server)('instance.edit', params, 15000));
     } catch (e) {
       next(e);
     }
@@ -3241,6 +3384,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
       // 3) 可选：同时从面板移除该服务器
       if (b.removeServer) {
+        clearOfflineTracking(server.id);
         config.removeServer(server.id);
         log('已从面板移除该服务器\n');
       }
