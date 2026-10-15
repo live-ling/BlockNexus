@@ -74,6 +74,46 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 
 服务器设置页「系统信息」始终显示远端 Agent 版本；落后时出现琥珀色提示条与更新进度。因此**升级面板后不需要手动重装 Agent**，旧版 Agent 首次上线即自动对齐。
 
+### 面板版本与自动更新（应用内更新）
+
+面板设置页「版本与更新」卡片除了对比 GitHub Release，还能**直接升级面板自己**：点「立即更新」→ 看升级预览 → 面板自动替换程序文件并重启。判定逻辑全在 `panel/update.js`（纯函数 + `agent/test-panel-update.js` 单测），执行器是 `scripts/panel-updater.js`。
+
+**能自更新的安装形态**（启动时判定一次，启动横幅会打印）：
+
+| 形态 | 判定条件 | 更新方式 |
+|---|---|---|
+| `portable` | 目录里有 `install.json`（便携包写入）且没有 `.git` | 下载「应用包」替换 `panel/`、`web/dist` 等 |
+| `dir` | 没有 `.git`，但有 `panel/server.js` + `web/dist/index.html` | 同上 |
+| `git-clean` | 有 `.git` 且 `git status --porcelain` 为空 | `git fetch --tags` + 切到 Release 标签（**游离 HEAD**，回开发分支用 `git checkout main`）+ 重建前端（`web/dist` 不在版本库里）；`origin` 不是本项目官方仓库时直接拒绝 |
+| `git-dirty` | 有 `.git` 且**有未提交改动** | **禁用**（避免覆盖你的工作区） |
+| `unknown` | 判断不出来（例如没装 git、被安全软件拦） | **禁用** |
+
+**跨版本升级**：Release 的 `update.json` 里声明 `minSourceVersion`（可直跳的最低来源版本）与 `bridge`（逐跳路径）。源版本过低时不会硬升，而是提示「先升到 vX」并把这一跳限制在桥接版本上（升级完会继续提示下一跳）；没有桥接路径时给手动路径：下载便携包 → **保留 `data/` 目录** → 覆盖程序文件。
+
+**数据迁移**：`data/config.json` 带 `schemaVersion`，新版启动时按 `panel/migrate.js` 的迁移链自动升级（迁移代码属于新版，所以 git / 应用包 / 手动覆盖三种路径都自动生效）。迁移前会把原文件备份到 `data/update/`，**迁移失败时拒绝启动**而不是带着半成品数据跑起来。Release 声明 `irreversible: true` 时升级后不允许自动回滚（备份保留在 `data/update/backup/`）。
+
+**推荐强度与免打扰**：`update.json` 的 `severity` 决定提示方式——`security`（红色横幅，安全更新）、`critical`（琥珀）、`recommended`、`optional`；可「跳过此版本」（记进设置，永久对该版本静默）。本地版本高于线上最新时不提示。
+
+**自动更新**：设置页三选一 `off / notify / auto`（默认 `notify` 只提示）。`auto` 也**必须发布方在 `update.json` 里显式写 `autoSafe: true`** 才会真的自动装，且要求：`severity` 为 `security/critical`、非破坏性、不需要重装 Agent、迁移可逆、面板空闲、非「对外且免密」、未连续失败 3 次、24 小时冷却内不重复。——本项目 v1.0 之前 semver 不严格，所以**不按"minor 就安全"猜**，一切以发布方声明为准；缺 `update.json` 的旧 Release 一律按"需要人工确认"处理。
+
+**完整性校验**：面板从 GitHub 取 `SHA256SUMS.txt` 校验下载的更新包，**校验值只认 GitHub**；下载可走自建镜像（设置页「下载源」，支持 `{name}`/`{version}` 占位符），但镜像不在信任链上。拿不到校验值就**拒绝更新**。解压与写入都按白名单（`panel/`、`web/dist`、`agent/agent.js`、`scripts/`、`images/`、`package.json` 等），`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/` 一律拒绝。
+
+**过程与失败处理**：更新器是独立进程（面板先退出、它再动手）。顺序为「等端口释放 → 备份将被替换的文件 → 替换 → 拉起 → 健康检查 `GET /api/version` 期望新版本」；任何一步失败都回滚程序 + 数据快照并拉起旧版本。日志 `data/update/update.log`，结果 `data/update/last-result.json`（设置页会显示上次结果，可一键回滚到上一版本）。
+
+> 面板更新只换程序文件，**不动 `data/`**（服务器列表、token、SSH 凭据、SMTP/AI 密钥、本地 Agent 数据都在里面）。更新期间正在跑的 MC 实例不受影响（面板重启只影响面板自身，1–3 秒）。
+
+**维护者发布时必须提供的资产**（见 `scripts/build-release.ps1`）：
+
+```
+BlockNexus-v<ver>-portable.zip   首次安装 / 依赖或外壳变化时的完整更新
+BlockNexus-v<ver>-shell.zip      纯外壳（解压到源码根）
+BlockNexus-v<ver>-app.zip        应用包（应用内更新的首选载荷，含 manifest.json）
+update.json                      推荐等级 / 跨版本 / 迁移声明（模板 scripts/update.template.json）
+SHA256SUMS.txt                   上述文件的 SHA256（应用内更新的校验锚）
+```
+
+`gh release create vX.Y.Z BlockNexus-*-portable.zip BlockNexus-*-shell.zip BlockNexus-*-app.zip update.json SHA256SUMS.txt`。发布脚本参数：`-Severity -AutoSafe -Breaking -RequiresAgentReinstall -MinSourceVersion -Bridge -DataSchema -MinSchema -Irreversible -Summary`（默认值偏保守：`recommended`、不自动、按需人工确认）。
+
 ### 本机服务器（host 填 127.0.0.1 / localhost）
 
 面板发现某台服务器的 host 指向本机时，**不走 SSH、也不用 systemd**——面板直接在本机拉起/停止 `agent.js` 进程，服务器设置页会显示「本机 Agent」并给出进程 pid 与目录：
@@ -443,8 +483,12 @@ GET  /api/servers/:id/javas          POST /api/servers/:id/java-use|java-uninsta
 POST /api/servers/:id/instances/:name/retry-install|reinstall|panel-install
 POST /api/settings/ai-test           POST /api/settings/ai-models
 POST /api/servers/:id/instances/:name/ai-analyze
-GET  /api/version                    (当前版本 + GitHub 最新 Release 与更新日志)
-GET  /api/events                     (SSE: status / latency / stats / agent-event / install / agent-update)
+GET  /api/version                    (当前版本 + GitHub 最新 Release 与更新日志 + 自更新能力/推荐强度)
+GET  /api/panel-update/status        (更新进度 / 上次结果 / 能否回滚)
+GET  /api/panel-update/preflight?version=X   (升级预览：迁移项、需重装 Agent 的服务器、是否需完整包)
+POST /api/panel-update               (应用内更新；202 受理，随后面板退出并由更新器接手)
+POST /api/panel-update/rollback      (回滚到上一版本；不可逆迁移后拒绝)
+GET  /api/events                     (SSE: status / latency / stats / agent-event / install / agent-update / panel-update)
 GET  /agent.js                       (Agent 单文件下载，匿名)
 ```
 

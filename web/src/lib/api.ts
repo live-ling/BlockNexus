@@ -344,6 +344,18 @@ export interface Me {
   exposedWithoutAuth?: boolean;
 }
 
+/**
+ * 面板自更新的更新策略（GET/PUT /api/settings 的 update 字段）。
+ * `source` 只影响下载地址（镜像/代理），校验值始终来自 GitHub Release。
+ */
+export interface PanelUpdatePolicy {
+  auto: 'off' | 'notify' | 'auto';
+  /** 自定义下载源模板，可用 {name} / {version} 占位符；空串=官方地址 */
+  source: string;
+  /** 「跳过此版本」：{ 版本号: 忽略时刻 }，后端只存不解释，判定在前端做 */
+  dismissed: Record<string, number>;
+}
+
 /** 面板设置（GET /api/settings；SMTP 密码不回传，只给 hasPass） */
 export interface PanelSettings {
   authEnabled: boolean;
@@ -367,6 +379,8 @@ export interface PanelSettings {
     model: string;
     hasKey: boolean;
   };
+  /** 面板自更新策略（老后端不返回该字段，前端按默认值兜底） */
+  update?: PanelUpdatePolicy;
 }
 
 /** AI 单次调用的用量与耗时统计 */
@@ -420,10 +434,208 @@ export interface AppVersion {
   /** 命中 10 分钟缓存 */
   cached?: boolean;
   error?: string;
+  /** 打包元数据缺失（自更新所需的文件信息不全，只能人工装） */
+  metaMissing?: boolean;
+  /** 当前安装形态：便携版 / 目录 / git 工作区干净或脏 / 未知 */
+  installKind?: 'portable' | 'dir' | 'git-clean' | 'git-dirty' | 'unknown';
+  canSelfUpdate?: boolean;
+  /** 不能自更新的原因码 */
+  updateDisabledReason?: string;
+  /** 原因文案（后端已按当前语言渲染，直接显示） */
+  updateDisabledText?: string;
+  updatePolicy?: { auto: 'off' | 'notify' | 'auto'; source: string };
+  /** 更新建议（老后端不返回；缺失时界面只显示版本对比，不给更新入口） */
+  recommendation?: AppVersionRecommendation;
+  /** 后端记录的更新状态（面板重启后仍存在） */
+  updateState?: PanelUpdateState;
+}
+
+/** 更新建议：后端把「该不该提醒、提醒得多重、能不能自动装」都算好了 */
+export interface AppVersionRecommendation {
+  hasUpdate: boolean;
+  latest: string;
+  severity: 'security' | 'critical' | 'recommended' | 'optional';
+  summary: string;
+  notesUrl: string;
+  /** 破坏性变更（升级前必须备份/读说明） */
+  breaking: boolean;
+  requiresAgentReinstall: boolean;
+  /** 不可逆（无法回滚；界面必须二次确认） */
+  irreversible: boolean;
+  metaMissing: boolean;
+  /** 本次升级要执行的迁移条数 */
+  migrations: number;
+  dismissed: boolean;
+  dismissedAt: number;
+  /** 后端为什么建议自动安装（auto 策略下才会非空） */
+  autoReason: string;
+  error: string;
 }
 
 export async function getVersion(refresh = false): Promise<AppVersion> {
   return api<AppVersion>(`/version${refresh ? '?refresh=1' : ''}`);
+}
+
+// ---------- 面板自更新（下载 → 校验 → 暂存 → 重启换包） ----------
+
+/**
+ * 面板自更新的实时状态（SSE `{type:'panel-update', ...}` 与
+ * GET /api/panel-update/status 的公共部分）。
+ *
+ * 为什么 `from`/`to` 是**两个**字段：更新过程要跨重启活着，只有同时记住
+ * 「从哪来、到哪去」才能在重启后判断这次更新是否真的落地（重启后进程里
+ * 已经没有发起更新的那次内存状态了）。
+ */
+export interface PanelUpdateState {
+  state: 'idle' | 'downloading' | 'verifying' | 'staging' | 'applying' | 'restarting' | 'failed';
+  from: string;
+  to: string;
+  /** 已下载字节数（0 表示未知，界面转不确定态进度条） */
+  progress: number;
+  /** 总字节数（0 表示未知） */
+  total: number;
+  error: string;
+  startedAt: number;
+  mode: 'payload' | 'git' | 'rollback';
+  migrations: { from: number; to: number }[];
+  warnings: string[];
+  requiresAgentReinstall: boolean;
+  irreversible: boolean;
+}
+
+/** 上次更新的结果（重启后仍可读；成功为 ok=true） */
+export interface PanelUpdateLastResult {
+  at: number;
+  from: string;
+  to: string;
+  ok: boolean;
+  rolledBack: boolean;
+  restored?: string;
+  error?: string;
+  irreversible?: boolean;
+  dataBackup?: string;
+}
+
+/** 回滚可用性（不可逆更新成功后后端会关掉它） */
+export interface PanelUpdateRollback {
+  available: boolean;
+  to: string;
+  irreversible: boolean;
+  reasonKey: string;
+}
+
+export type PanelUpdateStatus = PanelUpdateState & {
+  /** 后端是否有一个更新正在进行（含刚提交、尚未进入 downloading 的窗口期） */
+  inFlight: boolean;
+  installKind: string;
+  canSelfUpdate: boolean;
+  lastResult: PanelUpdateLastResult | null;
+  rollback: PanelUpdateRollback;
+};
+
+/** 一次更新的预览（点「立即更新」前必须拿到它：用户先看到要付什么代价） */
+export interface PanelUpdatePreflight {
+  from: string;
+  to: string;
+  latest: string;
+  severity: string;
+  summary: string;
+  notesUrl: string;
+  changelog: string;
+  breaking: boolean;
+  irreversible: boolean;
+  requiresAgentReinstall: boolean;
+  agentsToReinstall: { id: string; name: string }[];
+  migrations: { from: number; to: number }[];
+  /**
+   * direct = 面板自己换包；bridge = 必须先经过一个中间版本（旧版本无法直接跨到最新）；
+   * manual = 只能人工装（界面给下载地址，禁用应用内更新）。
+   */
+  mode: 'direct' | 'bridge' | 'manual';
+  /** mode === 'bridge' 时的中间版本号 */
+  bridgeVersion: string;
+  needsFullPackage: boolean;
+  fullPackageUrl: string;
+  appAssetAvailable: boolean;
+  downloadBytes: number;
+  lockChanged: boolean;
+  nodeOk: boolean;
+  nodeRequired: number;
+  installKind: string;
+  canSelfUpdate: boolean;
+  allowed: boolean;
+  /** 机器可读的拒绝原因码（如 update.disabled-dirty） */
+  reasonKey: string;
+  /** 已按当前语言渲染好的拒绝说明，直接显示即可 */
+  reasonText: string;
+  /** 已本地化的警告行（text 直接显示） */
+  warnings: { code: string; text: string }[];
+  metaMissing: boolean;
+  checkedAt: number;
+  error: string;
+}
+
+/** 升级预览；`version` 缺省表示目标为后端推荐的最新版 */
+export function getPanelUpdatePreflight(version?: string): Promise<PanelUpdatePreflight> {
+  const q = version ? `?version=${encodeURIComponent(version)}` : '';
+  return api<PanelUpdatePreflight>(`/panel-update/preflight${q}`);
+}
+
+export function getPanelUpdateStatus(): Promise<PanelUpdateStatus> {
+  return api<PanelUpdateStatus>('/panel-update/status');
+}
+
+/**
+ * 发起更新（后端 202 受理后异步跑，进度走 SSE / status）。
+ * `confirm` 必须等于 `version`：这是「前端确实把目标版本展示给用户了」的凭据，
+ * 避免旧页面（还停在别的版本上）误触发。
+ * `confirmIrreversible` 只在预览标了不可逆、且用户二次确认后带上。
+ */
+export function applyPanelUpdate(body: {
+  version: string;
+  confirm: string;
+  confirmIrreversible?: true;
+}): Promise<{ ok: boolean; accepted: boolean; version: string; preflight: PanelUpdatePreflight }> {
+  return api('/panel-update', { method: 'POST', body });
+}
+
+export function rollbackPanelUpdate(): Promise<{ ok: boolean; accepted: boolean; rollbackTo: string }> {
+  return api('/panel-update/rollback', { method: 'POST', body: {} });
+}
+
+/** 下载体积展示：面板包以 MB 为主，小于 1MB 时退回 KB，未知时给占位串 */
+export function fmtDownloadBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+/**
+ * 当前版本是否**已达到**目标版本（用于「面板重启回来了，是不是已经升上去」这一判断）。
+ *
+ * 为什么不直接字符串比较：`0.9.0` 与 `0.10.0` 按字典序比会得出反的结论。
+ * 也不用 semver 库：本项目零依赖，而这里只需要「数字段逐个比、非数字段退回相等判断」这一种用途。
+ * 目标版本取不到时返回 false —— 宁可多轮询一会儿，也不要在没升级时误刷页面。
+ */
+export function versionAtLeast(
+  current: string | null | undefined,
+  target: string | null | undefined,
+): boolean {
+  if (!current || !target) return false;
+  const norm = (v: string) => v.trim().replace(/^v/i, '');
+  const a = norm(current);
+  const b = norm(target);
+  if (a === b) return true;
+  const pa = a.split(/[.\-+]/).map((x) => parseInt(x, 10));
+  const pb = b.split(/[.\-+]/).map((x) => parseInt(x, 10));
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i];
+    const y = pb[i];
+    // 任一段不是纯数字（如 0.4.0-beta.1）就无法可靠比较，退回「必须完全相等」
+    if (Number.isNaN(x) || Number.isNaN(y)) return false;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return true;
 }
 
 // ---------- Mod 管理（实例 mods 目录） ----------

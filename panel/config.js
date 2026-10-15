@@ -15,6 +15,9 @@ class Config {
   constructor(file) {
     this.file = file;
     this.data = {
+      // 数据 schema 版本：供 panel/migrate.js 在启动时按需迁移（缺字段的老配置按 1 处理）。
+      // 放在顶层而不是 settings 里——settings 是"用户可改的设置"，schema 是"数据格式"。
+      schemaVersion: 1,
       panel: { port: 3080, username: 'admin', passwordHash: null, authEnabled: false },
       servers: [],
       // 面板设置页：公网域名 / 管理员邮箱 / SMTP / 离线通知 / AI 日志分析
@@ -29,6 +32,12 @@ class Config {
           apiKey: '',
           model: '',
         },
+        // 面板自更新策略（见 panel/update.js 的 shouldAutoApply）：
+        //   auto = 'off' 完全关掉检查；'notify' 只提示（默认，最保守）；'auto' 允许自动应用
+        //   但**只有发布方在 update.json 里显式声明 autoSafe 且非破坏性**时才会真的自动装。
+        //   dismissed = 「跳过此版本」记录（version → 时间戳），永久对该版本静默。
+        //   source = 下载用的镜像前缀（留空=GitHub 直连）；校验值始终来自 GitHub。
+        update: { auto: 'notify', source: '', dismissed: {} },
       },
     };
     this.load();
@@ -52,6 +61,7 @@ class Config {
         smtp: { ...defaults.smtp, ...((raw.settings || {}).smtp || {}) },
         notify: { ...defaults.notify, ...((raw.settings || {}).notify || {}) },
         ai: { ...defaults.ai, ...((raw.settings || {}).ai || {}) },
+        update: { ...defaults.update, ...((raw.settings || {}).update || {}) },
       };
       for (const s of this.data.servers) {
         s.agent = {
@@ -67,6 +77,10 @@ class Config {
         if (!s.agent.mode) s.agent.mode = 'inbound'; // 老配置沿用原来的「Agent 连面板」
       }
       if (!Array.isArray(this.data.servers)) this.data.servers = [];
+      // schemaVersion 归一化：老配置没有该字段、或被人改坏时一律当 1（迁移链的起点）
+      if (!Number.isInteger(this.data.schemaVersion) || this.data.schemaVersion < 1) {
+        this.data.schemaVersion = 1;
+      }
     } catch {
       // 首次启动，文件不存在
     }

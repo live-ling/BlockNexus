@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# 最小权限：CI 只读仓库内容（本工作流不需要写任何东西，也不需要 secrets）。
+# 默认 GITHUB_TOKEN 的权限随仓库设置而变，显式收窄可以避免"某天默认变宽"。
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: 后端语法检查

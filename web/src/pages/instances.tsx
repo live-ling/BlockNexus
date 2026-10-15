@@ -150,8 +150,8 @@ export function InstancesPage({
   useEffect(() => {
     const find = (id: string) => serversRef.current.find((x) => x.id === id);
     return subscribeSSE((e) => {
-      // hello 心跳没有 serverId；带 serverId 的事件才会走到这里
-      if (e.type === 'hello') return;
+      // hello 心跳与面板自更新（panel-update）都没有 serverId；带 serverId 的事件才会走到这里
+      if (e.type === 'hello' || e.type === 'panel-update') return;
       const id = e.serverId;
       if (e.type === 'status') {
         const s = find(id);

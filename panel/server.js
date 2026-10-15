@@ -13,6 +13,9 @@ const { AgentHub } = require('./agentlink');
 const { createApi } = require('./api');
 const { parseTrustProxy } = require('./net');
 const { requestErrorHandler } = require('./http-errors');
+const migrate = require('./migrate');
+const upd = require('./update');
+const { messageOf } = require('./error-codes');
 
 // ---------- 启动参数（命令行优先，其次环境变量）----------
 function argOf(name) {
@@ -59,12 +62,67 @@ function isLoopbackHost(h) {
 const tlsOn = !!(TLS_CERT && TLS_KEY);
 
 const CONFIG_FILE = path.join(__dirname, '..', 'data', 'config.json');
+const ROOT_DIR = path.join(__dirname, '..');
+const UPDATE_DIR = path.join(ROOT_DIR, 'data', 'update');
+
+// ---------- 启动时的数据自迁移 ----------
+// 迁移代码属于**新版**，所以在新版启动早期执行，而不是让旧版的更新器去迁移。
+// 这样 git 形态、应用包形态、手动覆盖便携包三种升级路径都自动享受同一套迁移。
+// 失败一律**拒绝启动**：带着半迁移的数据跑起来，比起不来更危险（面板/migrate.js 保证失败时
+// 不返回半成品数据，这里只需不写入即可）。
+function migrateConfigBeforeLoad() {
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {
+    return; // 不存在 / 内容坏了：交给 Config 自己的首次启动路径处理
+  }
+  const from = migrate.readSchema(raw);
+  if (from >= migrate.CURRENT_SCHEMA) return;
+  const r = migrate.migrateConfig(raw, from);
+  if (!r.ok) {
+    console.error(`\n  ✗ 数据迁移失败：${messageOf(r.error, 'zh') || r.error}`);
+    console.error('    未写入任何内容，旧文件与备份都还在。\n');
+    process.exit(1);
+  }
+  try {
+    fs.mkdirSync(UPDATE_DIR, { recursive: true, mode: 0o700 });
+    const backup = path.join(UPDATE_DIR, `config-schema${from}-${Date.now()}.json`);
+    fs.copyFileSync(CONFIG_FILE, backup);
+    try { fs.chmodSync(backup, 0o600); } catch {}
+    const tmp = `${CONFIG_FILE}.migrate.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(r.data, null, 2));
+    fs.renameSync(tmp, CONFIG_FILE);
+    console.log(`  数据迁移:   schema ${from} → ${migrate.CURRENT_SCHEMA}（原文件已备份到 ${path.relative(ROOT_DIR, backup)}）`);
+  } catch (e) {
+    console.error(`\n  ✗ 数据迁移写回失败：${e.message}\n`);
+    process.exit(1);
+  }
+}
+migrateConfigBeforeLoad();
 
 const config = new Config(CONFIG_FILE);
 config.data.panel.port = PORT;
 config.data.panel.host = HOST;
 const bus = new EventEmitter();
 const hub = new AgentHub(config, bus);
+
+// ---------- 安装形态与退出 ----------
+// 安装形态在启动时算一次：git 工作区是否干净、有没有便携包标记、有没有 panel/web/dist。
+// 「脏工作区」与「判断不了」都不允许应用内更新——宁可不升级，也不覆盖别人的工作区。
+const install = upd.probeInstallKind(ROOT_DIR);
+
+/**
+ * 面板退出。自更新要换掉程序文件，所以更新器必须先等面板**真的**退出。
+ * SSE / Agent WS 都是长连接，不会自己结束：先广播最后状态，再给 300ms 让响应写出去，
+ * 然后强制退出（Agent 侧会自动重连，见 README）。
+ */
+function shutdown(reason) {
+  console.log(`\n  面板正在退出（${reason || 'shutdown'}）…`);
+  try { config.save(); } catch {}
+  try { server.close(); } catch {}
+  setTimeout(() => process.exit(0), 300);
+}
 
 // ---------- 密码保护：默认关闭（本地服务），可用环境变量或面板设置开启 ----------
 if (process.env.BLOCKNEXUS_PASSWORD) {
@@ -117,8 +175,12 @@ app.use('/api', createApi(config, hub, bus, {}, {
   // 是否可能被本机之外访问到（审计 H5 的告警依据）：
   //   · 监听非回环地址（--host 0.0.0.0 / 具体 IP / 主机名）
   //   · 或配置了 trust proxy —— 说明前面有反代，面板虽只听 127.0.0.1 但实际对外
-  // 只用于提示，**不改变任何行为**。
+  // 只用于提示与「对外+免密时禁止自更新」，**不改变任何其它行为**。
   mayBeExposed: !isLoopbackHost(HOST) || TRUST_PROXY !== null,
+  // 安装形态（能否应用内更新）与更新落地需要的几件事：启动时算一次
+  install,
+  launcherArgs: { host: HOST, port: PORT, scheme: tlsOn ? 'https' : 'http' },
+  onShutdown: shutdown,
 }));
 
 // SPA history 路由回退：/settings、/server/... 等路径直达时返回 index.html。
@@ -185,6 +247,12 @@ server.listen(PORT, HOST, () => {
     console.log('              ⚠ 请确认面板不直连公网，否则 X-Forwarded-For 可被伪造绕过限流');
   }
   console.log(`  安全 Cookie: ${tlsOn || SECURE_COOKIE ? 'Secure 已启用' : '未启用（纯 HTTP 访问时正常）'}`);
+  console.log(
+    `  安装形态:   ${install.kind}` +
+      (install.canSelfUpdate
+        ? '（支持应用内更新）'
+        : `（不支持应用内更新：${messageOf(install.reasonKey, 'zh') || install.reasonKey}）`),
+  );
   console.log('');
   console.log('  配置文件:   ' + CONFIG_FILE);
   console.log('');

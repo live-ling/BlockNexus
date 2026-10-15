@@ -1,20 +1,113 @@
 import { navigate } from '@/lib/router';
-// 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置
+// 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置 / 版本与更新
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
-import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, Rocket, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertTriangle, ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Download, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, RotateCcw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Markdown } from '@/components/markdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { aiListModels, aiTest, api, errText, getVersion, type AiTestResult, type AppVersion, type PanelSettings } from '@/lib/api';
+import {
+  aiListModels,
+  aiTest,
+  api,
+  applyPanelUpdate,
+  errText,
+  fmtDownloadBytes,
+  getPanelUpdatePreflight,
+  getPanelUpdateStatus,
+  getVersion,
+  rollbackPanelUpdate,
+  timeago,
+  type AiTestResult,
+  type AppVersion,
+  type AppVersionRecommendation,
+  type PanelSettings,
+  type PanelUpdatePolicy,
+  type PanelUpdatePreflight,
+  type PanelUpdateState,
+  type PanelUpdateStatus,
+} from '@/lib/api';
 import { $ } from '@/lib/i18n';
 import { getLanguage, setLanguage, LANGUAGE_LABELS, type LanguageCode } from '@/lib/i18n';
+import { subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
+
+/** 更新策略的兜底值：老后端不返回 update 字段时界面仍要能用（默认仅提醒） */
+const DEFAULT_UPDATE_POLICY: PanelUpdatePolicy = { auto: 'notify', source: '', dismissed: {} };
+
+/**
+ * 正在跑的状态集合：这几个阶段都要显示进度并**禁用其它操作**（换包途中再点一次等于把面板拆了）
+ */
+const RUNNING_STATES: PanelUpdateState['state'][] = [
+  'downloading',
+  'verifying',
+  'staging',
+  'applying',
+  'restarting',
+];
+
+/** 更新进入重启阶段后多久算「卡住了」（面板没起来，需要人工介入） */
+const RESTART_STALL_MS = 3 * 60 * 1000;
+
+/**
+ * 更新过程的阶段文案；'idle' 与 'failed' 不会走到这里（前者无进度可显示，后者单独渲染错误块）。
+ * 放在组件外面是为了让两处渲染（横幅与行内）共用同一份映射，避免新增阶段时只改一处。
+ */
+function phaseText(state: PanelUpdateState): string {
+  switch (state.state) {
+    case 'downloading':
+      return $('panelSettings.update.phase.downloading');
+    case 'verifying':
+      return $('panelSettings.update.phase.verifying');
+    case 'staging':
+      return $('panelSettings.update.phase.staging');
+    case 'applying':
+      return $('panelSettings.update.phase.applying');
+    case 'restarting':
+      return $('panelSettings.update.phase.restarting');
+    default:
+      return $('panelSettings.update.phase.idle');
+  }
+}
+
+/** severity → 徽章/横幅配色；security 用 destructive 语义色，critical 用 amber，其余中性 */
+function severityBox(sev: AppVersionRecommendation['severity']): string {
+  if (sev === 'security') return 'border-destructive/30 bg-destructive/10';
+  if (sev === 'critical') return 'border-amber-500/30 bg-amber-500/10';
+  return 'border-border bg-muted/30';
+}
+
+function severityChip(sev: AppVersionRecommendation['severity']): string {
+  if (sev === 'security') return 'border-destructive/30 bg-destructive/10 text-destructive';
+  if (sev === 'critical') return 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400';
+  return 'border-border bg-muted/50 text-muted-foreground';
+}
+
+function severityDot(sev: AppVersionRecommendation['severity']): string {
+  if (sev === 'security') return 'bg-destructive';
+  if (sev === 'critical') return 'bg-amber-500';
+  return 'bg-muted-foreground/60';
+}
+
+function severityText(sev: AppVersionRecommendation['severity']): string {
+  switch (sev) {
+    case 'security':
+      return $('panelSettings.update.severity.security');
+    case 'critical':
+      return $('panelSettings.update.severity.critical');
+    case 'recommended':
+      return $('panelSettings.update.severity.recommended');
+    default:
+      return $('panelSettings.update.severity.optional');
+  }
+}
 
 // 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
 const ACCENTS = {
@@ -68,6 +161,12 @@ export function PanelSettingsPage({
             model: raw.ai?.model ?? '',
             hasKey: raw.ai?.hasKey ?? false,
           },
+          // 更新策略：后端老版本不返回 update，兜底成「仅提醒」，否则策略卡整块不可用
+          update: {
+            auto: raw.update?.auto ?? DEFAULT_UPDATE_POLICY.auto,
+            source: raw.update?.source ?? '',
+            dismissed: raw.update?.dismissed ?? {},
+          },
         });
       })
       .catch((e) => error($('panelSettings.error.load'), errText(e)));
@@ -103,7 +202,9 @@ export function PanelSettingsPage({
         <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
         <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
         <LanguageCard accent="language" className="col-span-12" />
-        <VersionCard accent="update" className="col-span-12" />
+        {/* 策略卡紧随版本卡：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
+        <VersionCard data={data} reload={load} accent="update" className="col-span-12" />
+        <UpdatePolicyCard data={data} reload={load} accent="info" className="col-span-12" />
         <AboutEntryCard accent="info" className="col-span-12" />
       </div>
     </div>
@@ -224,13 +325,40 @@ function LanguageCard({ accent, className = '' }: { accent: Accent; className?: 
   );
 }
 
-/** 版本与更新：当前版本 + GitHub 最新 Release 对比；进入页面自动检查一次（后端缓存 10 分钟） */
-function VersionCard({ accent, className = '' }: { accent: Accent; className?: string }) {
-  const { error: toastError } = useToastHelpers();
+/**
+ * 版本与更新：当前版本 / 最新 Release / 更新建议 / 应用内自更新（预览 → 进度 → 结果 → 回滚）。
+ *
+ * 为什么「先预览再更新」而不是点一下直接升级：
+ *   应用内更新会替换面板自己的文件并重启面板，代价（下载量、数据迁移、需要重装 Agent 的服务器、
+ *   能不能回滚）必须先摊开给用户看；后端也把这套判断做成了独立的 preflight 接口。
+ *   所以这里的流程固定为：点「立即更新」→ 取 preflight → 就地展开预览 → 用户确认 → POST 受理。
+ */
+function VersionCard({
+  data,
+  reload,
+  accent,
+  className = '',
+}: {
+  data: PanelSettings;
+  reload: () => void;
+  accent?: Accent;
+  className?: string;
+}) {
+  const { success, error: toastError } = useToastHelpers();
   const [info, setInfo] = useState<AppVersion | null>(null);
   const [busy, setBusy] = useState(false);
   // 更新日志默认折叠，点标题行展开
   const [logOpen, setLogOpen] = useState(false);
+  const [status, setStatus] = useState<PanelUpdateStatus | null>(null);
+  const [preflight, setPreflight] = useState<PanelUpdatePreflight | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [irreversibleOk, setIrreversibleOk] = useState(false);
+  const [rollbackBusy, setRollbackBusy] = useState(false);
+  // 「稍后提醒」是纯本地会话内状态：只为不打断当前手头的事，刷新页面即恢复提醒
+  const [snoozed, setSnoozed] = useState<string | null>(null);
+  // 上次结果一开始只在 GET /status 里；SSE 推 panel-update 时的负载不含它，合并时别把它抹掉
+  const [lastResult, setLastResult] = useState<PanelUpdateStatus['lastResult']>(null);
 
   const check = useCallback(
     (refresh: boolean) => {
@@ -243,11 +371,165 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
     [toastError],
   );
 
+  /** 拉更新状态；silent=true 给轮询用（一秒一次的错误 toast 会刷屏） */
+  const loadStatus = useCallback(
+    async (silent = false) => {
+      try {
+        const st = await getPanelUpdateStatus();
+        setStatus(st);
+        setLastResult(st.lastResult);
+        return st;
+      } catch (e) {
+        if (!silent) toastError($('panelSettings.version.error.check'), errText(e));
+        return null;
+      }
+    },
+    [toastError],
+  );
+
   useEffect(() => {
     check(false);
-  }, [check]);
+    void loadStatus();
+  }, [check, loadStatus]);
 
+  // 更新过程的实时进度：SSE 优先（后端在每次状态变化时推），拿不到就由下面的轮询兜底。
+  // 事件负载与 PanelUpdateState 字段一一对应（同一个后端对象），所以能直接搬进状态。
+  useEffect(
+    () =>
+      subscribeSSE((e) => {
+        if (e.type !== 'panel-update') return;
+        // SSE 负载里没有 inFlight/lastResult/rollback（那是 /status 才有的），
+        // 所以只覆盖状态字段、其余保留上次 /status 的值——否则轮询间隙回滚按钮会闪没
+        const { type: _type, ...state } = e;
+        setStatus((cur) => ({
+          ...state,
+          inFlight: RUNNING_STATES.includes(state.state),
+          installKind: cur?.installKind ?? '',
+          canSelfUpdate: cur?.canSelfUpdate ?? false,
+          lastResult: cur?.lastResult ?? null,
+          rollback: cur?.rollback ?? { available: false, to: '', irreversible: false, reasonKey: '' },
+        }));
+      }),
+    [],
+  );
+
+  const updateState = status ?? (info ? info.updateState : null);
+  const running = !!updateState && RUNNING_STATES.includes(updateState.state);
+
+  // 轮询只在「面板正在重启」或「本地刚刚提交、后端还没进入更新态」时启动。
+  // 平时绝不轮询：状态变化本来就由 SSE 推送，多一个定时器只是白耗。
+  const polling = updateState?.state === 'restarting' || applying;
+  useEffect(() => {
+    if (!polling) return;
+    const timer = setInterval(() => void loadStatus(true), 2000);
+    return () => clearInterval(timer);
+  }, [polling, loadStatus]);
+
+  const rec = info?.recommendation ?? null;
   const hasUpdate = !!info?.hasUpdate;
+  const selfUpdate = !!info?.canSelfUpdate;
+  const dismissed = !!(rec?.dismissed || (rec?.latest && data.update?.dismissed?.[rec.latest]));
+  const snoozeHide = snoozed !== null && snoozed === rec?.latest;
+  // 只有「能自动装 + 有新版本 + 没被跳过 + 没被本次会话稍后提醒」才出更新横幅
+  const showBanner = selfUpdate && hasUpdate && !dismissed && !snoozeHide;
+
+  /** 取升级预览并就地展开；失败用 toast 兜底（errText 已本地化） */
+  const openPreflight = async (version: string) => {
+    setPreflightBusy(true);
+    try {
+      const pf = await getPanelUpdatePreflight(version);
+      setPreflight(pf);
+      setIrreversibleOk(false);
+    } catch (e) {
+      toastError($('panelSettings.update.preflight.failed'), errText(e));
+    } finally {
+      setPreflightBusy(false);
+    }
+  };
+
+  /**
+   * 受理更新。`target` 默认取预览里的目标版本；bridge 模式传入中间版本（先升到它再继续）。
+   * confirmIrreversible 只在预览标了不可逆、且用户二次确认后带上——后端据此把「不可逆」
+   * 变成一次显式的知情同意，而不是前端自己判断后静默放行。
+   */
+  const startUpdate = async (pf: PanelUpdatePreflight, target?: string) => {
+    const version = target || pf.to || pf.latest;
+    if (!version) return;
+    setApplying(true);
+    try {
+      await applyPanelUpdate({
+        version,
+        confirm: version,
+        ...(pf.irreversible && (!target || target === pf.to) ? { confirmIrreversible: true as const } : {}),
+      });
+      // 通知 App：本地已发起更新，请开始轮询 /panel-update/status 并在版本变化后自动刷新。
+      // 走 window 事件而不是 Context/全局 store：只有 App 一个监听者，不值得为此引入共享状态。
+      window.dispatchEvent(new Event('panel-update-submitted'));
+      success($('panelSettings.update.accepted'), $('panelSettings.update.acceptedDetail', version));
+      setPreflight(null);
+      setIrreversibleOk(false);
+      void loadStatus(true);
+    } catch (e) {
+      // 失败必须可见：这里最常见的是「面板正忙 / 安装形态变了」，吞掉会让用户以为点空了
+      toastError($('panelSettings.update.startFailed'), errText(e));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  /** 跳过此版本（写进后端设置，换页/刷新后依然生效）；稍后提醒只藏本次会话 */
+  const dismissVersion = async () => {
+    if (!rec?.latest) return;
+    try {
+      await api('/settings', {
+        method: 'PUT',
+        body: { update: { dismissed: { ...(data.update?.dismissed ?? {}), [rec.latest]: Date.now() } } },
+      });
+      success($('panelSettings.saved'), $('panelSettings.update.dismissedDetail', rec.latest));
+      reload();
+    } catch (e) {
+      toastError($('panelSettings.update.dismissFailed'), errText(e));
+    }
+  };
+
+  // 回滚同样要重启面板换文件，所以先确认；这里用 window.confirm 足够，
+  // 不值得为一次性动作再引一个对话框组件（也就不会跟服务端设置页的改动打架）
+  const rollback = async () => {
+    const to = status?.rollback?.to || '';
+    if (!window.confirm($('panelSettings.update.rollback.confirm', to || '…'))) return;
+    setRollbackBusy(true);
+    try {
+      await rollbackPanelUpdate();
+      success($('panelSettings.update.rollback.accepted'));
+      void loadStatus(true);
+    } catch (e) {
+      toastError($('panelSettings.update.rollback.failed'), errText(e));
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
+
+  // 失败时给出错误并停在原地（可重试）；进度条只在真正跑的时候出现
+  const failedNow = updateState?.state === 'failed';
+  /**
+   * 重启态本身没有进度，只能靠「进入了多久」判断是不是卡住（面板没起来，需要人工介入）。
+   * 计时从**进入重启的那一刻**开始，不能用 startedAt —— 那是持久化字段，
+   * 上一次失败的更新时间会让刚打开的页面立刻误报卡住。
+   * 离开重启态时不在这里写 state（渲染期同步 setState 会多一轮渲染）：
+   * 「是不是重启中」本来就是渲染条件之一，旧值自然不会被读到。
+   */
+  const restartSince = useRef<number | null>(null);
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (updateState?.state !== 'restarting') {
+      restartSince.current = null;
+      return;
+    }
+    if (restartSince.current === null) restartSince.current = Date.now();
+    const timer = setTimeout(() => setStalled(true), RESTART_STALL_MS);
+    return () => clearTimeout(timer);
+  }, [updateState?.state]);
+
   return (
     <SettingsCard
       title={$('panelSettings.version.title')}
@@ -258,9 +540,14 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
       status={
         info && !busy ? (
           hasUpdate ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${severityChip(rec?.severity ?? 'optional')}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${severityDot(rec?.severity ?? 'optional')}`} />
               {$('panelSettings.version.hasNew')}
+            </span>
+          ) : failedNow ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">
+              <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+              {$('panelSettings.update.failed')}
             </span>
           ) : (
             <StateChip ok okText={$('panelSettings.version.latest')} badText="" />
@@ -293,6 +580,10 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
             {$('panelSettings.version.checkFailed', info.error)}
           </p>
         )}
+        {/* 不能自更新时只说明原因（后端已本地化），不给按钮——点了也只会得到一个错误 */}
+        {info && !selfUpdate && info.updateDisabledText && (
+          <p className="leading-snug text-muted-foreground">{$('panelSettings.update.disabledPrefix')}{info.updateDisabledText}</p>
+        )}
         {hasUpdate && info?.releaseUrl && (
           <a
             href={info.releaseUrl}
@@ -304,6 +595,226 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
           </a>
         )}
       </div>
+
+      {/* 进度：跑起来时占最显眼的位置；更新中其余操作由 disabled 关掉（见下） */}
+      {running && updateState && (
+        <div className="grid gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5">
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            {phaseText(updateState)}
+          </div>
+          {updateState.total > 0 ? (
+            <Progress value={Math.round((updateState.progress / updateState.total) * 100)} showValue />
+          ) : (
+            /* 无总字节数（git 模式等）时给不确定态：宁可不给百分比，也不要编一个假的 */
+            <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+            </div>
+          )}
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {$('panelSettings.update.restartHint')}
+          </p>
+          {stalled && <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">{$('panelSettings.update.stalled')}</p>}
+        </div>
+      )}
+
+      {/* 更新失败：错误来自后端（已本地化），保留重试入口 */}
+      {failedNow && updateState?.error && (
+        <div className="grid gap-1 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5">
+          <div className="flex items-center gap-2 text-xs font-medium text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            {$('panelSettings.update.failed')}
+          </div>
+          <p className="text-[11px] leading-relaxed text-destructive">{updateState.error}</p>
+          {updateState.warnings?.map((w) => (
+            <p key={w} className="text-[11px] leading-relaxed text-muted-foreground">
+              {w}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* 建议横幅：颜色按 severity 分级，security 用 destructive、critical 用 amber，其余中性 */}
+      {showBanner && !running && (
+        <div className={`grid gap-2 rounded-lg border px-3 py-2.5 ${severityBox(rec?.severity ?? 'optional')}`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${severityChip(rec?.severity ?? 'optional')}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${severityDot(rec?.severity ?? 'optional')}`} />
+              {severityText(rec?.severity ?? 'optional')}
+            </span>
+            {rec?.summary && <span className="text-xs font-medium">{rec.summary}</span>}
+          </div>
+          <div className="grid gap-1 text-[11px] leading-relaxed">
+            {rec?.breaking && <p>{$('panelSettings.update.warn.breaking')}</p>}
+            {rec?.irreversible && <p>{$('panelSettings.update.warn.irreversible')}</p>}
+            {rec?.requiresAgentReinstall && <p>{$('panelSettings.update.warn.agentReinstall')}</p>}
+            {rec?.metaMissing && <p className="text-muted-foreground">{$('panelSettings.update.metaMissing')}</p>}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {rec?.notesUrl && (
+              <a
+                href={rec.notesUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] text-cyan-600 underline underline-offset-2 hover:text-cyan-500 dark:text-cyan-400"
+              >
+                {$('panelSettings.update.notes')}
+              </a>
+            )}
+            {rec?.autoReason && <span className="text-[11px] text-muted-foreground">{rec.autoReason}</span>}
+          </div>
+        </div>
+      )}
+
+      {/* 升级预览（就地展开，不引新弹窗组件） */}
+      {preflight && !running && (
+        <div className="grid gap-2.5 rounded-lg border bg-muted/30 px-3 py-2.5">
+          <b className="text-xs font-medium">{$('panelSettings.update.preflight.title')}</b>
+          <div className="grid gap-x-6 gap-y-1 text-xs">
+            <div className="flex justify-between gap-3">
+              <span className="text-muted-foreground">{$('panelSettings.update.preflight.target')}</span>
+              <span className="font-mono">v{preflight.to || preflight.latest}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-muted-foreground">{$('panelSettings.update.preflight.size')}</span>
+              <span className="font-mono">{fmtDownloadBytes(preflight.downloadBytes)}</span>
+            </div>
+          </div>
+          {preflight.migrations?.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              {$('panelSettings.update.preflight.migrations', preflight.migrations.length)}
+            </p>
+          )}
+          {preflight.agentsToReinstall?.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              {$(
+                'panelSettings.update.preflight.agents',
+                preflight.agentsToReinstall.map((a) => a.name).join('、'),
+              )}
+            </p>
+          )}
+          {preflight.warnings?.map((w) => (
+            <p key={w.code} className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+              {w.text}
+            </p>
+          ))}
+          {!preflight.nodeOk && (
+            <p className="text-[11px] leading-relaxed text-destructive">
+              {$('panelSettings.update.preflight.node', preflight.nodeRequired)}
+            </p>
+          )}
+          {preflight.mode === 'bridge' && preflight.bridgeVersion && (
+            <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+              {$('panelSettings.update.preflight.bridge', preflight.bridgeVersion)}
+            </p>
+          )}
+          {preflight.needsFullPackage && (
+            <div className="grid gap-1.5 rounded-md border bg-card px-2.5 py-2">
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {$('panelSettings.update.preflight.manual')}
+              </p>
+              {preflight.fullPackageUrl && (
+                <a
+                  href={preflight.fullPackageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-[11px] text-cyan-600 underline underline-offset-2 hover:text-cyan-500 dark:text-cyan-400"
+                >
+                  <Download className="h-3 w-3" />
+                  {$('panelSettings.update.preflight.download')}
+                </a>
+              )}
+            </div>
+          )}
+          {preflight.metaMissing && <p className="text-[11px] text-muted-foreground">{$('panelSettings.update.metaMissing')}</p>}
+          {/* reasonText 是后端渲染好的拒绝说明：显示它并禁用按钮，而不是自己拼一句 */}
+          {preflight.reasonText && <p className="text-[11px] leading-relaxed text-destructive">{preflight.reasonText}</p>}
+          {preflight.error && <p className="text-[11px] leading-relaxed text-destructive">{preflight.error}</p>}
+          {/*
+            不可逆更新要一次显式勾选：这类更新没有回滚包，误点一次就没退路了。
+            勾选状态不参与「能不能装」的后端判定，只是前端这道防误触的闸。
+          */}
+          {preflight.irreversible && (
+            <label className="flex items-start gap-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+              <Checkbox
+                className="mt-0.5"
+                checked={irreversibleOk}
+                onCheckedChange={(v) => setIrreversibleOk(v === true)}
+                aria-label={$('panelSettings.update.preflight.irreversibleConfirm')}
+              />
+              <span>
+                {$('panelSettings.update.warn.irreversible')}
+                <br />
+                {$('panelSettings.update.preflight.irreversibleConfirm')}
+              </span>
+            </label>
+          )}
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
+            <Button variant="ghost" size="sm" onClick={() => setPreflight(null)} disabled={applying}>
+              {$('panelSettings.update.cancel')}
+            </Button>
+            {preflight.mode === 'bridge' && preflight.bridgeVersion ? (
+              // 跨版本不能一步到位：只允许先升到中间版本，文案与按钮都指向它
+              <Button
+                size="sm"
+                disabled={applying || !preflight.allowed || !preflight.bridgeVersion}
+                onClick={() => void startUpdate(preflight, preflight.bridgeVersion)}
+              >
+                {applying ? $('panelSettings.update.busy') : $('panelSettings.update.preflight.bridgeAction', preflight.bridgeVersion)}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={
+                  applying ||
+                  !preflight.allowed ||
+                  preflight.needsFullPackage ||
+                  !preflight.nodeOk ||
+                  // 不可逆更新必须显式勾一次：二次点击本身就是确认动作（不引 Checkbox 依赖）
+                  (preflight.irreversible && !irreversibleOk)
+                }
+                onClick={() => void startUpdate(preflight)}
+              >
+                {applying
+                  ? $('panelSettings.update.busy')
+                  : preflight.irreversible
+                    ? $('panelSettings.update.confirmIrreversible')
+                    : $('panelSettings.update.start')}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 上次更新结果（后端持久化）：成功/失败/已回滚 都在这条里说明 */}
+      {lastResult && !running && (
+        <div className="grid gap-1 rounded-lg border bg-muted/30 px-3 py-2.5">
+          <b className="text-xs font-medium">
+            {$('panelSettings.update.lastResult.title', timeago(lastResult.at))}
+          </b>
+          {lastResult.ok ? (
+            <p className="text-[11px] text-emerald-600 dark:text-emerald-400">
+              {$('panelSettings.update.lastResult.ok', lastResult.to)}
+            </p>
+          ) : (
+            <p className="text-[11px] text-destructive">
+              {$('panelSettings.update.lastResult.failed', lastResult.to, lastResult.error || '')}
+            </p>
+          )}
+          {lastResult.rolledBack && (
+            <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+              {$('panelSettings.update.lastResult.rolledBack')}
+              {lastResult.restored ? ` · ${$('panelSettings.update.lastResult.restored', lastResult.restored)}` : ''}
+            </p>
+          )}
+          {lastResult.dataBackup && (
+            <p className="break-all font-mono text-[11px] text-muted-foreground">
+              {$('panelSettings.update.lastResult.dataBackup', lastResult.dataBackup)}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* 更新日志：默认折叠；最新 Release 的正文（Markdown 渲染），无内容时不占位 */}
       {info?.changelog ? (
         <div className="rounded-lg border bg-muted/30">
@@ -326,10 +837,160 @@ function VersionCard({ accent, className = '' }: { accent: Accent; className?: s
           )}
         </div>
       ) : null}
-      <div className="mt-auto flex items-center justify-end pt-1">
-        <Button variant="outline" size="sm" disabled={busy} onClick={() => check(true)}>
+
+      {/*
+        操作区。更新进行中一律禁用：换包（staging/applying/restarting）期间面板的文件正在被替换，
+        此时再点一次更新、或触发别的会写配置的操作，后果都是半成品状态——前端这一层必须关掉入口。
+        回滚按钮只在后端说 available 时出现（不可逆更新成功后它会被关掉）。
+      */}
+      <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-1">
+        {status?.rollback?.available && !running && (
+          <Button variant="outline" size="sm" disabled={rollbackBusy} onClick={() => void rollback()}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            {rollbackBusy
+              ? $('panelSettings.update.rollback.busy')
+              : $('panelSettings.update.rollback', status.rollback.to)}
+          </Button>
+        )}
+        {showBanner && !running && (
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setSnoozed(rec?.latest ?? null)}>
+              {$('panelSettings.update.snooze')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={!rec?.latest} onClick={() => void dismissVersion()}>
+              {$('panelSettings.update.dismiss')}
+            </Button>
+          </>
+        )}
+        {selfUpdate && hasUpdate && !running && (
+          <Button
+            size="sm"
+            disabled={preflightBusy || applying}
+            onClick={() => void openPreflight(rec?.latest || info?.latest || '')}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {preflightBusy ? $('panelSettings.update.preflight.checking') : $('panelSettings.update.apply')}
+          </Button>
+        )}
+        <Button variant="outline" size="sm" disabled={busy || running} onClick={() => check(true)}>
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
           {busy ? $('panelSettings.version.checking') : $('panelSettings.version.check')}
+        </Button>
+      </div>
+    </SettingsCard>
+  );
+}
+
+/**
+ * 更新策略：off / notify / auto 三选一 + 自定义下载源。
+ *
+ * 为什么 auto 也要「发布方声明可安全自动安装」才生效：
+ *   面板自更新会替换自己的可执行文件并重启，出了问题是没法从界面上救回来的；
+ *   所以自动只能用在发布方明确标注过、且**没有**破坏性/跨版本/不可逆属性的版本上。
+ *   跨版本与破坏性更新永远要用户点确认——这条取舍不交给「用户开了自动就全自动」，
+ *   否则一次自动升级就能把用户留在无法回滚的坏版本上。
+ */
+function UpdatePolicyCard({
+  data,
+  reload,
+  accent,
+  className = '',
+}: {
+  data: PanelSettings;
+  reload: () => void;
+  accent?: Accent;
+  className?: string;
+}) {
+  const { success, error } = useToastHelpers();
+  const [auto, setAuto] = useState<PanelUpdatePolicy['auto']>(data.update?.auto ?? DEFAULT_UPDATE_POLICY.auto);
+  const [source, setSource] = useState(data.update?.source ?? '');
+  const [saving, setSaving] = useState(false);
+
+  // 依赖具体字段而非 data.update 整体：load() 每次都会造一个新对象，
+  // 按对象引用同步会把用户正在编辑的下载源覆盖回旧值
+  useEffect(() => {
+    setAuto(data.update?.auto ?? DEFAULT_UPDATE_POLICY.auto);
+    setSource(data.update?.source ?? '');
+  }, [data.update?.auto, data.update?.source]);
+
+  const modes: PanelUpdatePolicy['auto'][] = ['off', 'notify', 'auto'];
+  const modeLabel: Record<PanelUpdatePolicy['auto'], string> = {
+    off: $('panelSettings.update.auto.off'),
+    notify: $('panelSettings.update.auto.notify'),
+    auto: $('panelSettings.update.auto.auto'),
+  };
+  const modeHint: Record<PanelUpdatePolicy['auto'], string> = {
+    off: $('panelSettings.update.auto.hint.off'),
+    notify: $('panelSettings.update.auto.hint.notify'),
+    auto: $('panelSettings.update.auto.hint.auto'),
+  };
+  const sourceTrim = source.trim();
+  const sourceInvalid = !!sourceTrim && !/^https?:\/\//i.test(sourceTrim);
+  // 与「保存后重进页面」看到的状态一致即视为没改动，避免空 PUT
+  const nothingChanged = auto === (data.update?.auto ?? DEFAULT_UPDATE_POLICY.auto) && sourceTrim === (data.update?.source ?? '');
+
+  return (
+    <SettingsCard
+      title={$('panelSettings.update.policy.title')}
+      description={$('panelSettings.update.policy.desc')}
+      icon={<RefreshCw className="h-4 w-4" />}
+      accent={accent}
+      className={className}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        {/* 三选一：用按钮组而不是下拉，选项只有三个且说明文字要随选择变化 */}
+        <Field label={$('panelSettings.update.auto.title')} hint={modeHint[auto]}>
+          <div className="inline-flex w-fit rounded-lg border border-border bg-muted/40 p-0.5">
+            {modes.map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={saving}
+                onClick={() => setAuto(m)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60 ${
+                  auto === m
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {modeLabel[m]}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <Field
+          htmlFor="ps-update-source"
+          label={$('panelSettings.update.source')}
+          hint={$('panelSettings.update.source.hint')}
+          error={sourceInvalid ? $('panelSettings.update.source.invalid') : undefined}
+        >
+          <Input
+            id="ps-update-source"
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            placeholder={$('panelSettings.update.source.placeholder')}
+          />
+        </Field>
+      </div>
+      <div className="mt-auto flex justify-end">
+        <Button
+          size="sm"
+          disabled={saving || sourceInvalid || nothingChanged}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              // 只发策略字段：dismissed 由版本卡单独维护，这里带上会让「跳过此版本」互相覆盖
+              await api('/settings', { method: 'PUT', body: { update: { auto, source: sourceTrim } } });
+              success($('panelSettings.update.policy.saved'));
+              reload();
+            } catch (e) {
+              error($('panelSettings.update.policy.saveFailed'), errText(e));
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {$('panelSettings.update.policy.save')}
         </Button>
       </div>
     </SettingsCard>
