@@ -40,16 +40,15 @@ node panel/server.js --host 0.0.0.0   --tls-cert cert.pem --tls-key key.pem     
 # 反向代理后：--trust-proxy 1（可信代理层数）；面板自身是 HTTP 但外部走 HTTPS 时再加 --secure-cookies
 ```
 
-**默认无密码**（本地服务，打开即用；此时顶栏不显示「退出登录」）。如需暴露给局域网/公网，可在面板右上角「设置」中开启登录保护：
+**默认无密码**（本地服务，打开即用；此时顶栏不显示「退出登录」）。如需暴露给局域网/公网，在面板右上角「设置」开启登录保护（也可用 `BLOCKNEXUS_USERNAME` / `BLOCKNEXUS_PASSWORD` 启动时强制开启）：
 
 - **用户名 + 密码**双重校验（用户名默认 `admin`，可自定义为 3–40 位字母数字与 `_ . @ -`；密码至少 6 位）；两者都用定长摘要做定时安全比较，避免时序/长度泄露；
-- **失败限流**：同一来源连续失败 5 次锁定 5 分钟，锁定期内即使密码正确也会被拒（提示剩余秒数）；成功登录即清零计数；开关仅存在于面板进程内存中；
-- 开关登录时会自动为当前浏览器发放会话（无需重新登录），关闭后立即恢复免密访问；
-- 也可用环境变量启动强制开启：`BLOCKNEXUS_PASSWORD=<密码> BLOCKNEXUS_USERNAME=<用户名> npm start`。
+- **失败限流**：同一来源连续失败 5 次锁定 5 分钟，锁定期内即使密码正确也会被拒（提示剩余秒数）；成功登录即清零计数；
+- 开关登录时会自动为当前浏览器发放会话（无需重新登录），关闭后立即恢复免密访问。
 
-> 内存推荐：新建实例时「最大内存」下拉的首项 **X（推荐）** 会按服务器物理内存自动计算（一半、向下对齐 512MB、上限 8GB）并默认选中，也可选预设值或「自定义…」精确填写 MB。
+> 新建实例时「最大内存」下拉的首项 **X（推荐）** 会按服务器物理内存自动计算（一半、向下对齐 512MB、上限 8GB）并默认选中，也可选预设值或「自定义…」精确填写 MB。
 
-控制台会打印面板地址与**初始管理密码**（也可用环境变量 `BLOCKNEXUS_PASSWORD` 指定），浏览器打开 `http://127.0.0.1:3080` 登录。
+启动后控制台会打印**访问地址、监听范围与密码保护状态**；浏览器打开 `http://127.0.0.1:3080` 即可（默认免密直接进入）。
 
 ### 添加服务器并安装 Agent
 
@@ -76,43 +75,22 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 
 ### 面板版本与自动更新（应用内更新）
 
-面板设置页「版本与更新」卡片除了对比 GitHub Release，还能**直接升级面板自己**：点「立即更新」→ 看升级预览 → 面板自动替换程序文件并重启。判定逻辑全在 `panel/update.js`（纯函数 + `agent/test-panel-update.js` 单测），执行器是 `scripts/panel-updater.js`。
+设置页「版本与更新」卡片除了对比 GitHub Release，还能**直接升级面板自己**：点「立即更新」→ 看升级预览 → 替换程序文件并自动重启。**只换程序文件、不动 `data/`**（服务器列表、token、SSH 凭据、SMTP/AI 密钥都在里面），面板重启 1–3 秒，运行中的 MC 实例不受影响。
 
-**能自更新的安装形态**（启动时判定一次，启动横幅会打印）：
+| 安装形态（启动时判定一次，横幅会打印） | 更新方式 |
+|---|---|
+| `portable`（便携包：有 `install.json`、无 `.git`）/ `dir`（无 `.git`，有 `panel/` + `web/dist`） | 下载「应用包」替换程序文件 |
+| `git-clean`（有 `.git` 且工作区干净） | `git fetch --tags` + 切 Release 标签（**游离 HEAD**，回开发分支用 `git checkout main`）+ 重建前端；`origin` 非本仓库官方地址时直接拒绝 |
+| `git-dirty`（有未提交改动）/ `unknown`（判断不出，如未装 git） | **禁用**（避免覆盖你的工作区） |
 
-| 形态 | 判定条件 | 更新方式 |
-|---|---|---|
-| `portable` | 目录里有 `install.json`（便携包写入）且没有 `.git` | 下载「应用包」替换 `panel/`、`web/dist` 等 |
-| `dir` | 没有 `.git`，但有 `panel/server.js` + `web/dist/index.html` | 同上 |
-| `git-clean` | 有 `.git` 且 `git status --porcelain` 为空 | `git fetch --tags` + 切到 Release 标签（**游离 HEAD**，回开发分支用 `git checkout main`）+ 重建前端（`web/dist` 不在版本库里）；`origin` 不是本项目官方仓库时直接拒绝 |
-| `git-dirty` | 有 `.git` 且**有未提交改动** | **禁用**（避免覆盖你的工作区） |
-| `unknown` | 判断不出来（例如没装 git、被安全软件拦） | **禁用** |
+- **跨版本**：Release 用 `minSourceVersion` / `bridge` 声明可直跳范围与逐跳路径；差距过大时这一跳只允许升到桥接版本，无桥接路径则给手动路径（下载便携包 → **保留 `data/`** → 覆盖程序文件）。
+- **数据迁移**：`data/config.json` 带 `schemaVersion`，新版**启动时**按 `panel/migrate.js` 的迁移链升级（迁移代码属于新版，所以应用包 / 便携包 / 手动覆盖 / git 四条路径都自动生效）；迁移前备份原文件，**失败即拒绝启动**；Release 声明 `irreversible: true` 时升级后不允许自动回滚。
+- **提示强度**：`update.json` 的 `severity` = `security`（红色横幅）/ `critical`（琥珀）/ `recommended` / `optional`，可「跳过此版本」（永久对该版本静默）；本地版本高于线上时不提示。
+- **自动更新**：设置页三选一 `off / notify / auto`（默认 `notify` 只提示）。`auto` 还**必须发布方显式声明 `autoSafe: true`**，且非破坏性、不需要重装 Agent、迁移可逆、面板空闲、未连续失败 3 次——v1.0 之前 semver 不严格，所以**不按"minor 就安全"猜**；缺 `update.json` 的旧 Release 一律按"需要人工确认"处理。
+- **校验与边界**：更新包 SHA256 只认 GitHub 的 `SHA256SUMS.txt`（下载可走自建镜像，但镜像不在信任链上），**拿不到校验值就拒绝更新**；解压与写入按白名单（`panel/`、`web/dist/`、`agent/agent.js`、`scripts/` 等），`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/` 一律拒绝；面板对外且未开登录保护时禁止更新。
+- **失败处理**：更新器是独立进程（面板必须先退出，它才动手），顺序为「等端口释放 → 备份将被替换的文件 → 替换 → 拉起 → 健康检查」；任何一步失败都回滚程序 + 数据快照并拉起旧版本。日志与结果在 `data/update/`（设置页显示上次结果，可一键回滚）。
 
-**跨版本升级**：Release 的 `update.json` 里声明 `minSourceVersion`（可直跳的最低来源版本）与 `bridge`（逐跳路径）。源版本过低时不会硬升，而是提示「先升到 vX」并把这一跳限制在桥接版本上（升级完会继续提示下一跳）；没有桥接路径时给手动路径：下载便携包 → **保留 `data/` 目录** → 覆盖程序文件。
-
-**数据迁移**：`data/config.json` 带 `schemaVersion`，新版启动时按 `panel/migrate.js` 的迁移链自动升级（迁移代码属于新版，所以 git / 应用包 / 手动覆盖三种路径都自动生效）。迁移前会把原文件备份到 `data/update/`，**迁移失败时拒绝启动**而不是带着半成品数据跑起来。Release 声明 `irreversible: true` 时升级后不允许自动回滚（备份保留在 `data/update/backup/`）。
-
-**推荐强度与免打扰**：`update.json` 的 `severity` 决定提示方式——`security`（红色横幅，安全更新）、`critical`（琥珀）、`recommended`、`optional`；可「跳过此版本」（记进设置，永久对该版本静默）。本地版本高于线上最新时不提示。
-
-**自动更新**：设置页三选一 `off / notify / auto`（默认 `notify` 只提示）。`auto` 也**必须发布方在 `update.json` 里显式写 `autoSafe: true`** 才会真的自动装，且要求：`severity` 为 `security/critical`、非破坏性、不需要重装 Agent、迁移可逆、面板空闲、非「对外且免密」、未连续失败 3 次、24 小时冷却内不重复。——本项目 v1.0 之前 semver 不严格，所以**不按"minor 就安全"猜**，一切以发布方声明为准；缺 `update.json` 的旧 Release 一律按"需要人工确认"处理。
-
-**完整性校验**：面板从 GitHub 取 `SHA256SUMS.txt` 校验下载的更新包，**校验值只认 GitHub**；下载可走自建镜像（设置页「下载源」，支持 `{name}`/`{version}` 占位符），但镜像不在信任链上。拿不到校验值就**拒绝更新**。解压与写入都按白名单（`panel/`、`web/dist`、`agent/agent.js`、`scripts/`、`images/`、`package.json` 等），`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/` 一律拒绝。
-
-**过程与失败处理**：更新器是独立进程（面板先退出、它再动手）。顺序为「等端口释放 → 备份将被替换的文件 → 替换 → 拉起 → 健康检查 `GET /api/version` 期望新版本」；任何一步失败都回滚程序 + 数据快照并拉起旧版本。日志 `data/update/update.log`，结果 `data/update/last-result.json`（设置页会显示上次结果，可一键回滚到上一版本）。
-
-> 面板更新只换程序文件，**不动 `data/`**（服务器列表、token、SSH 凭据、SMTP/AI 密钥、本地 Agent 数据都在里面）。更新期间正在跑的 MC 实例不受影响（面板重启只影响面板自身，1–3 秒）。
-
-**维护者发布时必须提供的资产**（见 `scripts/build-release.ps1`）：
-
-```
-BlockNexus-v<ver>-portable.zip   首次安装 / 依赖或外壳变化时的完整更新
-BlockNexus-v<ver>-shell.zip      纯外壳（解压到源码根）
-BlockNexus-v<ver>-app.zip        应用包（应用内更新的首选载荷，含 manifest.json）
-update.json                      推荐等级 / 跨版本 / 迁移声明（模板 scripts/update.template.json）
-SHA256SUMS.txt                   上述文件的 SHA256（应用内更新的校验锚）
-```
-
-`gh release create vX.Y.Z BlockNexus-*-portable.zip BlockNexus-*-shell.zip BlockNexus-*-app.zip update.json SHA256SUMS.txt`。发布脚本参数：`-Severity -AutoSafe -Breaking -RequiresAgentReinstall -MinSourceVersion -Bridge -DataSchema -MinSchema -Irreversible -Summary`（默认值偏保守：`recommended`、不自动、按需人工确认）。
+> 维护者发版：`portable` / `shell` / `app` 三个 zip 加 `update.json`、`SHA256SUMS.txt` 缺一不可（后两者是判定与校验依据，漏传会被当成"元数据缺失"）。命令与参数见 [AGENTS.md](AGENTS.md)。
 
 ### 本机服务器（host 填 127.0.0.1 / localhost）
 
@@ -139,27 +117,15 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 
 ## 从 MCPan 更名升级（兼容期已结束）
 
-项目已由 **MCPan** 更名为 **BlockNexus**：品牌字符串、安装目录（`/opt/mcpan-agent` → `/opt/blocknexus-agent`）、systemd 服务名（`mcpan-agent` → `blocknexus-agent`）、环境变量前缀（`MCPAN_*` → `BLOCKNEXUS_*`）、登录 Cookie、上传临时文件后缀均已同步。
+项目由 **MCPan** 更名为 **BlockNexus**：品牌字符串、安装目录（`/opt/blocknexus-agent`）、systemd 服务名（`blocknexus-agent`）、环境变量前缀（`BLOCKNEXUS_*`）、登录 Cookie 与上传临时文件后缀均已同步。
 
-> ⚠️ **更名兼容期已于 0.3.1 结束。** 加密通道的握手标识已从 `mcpan/*` 改为 `blocknexus/*`。
-> 由于握手证明（proof）在**建立连接时**就要校验，而旧 Agent 用的仍是旧标识，
-> 因此**旧 Agent（`AGENT_VERSION` < 0.3.6）无法与本面板建立连接**。
->
-> **这意味着它也不能靠自动更新自救**——自动更新依赖 Agent 连上后上报 `hi` 事件，
-> 而它连握手都过不去。所以：**必须手动重装一次 Agent。**
->
-> 重装方式：在该服务器的设置页点「重装 Agent」（走 SSH，面板会推送新的 `agent.js`）；
-> 或在服务器上 `curl` 面板的 `/agent.js` 手动替换后重启服务（见「手动安装 Agent」）。
-> 重装后面板即可正常管理。
+> ⚠️ **兼容期已于 0.3.1 结束**：握手标识从 `mcpan/*` 改为 `blocknexus/*`，而握手证明在**建立连接时**校验，所以**旧 Agent（`AGENT_VERSION` < 0.3.6）连不上，也就无法靠自动更新自救**（自动更新依赖它先连上并上报 `hi`）——**必须手动重装一次**：服务器设置页点「重装 Agent」，或 `curl` 面板的 `/agent.js` 替换后重启服务（见「手动安装 Agent」）。
 
-迁移要点：
+其余需要手工处理的地方：
 
-- **面板**：重启即生效（`data/config.json` 与实例数据不受影响）；
-- **远程 Agent**：需更新到 `AGENT_VERSION ≥ 0.3.6`。通常由面板自动完成；无法自动更新时手动重装一次；
-- **实例元数据**：`mcpan.json` → `blocknexus.json`。0.3.6 起已移除自动改名回退，
-  **若仍有实例目录停留在旧文件名，需手动把 `mcpan.json` 改名为 `blocknexus.json`**；
-- **需要重新登录/选主题**：会话 Cookie 名与主题存储键随更名更换，更新后首次打开需重新登录、主题恢复默认；
-- **Windows 桌面外壳**：运行 `npm run build:exe` 生成 `BlockNexus.exe`，再 `npm run shortcut` 重建桌面快捷方式（旧 `MCPan.exe`、`MCPan.lnk` 可删除）。
+- **实例元数据**：`mcpan.json` → `blocknexus.json`（0.3.6 起已移除自动改名，仍有旧文件名的实例需手动改名）；
+- **会话**：Cookie 名与主题存储键变更，更新后首次打开需重新登录、主题恢复默认；
+- **Windows 外壳**：`npm run build:exe` 重新生成 `BlockNexus.exe`，`npm run shortcut` 重建快捷方式（旧 `MCPan.exe`/`MCPan.lnk` 可删）。
 
 ## 加密通道设计
 
@@ -183,19 +149,24 @@ web/           前端（Vite + React 19 + TypeScript + Tailwind 4）
   src/components/agents/    beUI agents 组件（AI 对话：PromptInput / MessageScroller / StreamingResponse 等）
   src/components/          业务组件（文件管理器 / Mod 管理 / 封禁目录 / 备份 / 控制台等）
 panel/
-  server.js     面板入口（HTTP + 静态资源 + SPA 回退 + Agent WS 升级路由）
-  config.js     data/config.json 持久化（服务器/SSH/token/登录密码）
+  server.js     面板入口（HTTP + 静态资源 + SPA 回退 + Agent WS 升级路由 + 启动自迁移）
+  config.js     data/config.json 持久化（服务器/SSH/token/登录密码/更新设置）
   crypto.js     HKDF / 握手证明 / AES-256-GCM 帧加解密
   agentlink.js  AgentHub：握手状态机、在线连接表、加密请求路由、事件转发
   ssh.js        SSH 安装器（远程 Linux：Node 检测安装、SFTP 上传、systemd 注册、Agent 热更新）
   localagent.js 本机 Agent 托管（面板直接 spawn/stop 进程 + 专用目录，免 SSH/systemd）
-  api.js        REST API（登录、服务器 CRUD、安装、实例操作）+ SSE 实时推送
+  api.js        REST API（登录、服务器 CRUD、安装、实例操作、面板自更新）+ SSE 实时推送
+  update.js     自更新判定：安装形态、Release 元数据解析、升级计划、写入白名单（纯函数）
+  migrate.js    data/config.json 的 schemaVersion 迁移链
   mail.js       邮件模板（HTML 卡片样式 + 纯文本兜底）
 agent/
   agent.js      零依赖单文件 Agent（自带 RFC6455 WebSocket 客户端 + 同套加密实现）——**由 build.js 生成，勿直接编辑**
   build.js      打包器：把 src/** 拼成上面的单文件产物（`npm run build:agent`；`--check` 只校验是否同步）
   src/          Agent 源码，按功能组分模块（config/crypto/ws/http/catalog/util + instance/**）
-data/           运行时数据（config.json、本地测试实例），已 gitignore
+scripts/
+  panel-updater.js  自更新执行器（独立进程：快照 → 替换 → 拉起 → 健康检查 → 失败回滚）
+  build-release.ps1 发版打包（便携版 / 纯外壳 / 应用包 + update.json + SHA256SUMS.txt）
+data/           运行时数据（config.json、本地测试实例、data/update/ 更新日志与备份），已 gitignore
 ```
 
 Agent 是「源码分模块 + 打包成单文件」：交付物仍是单文件（SSH 只上传一个文件、systemd 直接跑它、面板 `/agent.js` 匿名下载、手动 `curl -o agent.js` 安装都依赖这一点），所以改完源码必须重新打包：
@@ -394,47 +365,21 @@ beUI 组件用法：`cd web && npx shadcn@latest add @beui/<name>`（已装：bo
 
 ## 本地测试（不接触真实服务器）
 
-添加一台「服务器」（host 随意，不点安装），然后用它的 token 手动把 Agent 跑在本机：
+添加一台「服务器」（host 随意，不点安装），用它的 token 把 Agent 跑在本机，即可完整体验创建实例（会真的从 Mojang 下载 `server.jar` 并用本机 Java 启动）：
 
 ```bash
 node agent/agent.js --panel ws://127.0.0.1:3080 --token <token> --id <服务器ID> --instances ./data/instances
 ```
 
-即可完整体验创建实例（会真的从 Mojang 下载 server.jar 并用本机 Java 启动）。
-
-端到端回归测试（隔离面板 + 独立 Agent，覆盖加密通道断点续传、Agent 重启续传、面板代下全链路、安装失败自动兜底）：
+常驻回归测试（零依赖，不需要面板与真实服务器；逐个脚本见 `package.json` 的 `test:agent`）：
 
 ```bash
-node agent/e2e-panel-install.js
+npm run test:agent                # Agent 全部单元测试（含产物新鲜度：改了 src 忘打包会直接失败）
+node agent/e2e-panel-install.js   # 端到端：隔离面板 + 独立 Agent（加密通道断点续传、面板代下、安装失败兜底）
+node agent/e2e-reset-code.js      # 找回密码三段式与限流（单跑约 10 分钟，CI 里独立跑）
 ```
 
-找回密码三段式与限流（发码限流、验证码校验换一次性票据、凭票据改密、错码锁定、过期与关闭保护即失效、旧 token 兼容）：
-
-```bash
-node agent/e2e-reset-code.js
-```
-
-Agent 单元测试（全部零依赖，不需要面板与真实服务器）：
-
-```bash
-npm run test:agent
-```
-
-逐个说明：
-
-| 脚本 | 覆盖内容 |
-| --- | --- |
-| `node agent/test-module-imports.js` | 模块导入完整性（跨模块符号漏 import / 拼错名） |
-| `node agent/build.js --check` | 产物新鲜度：`agent/agent.js` 是否与 `src/**` 同步 |
-| `node agent/test-bundle-fresh.js` | 产物与源码一致、仍是零依赖、保留 `AGENT_VERSION` 常量 |
-| `node agent/test-bundle-smoke.js` | 黑盒启动产物（横幅、监听端口、SIGTERM 干净退出） |
-| `node agent/test-bootstrap-vanilla.js` | 原版核心预下载（官方/镜像、sha1 自愈、并发只下一次） |
-| `node agent/test-start-singleflight.js` | 启动并发去重（并发只 spawn 一个 java）、进程归属、取消启动 |
-| `node agent/test-watchdog-schedule.js` | 看门狗定时任务判定规则 |
-| `node agent/test-player-tracking.js` | 玩家进出/名单解析（含 Forge 多段日志前缀）、控制台跨 chunk 拼行 |
-| `node agent/test-player-stats.js` | 在线时长统计：会话成对/名单校准/落盘续算/表上限/开关 |
-| `node agent/test-chat-log.js` | 聊天解析与落盘：格式识别、正文清洗、字节游标分页、轮转、权限 |
-| `node agent/test-fs-ops.js` | 文件管理（复制/移动/压缩/解压/路径越界） |
+覆盖范围：模块导入完整性、产物与源码同步 / npm 内联、启动并发去重、看门狗与备份调度规则、玩家进出与在线时长统计、聊天解析与落盘、文件操作与路径越界、面板安全与加固、错误码与中英文案成对、面板自更新与配置迁移、Anvil 解析与地图渲染。
 
 ## AI 日志分析（实例详情页「AI 分析」）
 
@@ -506,7 +451,7 @@ GET  /agent.js                       (Agent 单文件下载，匿名)
 ## 安全注意事项
 
 - `data/config.json` 含 SSH 密码/私钥、服务器 token 与 AI 接口密钥（明文），请确保宿主机安全，必要时用私钥认证并收紧文件权限；
-- 面板密码建议尽快用 `BLOCKNEXUS_PASSWORD` 替换初始密码；
+- 面板**默认免密**（只监听 `127.0.0.1`）；一旦用 `--host 0.0.0.0` 对外监听，**务必开启登录保护**，或用 `BLOCKNEXUS_PASSWORD` 启动时直接设好密码；
 - 面板监听 `0.0.0.0` 是为了让远程 Agent 能回连，浏览器访问请尽量走本机或受信任网络；
 - Agent 以 systemd 默认身份（root）运行，MC 实例共享该权限——与绝大多数 MC 服务器运维习惯一致，但请知悉。
 - **聊天记录与玩家统计是明文隐私数据**：存在 `<实例目录>/.blocknexus-data/`（目录 0700、文件 0600），含玩家名、聊天内容与在线时段。它们在备份里也保留，请注意备份文件的去向；面板对外暴露时**必须开启登录保护**，否则任何访问者都能读取这些接口（也可以按实例在「编辑」里关掉记录）。
@@ -543,9 +488,8 @@ node panel/server.js --host 127.0.0.1 --trust-proxy 1 --secure-cookies
 
 ## 路线图
 
-- [ ] 面板 HTTPS / 反向代理子路径支持
+- [ ] 反向代理子路径支持（把面板挂在 `/blocknexus` 这类路径下）
 - [ ] 多用户与细粒度权限
-- [ ] 计划任务（定时备份等）
 
 ## Windows 一键启动
 
@@ -588,7 +532,7 @@ exe 换了图标但资源管理器还显示旧图时，脚本已自动执行 `ie
 - **通知设置**：管理员邮箱 + 「服务器离线时邮件通知」+ 「恢复上线时通知」。
   降噪规则（避免抖动与长期离线刷屏）：断线后先观察 **2 分钟**，期间自行恢复则**完全不通知**；持续离线才判定为故障并发信，同一次故障**只发一封**，之后每 **24 小时**补发一封提醒；恢复邮件**只在本次故障确实发过离线通知后**才发（不会冒出一封莫名的「已恢复」）。离线邮件里同时给出「断开时间」与「判定离线」两个时刻，便于判断故障时长；
 - **AI 日志分析**：接口地址（OpenAI Chat Completions 兼容）/ 模型 / API 密钥 + 启用开关，可「测试连接」；密钥留空表示不修改，页面不回传明文。启用后实例详情页出现「AI 分析」页签（详见上文「AI 日志分析」）；
-- **版本与更新**：显示当前版本与 GitHub 最新 Release 对比（有新版时提示并可跳转），内置**更新日志**（默认折叠，点击展开，读取自 Release 正文）；「检查更新」按钮可强制刷新（结果缓存 10 分钟）；下方为源码地址；
+- **版本与更新**：当前版本与 GitHub 最新 Release 对比，内置**更新日志**（默认折叠，读取自 Release 正文）；「检查更新」可强制刷新（结果缓存 10 分钟）。本版起还支持**应用内更新**——升级预览、进度、上次结果与一键回滚、「跳过此版本」、自动更新策略与下载源（见上文「面板版本与自动更新」）；
 - **关于**（页面底部入口）：进入 `/about`，显示项目版本、开源地址、**许可证全文**（内置展开，无需跳转）、引用服务（MSL 开服器 / BMCLAPI / Mojang / Adoptium 及各核心官方 API）、开源依赖清单与免责声明。
 
 ### 忘记密码（邮箱验证码，三段式）
