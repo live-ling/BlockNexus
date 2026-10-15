@@ -104,4 +104,10 @@ powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1   # 托盘外壳 
 
 - `.editorconfig` / `.github/workflows/ci.yml` / `data/config.example.json` 是本仓库独有，迁移时保留；
 - `/root.txt` 是 build-exe.ps1 写进外壳目录的路径标记，已 gitignore，勿提交；
-- README 是面向用户的主文档，新功能要在对应章节补一段并更新「API 一览」。
+- **文档分工**（2026-10-15 拆分）：
+  - `README.md` = **面向用户**：安装、使用、功能说明、API 一览、排障。新功能在对应章节补一段，并更新「API 一览」；
+  - `docs/development.md` = **面向改代码的人**：加密通道设计、目录结构、前端/Agent 构建、本地测试、版本号约定、重新生成外壳 exe；
+  - `AGENTS.md` = 给 AI/新会话的工作记忆与协作约定（发版流程、硬约束）；
+  - 拆分时别把用户向内容挪进 dev 文档，也别在 README 里重复 dev 文档的实现细节（给链接）。
+- ⚠ `scripts/*.ps1` **必须保存为 UTF-8 带 BOM**：PowerShell 5.1 按 ANSI 读无 BOM 文件会让中文变乱码并直接解析失败；CI 只对 `*.js` 做 `node --check`，这类问题只能靠本地跑一次兜住。
+- ⚠ 提交前用**提交态**验证而不只是工作区（`git archive <commit>` 到临时目录再构建）：本仓库曾出现过「工作区能编译、提交后 CI 前端构建失败」的情况（另一个会话的在途改动掩盖了缺失的文案键）。
