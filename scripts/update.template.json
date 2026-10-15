@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "version": "__VERSION__",
+  "severity": "__SEVERITY__",
+  "autoSafe": __AUTOSAFE__,
+  "breaking": __BREAKING__,
+  "requiresAgentReinstall": __AGENTREINSTALL__,
+  "minSourceVersion": "__MINSOURCEVERSION__",
+  "bridge": __BRIDGE__,
+  "dataSchema": __DATASCHEMA__,
+  "minSchema": __MINSCHEMA__,
+  "irreversible": __IRREVERSIBLE__,
+  "minNode": 18,
+  "lockHash": "__LOCKHASH__",
+  "shellHash": "__SHELLHASH__",
+  "summary": __SUMMARY__,
+  "notesUrl": __NOTESURL__
+}

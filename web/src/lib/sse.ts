@@ -35,10 +35,37 @@ export type SseEvent =
       bundled?: string;
       log?: string;
       error?: string;
+    }
+  | {
+      /**
+       * 面板自更新进度（没有 serverId：这是面板自己的事）。
+       * 字段与 panel/api.js 的 updateState 一一对应；切换阶段时推一条，下载中按进度推。
+       */
+      type: 'panel-update';
+      state: 'idle' | 'downloading' | 'verifying' | 'staging' | 'applying' | 'restarting' | 'failed';
+      from: string;
+      to: string;
+      progress: number;
+      total: number;
+      error: string;
+      startedAt: number;
+      mode: 'payload' | 'git' | 'rollback';
+      migrations: { from: number; to: number }[];
+      warnings: string[];
+      requiresAgentReinstall: boolean;
+      irreversible: boolean;
     };
 
-/** 带 serverId 的事件（排除 hello 心跳） */
-export type ServerSseEvent = Exclude<SseEvent, { type: 'hello' }>;
+/** 带 serverId 的事件（排除 hello 心跳与面板自身的 panel-update） */
+export type ServerSseEvent = Exclude<SseEvent, { type: 'hello' } | { type: 'panel-update' }>;
+
+/**
+ * 是否有 serverId —— 显式类型守卫，而不是靠 `e.serverId` 的属性访问来收窄：
+ * 联合类型里既然没有 serverId 的分支（hello / panel-update），直接访问就是类型错误。
+ */
+function hasServerId(e: SseEvent): e is ServerSseEvent {
+  return e.type !== 'hello' && e.type !== 'panel-update';
+}
 
 type Listener = (e: SseEvent) => void;
 
@@ -71,10 +98,10 @@ export function subscribeSSE(fn: Listener): () => void {
   };
 }
 
-/** 订阅某台服务器的事件（自动过滤 hello 与其他服务器） */
+/** 订阅某台服务器的事件（自动过滤 hello / panel-update 与其他服务器） */
 export function subscribeServer(serverId: string, fn: (e: ServerSseEvent) => void): () => void {
   return subscribeSSE((e) => {
-    if (e.type === 'hello' || e.serverId !== serverId) return;
+    if (!hasServerId(e) || e.serverId !== serverId) return;
     fn(e);
   });
 }

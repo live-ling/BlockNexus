@@ -85,8 +85,20 @@ powershell -ExecutionPolicy Bypass -File scripts\build-exe.ps1   # 托盘外壳 
 ## 发版流程
 
 1. 确认版本号：面板 `package.json` 的 `version`（如 0.3.0）与 Agent `agent/src/config.js` 的 `AGENT_VERSION`（独立版本线，改动 Agent 行为后要递增——面板靠它触发远端自动更新）；`npm run build:agent` 后推送；
-2. `powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1` → 在 `DE Project\BlockNexus Project` 生成便携版/纯外壳 zip + SHA256；
-3. `gh release create vX.Y.Z --target <main最新> BlockNexus-*.zip` + 按惯例格式写说明（见 v0.2.0/v0.3.0 的 Release body）；**推送代码不发版**，用户面板的更新检查只认 GitHub Release 标签。
+2. `powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -Severity <security|critical|recommended|optional> [-AutoSafe] [-Breaking] [-RequiresAgentReinstall] [-MinSourceVersion x.y.z] [-Bridge v1,v2] [-DataSchema n] [-MinSchema n] [-Irreversible] [-Summary "..."]` → 在 `DE Project\BlockNexus Project` 生成**便携版 / 纯外壳 / 应用包**三个 zip + `update.json` + `SHA256SUMS.txt`；
+3. `gh release create vX.Y.Z --target <main最新> BlockNexus-*-portable.zip BlockNexus-*-shell.zip BlockNexus-*-app.zip update.json SHA256SUMS.txt` + 按惯例格式写说明（见 v0.2.0/v0.3.0 的 Release body）；**推送代码不发版**，用户面板的更新检查只认 GitHub Release 标签。
+   ⚠ `update.json` 与 `SHA256SUMS.txt` **必须一起上传**：前者决定"该不该升、能不能自动升"，后者是应用内更新的完整性信任锚（拿不到校验值时面板会拒绝更新）。忘记上传的 Release 仍可被检查到，但会被当作"元数据缺失"（需人工确认、绝不自动安装）。
+
+## 面板自更新（2026-10-15 落地）
+
+应用内更新＝「检查 → 预检 → 下载/校验 → 解压校验 → 交接更新器 → 重启 → 健康检查/回滚」。改这块时记住几条硬约束：
+
+- **判定与执行分离**：判定全在 `panel/update.js`（纯函数，`agent/test-panel-update.js` 钉住 90+ 用例）；执行器 `scripts/panel-updater.js` 是 detached 进程（面板必须先退出才能换文件）。
+- **数据迁移**：`data/config.json` 有 `schemaVersion`，迁移链在 `panel/migrate.js`（`agent/test-panel-migrate.js`）。**改了配置结构就要加一个迁移函数并把 `CURRENT_SCHEMA` +1**，否则老用户的配置不会升级；迁移在新版启动早期执行，失败即拒绝启动（不写半成品数据）。远端 Agent 的数据格式不在这条链上（Agent 自成版本线）。
+- **写入白名单**：更新器只允许写 `panel/`、`web/dist/`、`agent/agent.js`、`scripts/`、`images/`、`package.json`、`package-lock.json`、`README.md`、`LICENSE`、`install.json`、`manifest.json`；`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/`、`desin/` **一律拒绝**（白名单在 `panel/update.js` 的 `WRITE_ALLOW/WRITE_DENY`，改动要同步测试）。
+- **信任链**：校验值只从 GitHub 资产读（镜像只承载下载）；资产名、`update.json` 字段与 `panel/update.js` 的 `META_DEFAULTS`/`ASSET` 三处必须一致，发布脚本的 `shellHash` 公式也必须与 `update.js` 的 `shellHashOf` 逐字一致（不一致只会退化成"需要完整便携包"，不会换错文件，但别依赖这个兜底）。
+- **形态门禁**：`git-dirty`（本仓库日常状态）与"判断不出形态"都**禁止**应用内更新——这是保护未提交改动的第一道闸；手改这块时不要放宽。
+- 更新日志与结果都在 `data/update/`（已 gitignore）；`data/update/backup/` 保留最近 3 份备份。
 
 ## 约定
 

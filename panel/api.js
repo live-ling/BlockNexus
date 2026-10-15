@@ -10,7 +10,13 @@ const nodemailer = require('nodemailer');
 const { installAgent, updateAgentScript, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
 const localAgent = require('./localagent');
 const mailTpl = require('./mail');
-const { errorResponse, langOf } = require('./error-codes');
+const { errorResponse, langOf, messageOf } = require('./error-codes');
+// 自更新的纯逻辑（安装形态/元数据解析/升级计划/自动策略/写入白名单）与版本比较
+// 都收在 panel/update.js：这一层必须能被单测覆盖，且不允许在 api.js 里再长出一份
+// 版本比较的副本（历史坑：两套 semver 判断迟早对不上）。
+const upd = require('./update');
+const migrate = require('./migrate');
+const { semverGreater } = upd;
 
 const COOKIE = 'blocknexussid';
 const SESSION_TTL = 7 * 24 * 3600 * 1000;
@@ -49,22 +55,15 @@ const LATEST_RELEASE_API = 'https://api.github.com/repos/live-ling/BlockNexus/re
 const VERSION_CACHE_MS = 10 * 60e3;
 let versionCache = { at: 0, data: null };
 
-/** 三段版本号比较：a 是否大于 b（忽略 v 前缀与后缀） */
-function semverGreater(a, b) {
-  const pa = String(a).replace(/^v/, '').split(/[.\-+]/);
-  const pb = String(b).replace(/^v/, '').split(/[.\-+]/);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = Number(pa[i]);
-    const nb = Number(pb[i]);
-    if (Number.isNaN(na) || Number.isNaN(nb)) {
-      const s = String(pa[i] ?? '').localeCompare(String(pb[i] ?? ''));
-      if (s) return s > 0;
-    } else if (na !== nb) return na > nb;
-  }
-  return false;
-}
+/** 三段版本号比较：a 是否大于 b（忽略 v 前缀与后缀）——实现已上移到 panel/update.js */
 
-/** 检查更新；失败时保留旧缓存并在结果里带 error 字段。force=true 跳过缓存（?refresh=1） */
+/**
+ * 检查更新；失败时保留旧缓存并在结果里带 error 字段。force=true 跳过缓存（?refresh=1）
+ *
+ * 自更新需要的额外信息也在这里取（**同一份缓存**，不额外打 GitHub API）：
+ *   · assets：Release 的资产列表（挑 app/portable 包与 SHA256SUMS.txt）
+ *   · meta：update.json（推荐等级、跨版本、迁移声明）——它决定"该不该升、怎么升"
+ */
 async function checkLatestRelease(version, force = false) {
   const fresh = Date.now() - versionCache.at < VERSION_CACHE_MS;
   if (!force && versionCache.data && fresh) return { ...versionCache.data, cached: true };
@@ -79,19 +78,74 @@ async function checkLatestRelease(version, force = false) {
     if (!r.ok) throw new Error(`GitHub API ${r.status}`);
     const j = await r.json();
     const tag = String(j.tag_name || '').replace(/^v/, '');
+    const assets = Array.isArray(j.assets)
+      ? j.assets.slice(0, 40).map((a) => ({
+          name: String(a.name || ''),
+          size: Number(a.size) || 0,
+          browser_download_url: String(a.browser_download_url || ''),
+        }))
+      : [];
+    // update.json：机器可读的发布元数据（可能没有——老 Release 都没有，按安全默认处理）
+    let meta = { ...upd.META_DEFAULTS };
+    let metaMissing = true;
+    const metaAsset = upd.pickAsset(assets, upd.ASSET.meta);
+    if (metaAsset) {
+      try {
+        const text = await fetchRemoteText(metaAsset.url, 128 * 1024, `BlockNexus/${version}`);
+        const parsed = upd.parseUpdateMeta(text);
+        meta = parsed.meta;
+        metaMissing = parsed.missing || !parsed.ok;
+      } catch {
+        // 取不到就按"未声明"处理：不拦更新，但必须人工确认（安全默认）
+      }
+    }
     const data = {
       latest: tag || null,
       hasUpdate: !!tag && semverGreater(tag, version),
       releaseUrl: j.html_url || null,
       changelog: String(j.body || ''),
       checkedAt: Date.now(),
+      assets,
+      meta,
+      metaMissing,
     };
     versionCache = { at: Date.now(), data };
     return data;
   } catch (e) {
     if (versionCache.data) return { ...versionCache.data, cached: true, error: e.message || '检查失败' };
-    return { latest: null, hasUpdate: false, releaseUrl: null, changelog: '', checkedAt: Date.now(), error: e.message || '检查失败' };
+    return {
+      latest: null,
+      hasUpdate: false,
+      releaseUrl: null,
+      changelog: '',
+      checkedAt: Date.now(),
+      assets: [],
+      meta: { ...upd.META_DEFAULTS },
+      metaMissing: true,
+      error: e.message || '检查失败',
+    };
   }
+}
+
+/** 取远端小文本（update.json / SHA256SUMS.txt）；带上限，避免异常端点撑爆内存 */
+function fetchRemoteText(url, maxBytes, ua) {
+  return new Promise((resolve, reject) => {
+    const u = String(url);
+    const mod = u.startsWith('https') ? require('https') : require('http');
+    const req = mod.get(u, { headers: { 'User-Agent': ua || 'BlockNexus', Accept: '*/*' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return fetchRemoteText(new URL(res.headers.location, u).toString(), maxBytes, ua).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      readBodyCapped(res, req, maxBytes, '更新元数据').then((buf) => resolve(buf.toString('utf8')), reject);
+    });
+    req.on('error', (e) => reject(new Error(e.message || '网络错误')));
+    req.setTimeout(10000, () => req.destroy(new Error('超时')));
+  });
 }
 
 // langOf（从 Accept-Language 判断用哪种语言渲染 error 文案）已移到 panel/error-codes.js：
@@ -960,8 +1014,552 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // ?refresh=1 跳过 10 分钟缓存（前端「检查更新」按钮）
   router.get('/version', async (req, res) => {
     const data = await checkLatestRelease(APP_VERSION, req.query.refresh === '1');
-    res.json({ version: APP_VERSION, repoUrl: REPO_URL, ...data });
+    const pre = upd.planUpgrade({
+      localVersion: APP_VERSION,
+      localSchema: migrate.readSchema(config.data),
+      meta: data.meta,
+    });
+    res.json({
+      version: APP_VERSION,
+      repoUrl: REPO_URL,
+      ...data,
+      // 自更新相关（只增字段，老前端不受影响）
+      installKind: INSTALL.kind,
+      canSelfUpdate: INSTALL.canSelfUpdate,
+      updateDisabledReason: INSTALL.canSelfUpdate ? '' : INSTALL.reasonKey,
+      updateDisabledText: INSTALL.canSelfUpdate ? '' : text(INSTALL.reasonKey, req),
+      updatePolicy: { auto: updPolicy().auto, source: updPolicy().source },
+      recommendation: recommendationOf(data, pre, req),
+      updateState: { ...updateState },
+    });
   });
+
+  // ============================================================
+  // 面板自更新
+  // ============================================================
+  // 判定全在 panel/update.js（纯函数 + 单测），这里只做流程编排与状态机：
+  //   检查（复用 /version 的同一份缓存）→ 预检 → 下载 → 校验 → 解压校验 → 交接更新器
+  // 顺序固定：**安全门禁在最前**，任何一步不过就一个文件都不动。
+  const INSTALL = opts.install || {
+    kind: upd.KIND_UNKNOWN,
+    canSelfUpdate: false,
+    reasonKey: 'update.disabled-unknown',
+    facts: {},
+    markerVersion: '',
+  };
+  const ROOT_DIR = path.join(__dirname, '..');
+  const UPDATE_ROOT = path.join(ROOT_DIR, 'data', 'update');
+  const UPDATE_LOG = path.join(UPDATE_ROOT, 'update.log');
+  const UPDATE_RESULT = path.join(UPDATE_ROOT, 'last-result.json');
+  const UPDATER = path.join(ROOT_DIR, 'scripts', 'panel-updater.js');
+  const LAUNCH_ARGS = opts.launcherArgs || { host: '127.0.0.1', port: 3080, scheme: 'http' };
+  const MAX_UPDATE_BYTES = 200 * 1024 * 1024;
+  const NODE_MAJOR = Number(String(process.versions.node).split('.')[0]) || 0;
+
+  const updateState = {
+    state: 'idle',
+    from: APP_VERSION,
+    to: '',
+    progress: 0,
+    total: 0,
+    error: '',
+    startedAt: 0,
+    mode: 'payload',
+    migrations: [],
+    warnings: [],
+    requiresAgentReinstall: false,
+    irreversible: false,
+  };
+  let updateInFlight = false;
+  let updateFails = 0; // 连续失败次数（自动更新退避，与 Agent 更新同一套思路）
+  let updateLastAttemptAt = 0;
+  let autoTimer = null;
+
+  function updPolicy() {
+    const u = (config.data.settings && config.data.settings.update) || {};
+    return {
+      auto: ['off', 'notify', 'auto'].includes(u.auto) ? u.auto : 'notify',
+      source: String(u.source || ''),
+      dismissed: u.dismissed && typeof u.dismissed === 'object' ? u.dismissed : {},
+    };
+  }
+
+  /** 把 i18n code 渲染成当前请求语言的文本（前端直接显示，不必再维护一份映射） */
+  function text(code, req, params) {
+    if (!code) return '';
+    return messageOf(code, langOf(req), params) || String(code);
+  }
+
+  function ensureUpdateDir(dir) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  }
+
+  function readJsonSafe(file) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  function lastUpdateResult() {
+    return readJsonSafe(UPDATE_RESULT);
+  }
+
+  function setUpdate(patch) {
+    Object.assign(updateState, patch);
+    bus.emit('broadcast', { type: 'panel-update', ...updateState });
+  }
+
+  /** 面板是否空闲（有实例启停 / 备份 / 安装任务时不更新） */
+  function idleForUpdate() {
+    for (const rec of taskLogs.values()) if (rec && rec.done === null) return false;
+    for (const s of config.listServers()) if (s.installing) return false;
+    return true;
+  }
+
+  /** 需要手动重装 Agent 的服务器（协议不兼容的版本会给这个列表） */
+  function agentsNeedingReinstall() {
+    if (!BUNDLED_AGENT_VERSION) return [];
+    return config
+      .listServers()
+      .filter((s) => hub.isOnline(s.id) && s.info && s.info.agentVersion && s.info.agentVersion !== BUNDLED_AGENT_VERSION)
+      .map((s) => ({ id: s.id, name: s.name }));
+  }
+
+  /** 下载地址：镜像只承载下载，校验值始终来自 GitHub */
+  function downloadUrlFor(assetUrl, assetName, version) {
+    const src = updPolicy().source.trim();
+    if (!src) return assetUrl;
+    try {
+      if (src.includes('{name}') || src.includes('{version}')) {
+        return src.replace(/\{name\}/g, assetName).replace(/\{version\}/g, `v${version}`);
+      }
+      return `${src.replace(/\/+$/, '')}/${assetName}`;
+    } catch {
+      return assetUrl;
+    }
+  }
+
+  /** 组装升级预览（预检）：UI 先看这个，用户确认后才允许点更新 */
+  async function buildPreflight(req, force) {
+    const rel = await checkLatestRelease(APP_VERSION, !!force);
+    const meta = rel.meta || { ...upd.META_DEFAULTS };
+    const local = upd.computeLocalHashes(ROOT_DIR);
+    const plan = upd.planUpgrade({
+      localVersion: APP_VERSION,
+      localSchema: migrate.readSchema(config.data),
+      meta,
+      currentNode: NODE_MAJOR,
+    });
+    const full = upd.needsFullPackage(meta, local);
+    const to = meta.version || rel.latest || '';
+    const appAsset = upd.pickAsset(rel.assets, upd.ASSET.app(to));
+    const portAsset = upd.pickAsset(rel.assets, upd.ASSET.portable(to));
+    const nodeOk = !meta.minNode || NODE_MAJOR >= meta.minNode;
+    const warnings = plan.warnings.map((k) => ({ code: k, text: text(k, req) }));
+    if (rel.metaMissing) warnings.push({ code: 'update.meta-missing', text: text('update.meta-missing', req) });
+    let allowed = INSTALL.canSelfUpdate && plan.allowed && nodeOk && !rel.error;
+    let reasonKey = '';
+    // 原因按「最贴近用户疑问」的顺序给：先"根本没新版本"，再"这台机器不能自更新"，
+    // 再 Node/跨版本/完整包。否则本地版本高于线上时会被形态门禁的原因盖住，读起来像出错了。
+    if (!to || !upd.isNewer(to, APP_VERSION)) reasonKey = 'update.version-not-newer';
+    else if (!INSTALL.canSelfUpdate) reasonKey = INSTALL.reasonKey;
+    else if (!nodeOk) reasonKey = 'update.node-too-old';
+    else if (!plan.allowed) reasonKey = plan.reasonKey;
+    else if (full.needed) reasonKey = full.reasonKey;
+    // 完整包（含外壳/依赖变化）第一版不做应用内替换：只给提示与下载地址
+    if (allowed && full.needed) allowed = false;
+    return {
+      from: APP_VERSION,
+      to,
+      latest: rel.latest || '',
+      severity: meta.severity,
+      summary: meta.summary,
+      notesUrl: meta.notesUrl || rel.releaseUrl || '',
+      changelog: String(rel.changelog || '').slice(0, 4000),
+      breaking: meta.breaking,
+      irreversible: meta.irreversible,
+      requiresAgentReinstall: meta.requiresAgentReinstall,
+      agentsToReinstall: meta.requiresAgentReinstall ? agentsNeedingReinstall() : [],
+      migrations: plan.migrations,
+      mode: plan.mode,
+      bridgeVersion: plan.bridgeVersion,
+      needsFullPackage: full.needed,
+      fullPackageUrl: portAsset ? portAsset.url : rel.releaseUrl || '',
+      appAssetAvailable: !!appAsset,
+      downloadBytes: (full.needed ? portAsset : appAsset)?.size || 0,
+      lockChanged: !!(meta.lockHash && local.lockHash && meta.lockHash !== local.lockHash),
+      nodeOk,
+      nodeRequired: meta.minNode,
+      installKind: INSTALL.kind,
+      canSelfUpdate: INSTALL.canSelfUpdate,
+      allowed,
+      reasonKey,
+      reasonText: text(reasonKey, req),
+      warnings,
+      metaMissing: rel.metaMissing,
+      checkedAt: rel.checkedAt,
+      error: rel.error || '',
+    };
+  }
+
+  /** 推荐模型：等级 + 摘要 + 是否已被用户"跳过此版本" */
+  function recommendationOf(rel, plan, req) {
+    const meta = rel.meta || { ...upd.META_DEFAULTS };
+    const policy = updPolicy();
+    const dismissedAt = policy.dismissed[meta.version || rel.latest || ''] || 0;
+    return {
+      hasUpdate: !!rel.hasUpdate,
+      latest: rel.latest || '',
+      severity: meta.severity,
+      summary: meta.summary,
+      notesUrl: meta.notesUrl || rel.releaseUrl || '',
+      breaking: meta.breaking,
+      requiresAgentReinstall: meta.requiresAgentReinstall,
+      irreversible: meta.irreversible,
+      metaMissing: rel.metaMissing,
+      migrations: plan.migrations.length,
+      dismissed: !!dismissedAt,
+      dismissedAt,
+      // 自动更新为什么没自动：把原因也渲染好，UI 不用自己映射
+      autoReason: policy.auto === 'auto' ? text(shouldAutoApplyNow(rel, plan).reasonKey, req) : '',
+      error: rel.error || '',
+    };
+  }
+
+  /** 自动策略的当前判定（时间/空闲/退避等上下文都在这里取） */
+  function shouldAutoApplyNow(rel, plan, pre) {
+    return upd.shouldAutoApply({
+      meta: rel.meta,
+      plan,
+      ctx: {
+        idle: idleForUpdate(),
+        exposedWithoutAuth: !!opts.mayBeExposed && !config.data.panel.authEnabled,
+        failures: updateFails,
+        lastAttemptAt: updateLastAttemptAt,
+        now: Date.now(),
+      },
+    });
+  }
+  void shouldAutoApplyNow;
+
+  /** 解压到指定目录：Windows 用 PowerShell，Linux 优先 unzip、缺失退 bsdtar（与项目既有约定一致） */
+  function extractArchive(zip, dest) {
+    const { spawnSync } = require('child_process');
+    ensureUpdateDir(dest);
+    const q = (s) => String(s).replace(/'/g, "''");
+    if (process.platform === 'win32') {
+      const r = spawnSync(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+          `Expand-Archive -LiteralPath '${q(zip)}' -DestinationPath '${q(dest)}' -Force`],
+        { encoding: 'utf8', windowsHide: true, timeout: 180000 },
+      );
+      if (r.status !== 0) throw new Error(`解压失败：${String(r.stderr || r.stdout || '').slice(0, 300)}`);
+      return;
+    }
+    let r = spawnSync('unzip', ['-q', '-o', zip, '-d', dest], { encoding: 'utf8', timeout: 180000 });
+    if (r.status === 0) return;
+    r = spawnSync('bsdtar', ['-xf', zip, '-C', dest], { encoding: 'utf8', timeout: 180000 });
+    if (r.status === 0) return;
+    throw new Error(`解压失败（unzip/bsdtar 均不可用或出错）：${String(r.stderr || r.stdout || '').slice(0, 300)}`);
+  }
+
+  /** 应用包根目录：manifest.json 在根，或在唯一一层子目录里（便携包的 BlockNexus-portable/） */
+  function findPayloadRoot(stageDir) {
+    if (fs.existsSync(path.join(stageDir, 'manifest.json'))) return stageDir;
+    for (const ent of fs.readdirSync(stageDir, { withFileTypes: true })) {
+      if (!ent.isDirectory()) continue;
+      const p = path.join(stageDir, ent.name);
+      if (fs.existsSync(path.join(p, 'manifest.json'))) return p;
+    }
+    return '';
+  }
+
+  /** 列出载荷文件；遇到符号链接直接判为异常包（防"链接指向外部"） */
+  function listPayloadFiles(root) {
+    const out = [];
+    const walk = (dir) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name);
+        const st = fs.lstatSync(full);
+        if (st.isSymbolicLink()) throw new Error(text('update.stage-invalid', null));
+        if (st.isDirectory()) walk(full);
+        else if (st.isFile()) out.push(path.relative(root, full).replace(/\\/g, '/'));
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  function hashFileHex(file) {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('sha256');
+      const s = fs.createReadStream(file);
+      s.on('data', (c) => hash.update(c));
+      s.on('error', reject);
+      s.on('end', () => resolve(hash.digest('hex')));
+    });
+  }
+
+  function spawnUpdater(args) {
+    const { spawn } = require('child_process');
+    const child = spawn(process.execPath, [UPDATER, ...args], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      cwd: ROOT_DIR,
+    });
+    child.unref();
+    return child.pid;
+  }
+
+  /** 停掉面板，把控制权交给更新器（更新器会等端口释放后换文件） */
+  function handoffToUpdater(args) {
+    spawnUpdater(args);
+    setUpdate({ state: 'restarting' });
+    if (typeof opts.onShutdown === 'function') {
+      setTimeout(() => opts.onShutdown('panel-update'), 600);
+    }
+  }
+
+  /** 更新主体（后台跑；响应已经 202 回去了）：下载 → 校验 → 解压 → 交接 */
+  async function runUpdateJob(pre, req) {
+    const reqLang = langOf(req);
+    const t = (code, params) => messageOf(code, reqLang, params) || code;
+    try {
+      // 预检刚刚强制刷新过缓存，这里直接吃缓存（少打一次 GitHub API，省限流额度）
+      const rel = await checkLatestRelease(APP_VERSION, false);
+      const to = pre.to;
+      if (pre.mode === 'git') {
+        // git 形态：不下载载荷，由更新器 fetch tags + checkout + 重建前端
+        const nm = path.join(ROOT_DIR, 'web', 'node_modules');
+        const needsInstall = pre.lockChanged || !fs.existsSync(nm);
+        const args = [
+          '--root', ROOT_DIR, '--from', APP_VERSION, '--to', to, '--mode', 'git', '--tag', `v${to}`,
+          ...(needsInstall ? ['--rebuild'] : ['--build']),
+          '--scheme', LAUNCH_ARGS.scheme, '--host', LAUNCH_ARGS.host, '--port', String(LAUNCH_ARGS.port),
+          '--pid', String(process.pid), '--launch', 'panel-only', '--log', UPDATE_LOG, '--result', UPDATE_RESULT,
+        ];
+        if (pre.migrations.length) args.push('--data-backup', 'data/config.json');
+        if (pre.irreversible) args.push('--irreversible');
+        setUpdate({ state: 'applying', to, mode: 'git', migrations: pre.migrations });
+        handoffToUpdater(args);
+        return;
+      }
+
+      const asset = upd.pickAsset(rel.assets, upd.ASSET.app(to));
+      if (!asset) throw new Error(t('update.asset-missing'));
+      const sumsAsset = upd.pickAsset(rel.assets, upd.ASSET.sums);
+      const tmpDir = ensureUpdateDir(path.join(UPDATE_ROOT, 'tmp', to));
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      ensureUpdateDir(tmpDir);
+      const zip = path.join(tmpDir, asset.name);
+      setUpdate({ state: 'downloading', to, mode: 'payload', progress: 0, total: asset.size, migrations: pre.migrations, warnings: pre.warnings.map((w) => w.code) });
+      await downloadFilePanel(
+        downloadUrlFor(asset.url, asset.name, to),
+        zip,
+        (got, total) => setUpdate({ progress: got, total: total || asset.size }),
+        600000,
+      );
+      const st = fs.statSync(zip);
+      if (st.size > MAX_UPDATE_BYTES) throw new Error(t('update.asset-too-large', { limit: Math.round(MAX_UPDATE_BYTES / 1048576) }));
+
+      // 校验：读校验值只走 GitHub 资产（镜像不在信任链上）
+      setUpdate({ state: 'verifying', progress: 0, total: 0 });
+      if (!sumsAsset) throw new Error(t('update.checksum-missing'));
+      const sums = upd.parseChecksums(await fetchRemoteText(sumsAsset.url, 256 * 1024, `BlockNexus/${APP_VERSION}`));
+      const want = upd.expectedHash(sums, asset.name);
+      if (!want) throw new Error(t('update.checksum-missing'));
+      const gotHash = await hashFileHex(zip);
+      if (gotHash !== want) {
+        fs.rmSync(zip, { force: true });
+        throw new Error(t('update.hash-mismatch'));
+      }
+
+      // 解压 + 载荷校验（版本一致、路径全在白名单内、必需文件存在）
+      setUpdate({ state: 'staging' });
+      const stageDir = path.join(UPDATE_ROOT, 'stage', to);
+      fs.rmSync(stageDir, { recursive: true, force: true });
+      extractArchive(zip, stageDir);
+      const payloadRoot = findPayloadRoot(stageDir);
+      if (!payloadRoot) throw new Error(t('update.stage-invalid'));
+      const manifest = readJsonSafe(path.join(payloadRoot, 'manifest.json')) || {};
+      if (String(manifest.version || '').replace(/^v/, '') !== to) throw new Error(t('update.stage-invalid'));
+      const files = listPayloadFiles(payloadRoot).filter((f) => f !== 'manifest.json');
+      for (const f of files) {
+        if (!upd.canWritePath(f).ok) throw new Error(t('update.stage-invalid'));
+      }
+      if (!files.includes('panel/server.js') || !files.includes('web/dist/index.html')) {
+        throw new Error(t('update.stage-invalid'));
+      }
+
+      const args = [
+        '--root', ROOT_DIR, '--stage', payloadRoot, '--from', APP_VERSION, '--to', to, '--mode', 'payload',
+        '--scheme', LAUNCH_ARGS.scheme, '--host', LAUNCH_ARGS.host, '--port', String(LAUNCH_ARGS.port),
+        '--pid', String(process.pid), '--launch', 'panel-only',
+        '--log', UPDATE_LOG, '--result', UPDATE_RESULT,
+      ];
+      if (pre.migrations.length) args.push('--data-backup', 'data/config.json');
+      if (pre.irreversible) args.push('--irreversible');
+      setUpdate({ state: 'applying' });
+      updateFails = 0;
+      updateLastAttemptAt = Date.now();
+      handoffToUpdater(args);
+    } catch (e) {
+      updateInFlight = false;
+      updateFails += 1;
+      updateLastAttemptAt = Date.now();
+      setUpdate({ state: 'failed', error: e && e.message ? e.message : String(e) });
+    }
+  }
+
+  /**
+   * 升级预览（只读）：UI 在用户点「立即更新」之前先取一次，把"要迁移什么、要不要重装 Agent、
+   * 是否必须走完整包"摆出来。**不改任何文件**，所以门禁只保留"对外且免密"这一条。
+   */
+  router.get('/panel-update/preflight', async (req, res) => {
+    if (opts.mayBeExposed && !config.data.panel.authEnabled) return fail(res, 'update.disabled-exposed');
+    try {
+      const pre = await buildPreflight(req, String(req.query.refresh || '') === '1');
+      res.json({ ...pre, requested: String(req.query.version || '').replace(/^v/i, '') });
+    } catch (e) {
+      return fail(res, 'update.no-release', { error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  /** 手动触发更新 */
+  router.post('/panel-update', async (req, res) => {
+    const body = req.body || {};
+    const version = String(body.version || '').trim().replace(/^v/i, '');
+    const confirm = String(body.confirm || '').trim().replace(/^v/i, '');
+    // 门禁顺序 = 优先级：对外免密 > 形态 > 在途 > 参数 > 版本 > 空闲
+    if (opts.mayBeExposed && !config.data.panel.authEnabled) return fail(res, 'update.disabled-exposed');
+    if (!INSTALL.canSelfUpdate) return fail(res, INSTALL.reasonKey || 'update.disabled-unknown');
+    if (updateInFlight) return fail(res, 'update.busy');
+    if (!version || confirm !== version) return fail(res, 'update.confirm-mismatch');
+    if (!upd.isNewer(version, APP_VERSION)) return fail(res, 'update.version-not-newer');
+    if (!idleForUpdate()) return fail(res, 'update.busy');
+
+    let pre;
+    try {
+      pre = await buildPreflight(req, true);
+    } catch (e) {
+      return fail(res, 'update.no-release', { error: e.message });
+    }
+    if (!pre.to || pre.to !== version) return fail(res, 'update.no-release');
+    if (!pre.allowed) return fail(res, pre.reasonKey || 'update.unsupported-payload', { version: pre.bridgeVersion });
+    if (pre.irreversible && body.confirmIrreversible !== true) return fail(res, 'update.irreversible-confirm');
+
+    updateInFlight = true;
+    setUpdate({ state: 'downloading', to: version, error: '', startedAt: Date.now(), mode: pre.mode, migrations: pre.migrations, irreversible: pre.irreversible, requiresAgentReinstall: pre.requiresAgentReinstall });
+    res.status(202).json({ ok: true, accepted: true, version, preflight: pre });
+    runUpdateJob(pre, req).catch(() => {});
+  });
+
+  /** 更新进度 / 上次结果 / 能否回滚 */
+  router.get('/panel-update/status', (req, res) => {
+    const last = lastUpdateResult();
+    const backupFrom = last && last.ok ? String(last.from || '') : '';
+    const backupDir = backupFrom ? path.join(UPDATE_ROOT, 'backup', backupFrom) : '';
+    let irreversible = false;
+    try {
+      const files = fs.readdirSync(UPDATE_ROOT);
+      irreversible = files.some((f) => f.startsWith('irreversible-'));
+    } catch {}
+    const canRoll = !!backupDir && fs.existsSync(backupDir) && !irreversible;
+    res.json({
+      ...updateState,
+      inFlight: updateInFlight,
+      installKind: INSTALL.kind,
+      canSelfUpdate: INSTALL.canSelfUpdate,
+      lastResult: last,
+      rollback: {
+        available: canRoll,
+        to: backupFrom,
+        irreversible,
+        reasonKey: canRoll ? '' : irreversible ? 'update.rollback-refused' : 'update.rollback-no-backup',
+      },
+    });
+  });
+
+  /** 回滚到上一次更新前的版本（不可逆迁移之后拒绝） */
+  router.post('/panel-update/rollback', (req, res) => {
+    if (opts.mayBeExposed && !config.data.panel.authEnabled) return fail(res, 'update.disabled-exposed');
+    if (!INSTALL.canSelfUpdate) return fail(res, INSTALL.reasonKey || 'update.disabled-unknown');
+    if (updateInFlight) return fail(res, 'update.busy');
+    const last = lastUpdateResult();
+    const target = last && last.ok ? String(last.from || '') : '';
+    const backupDir = target ? path.join(UPDATE_ROOT, 'backup', target) : '';
+    let irreversible = false;
+    try {
+      irreversible = fs.readdirSync(UPDATE_ROOT).some((f) => f.startsWith('irreversible-'));
+    } catch {}
+    const chk = upd.canRollback({ hasBackup: !!backupDir && fs.existsSync(backupDir), irreversible });
+    if (!chk.ok) return fail(res, chk.reasonKey);
+    if (!idleForUpdate()) return fail(res, 'update.busy');
+
+    updateInFlight = true;
+    setUpdate({ state: 'applying', to: target, mode: 'rollback', error: '' });
+    const args = [
+      '--root', ROOT_DIR, '--restore', backupDir, '--from', APP_VERSION, '--to', target, '--mode', 'rollback',
+      '--scheme', LAUNCH_ARGS.scheme, '--host', LAUNCH_ARGS.host, '--port', String(LAUNCH_ARGS.port),
+      '--pid', String(process.pid), '--launch', 'panel-only', '--log', UPDATE_LOG, '--result', UPDATE_RESULT,
+    ];
+    if (last && Array.isArray(last.dataBackup) && last.dataBackup.length) {
+      args.push('--data-backup', last.dataBackup.join(','));
+    }
+    res.status(202).json({ ok: true, accepted: true, rollbackTo: target });
+    handoffToUpdater(args);
+  });
+
+  /**
+   * 自动更新：默认只提示（notify）。真正自动安装必须由发布方在 update.json 里
+   * 显式声明 autoSafe + 非破坏性（见 panel/update.js 的 shouldAutoApply），
+   * 因为本项目 v1.0 之前 semver 不严格，不能按"minor 就安全"猜。
+   */
+  async function autoUpdateTick() {
+    try {
+      const policy = updPolicy();
+      if (policy.auto === 'off') return;
+      if (updateInFlight || !INSTALL.canSelfUpdate) return;
+      if (opts.mayBeExposed && !config.data.panel.authEnabled) return;
+      const rel = await checkLatestRelease(APP_VERSION, false);
+      if (!rel.hasUpdate) return;
+      const local = upd.computeLocalHashes(ROOT_DIR);
+      const plan = upd.planUpgrade({ localVersion: APP_VERSION, localSchema: migrate.readSchema(config.data), meta: rel.meta, currentNode: NODE_MAJOR });
+      if (policy.dismissed && policy.dismissed[rel.latest]) return;
+      if (upd.needsFullPackage(rel.meta, local).needed) return;
+      if (policy.auto !== 'auto') return;
+      const verdict = upd.shouldAutoApply({
+        meta: rel.meta,
+        plan,
+        ctx: {
+          idle: idleForUpdate(),
+          exposedWithoutAuth: !!opts.mayBeExposed && !config.data.panel.authEnabled,
+          failures: updateFails,
+          lastAttemptAt: updateLastAttemptAt,
+          now: Date.now(),
+        },
+      });
+      if (!verdict.ok) return;
+      const pre = await buildPreflight({ headers: { 'accept-language': 'zh' } }, false);
+      if (!pre.allowed) return;
+      updateInFlight = true;
+      setUpdate({ state: 'downloading', to: pre.to, mode: pre.mode, migrations: pre.migrations, startedAt: Date.now() });
+      runUpdateJob(pre, { headers: { 'accept-language': 'zh' } }).catch(() => {});
+    } catch {
+      // 自动更新是尽力而为，任何异常都不打扰用户
+    }
+  }
+  // 启动 3 分钟后首次检查，之后每 6 小时一次（.unref() 不阻止进程退出）
+  setTimeout(() => autoUpdateTick(), 3 * 60 * 1000).unref();
+  autoTimer = setInterval(() => autoUpdateTick(), 6 * 60 * 60 * 1000);
+  autoTimer.unref();
+  void updateState;
+  void autoTimer;
 
   // ---------- 面板设置（登录后可读写） ----------
   // GET 返回 SMTP 密码之外的全体字段；PUT 支持部分更新——只处理请求里出现的字段
@@ -981,6 +1579,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         hasPass: !!st.smtp.pass,
       },
       notify: { offline: !!st.notify.offline, recovery: !!st.notify.recovery },
+      // 面板更新策略（auto = off | notify | auto；source 为下载镜像，校验值仍来自 GitHub）
+      update: { auto: updPolicy().auto, source: updPolicy().source, dismissed: { ...updPolicy().dismissed } },
       smtpReady: smtpConfigured() && !!st.adminEmail,
       ai: {
         enabled: !!st.ai.enabled,
@@ -1072,6 +1672,35 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       }
       if (a.model !== undefined) st.ai.model = String(a.model).trim();
       if (a.apiKey) st.ai.apiKey = String(a.apiKey).trim();
+    }
+
+    // —— 面板更新策略 ——
+    // auto: off（不检查）/ notify（只提示，默认）/ auto（允许自动安装，仍需发布方声明 autoSafe）
+    // source: 下载镜像（必须 https；校验值始终来自 GitHub，镜像不在信任链上）
+    // dismissed: 「跳过此版本」记录（版本号 → 时间戳），只接受合法版本号，长度封顶
+    if (b.update && typeof b.update === 'object') {
+      if (!st.update) st.update = { auto: 'notify', source: '', dismissed: {} };
+      if (b.update.auto !== undefined) {
+        const v = String(b.update.auto);
+        if (!['off', 'notify', 'auto'].includes(v)) return fail(res, 'settings.update-invalid');
+        st.update.auto = v;
+      }
+      if (b.update.source !== undefined) {
+        const s = String(b.update.source).trim().replace(/\/+$/, '');
+        if (s && !/^https:\/\//i.test(s)) return fail(res, 'settings.update-source-invalid');
+        st.update.source = s.slice(0, 500);
+      }
+      if (b.update.dismissed && typeof b.update.dismissed === 'object') {
+        const next = {};
+        let n = 0;
+        for (const [k, v] of Object.entries(b.update.dismissed)) {
+          if (n++ > 50) break;
+          const ver = String(k).replace(/^v/i, '').slice(0, 40);
+          if (!upd.normalizeVersion(ver)) continue;
+          next[ver] = Number(v) || Date.now();
+        }
+        st.update.dismissed = next;
+      }
     }
 
     config.save();

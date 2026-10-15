@@ -131,6 +131,16 @@ const ERROR_CODES = {
     zh: '请先在「通知设置」中填写管理员邮箱',
     en: 'Set the admin email in Notification settings first',
   },
+  'settings.update-invalid': {
+    status: 400,
+    zh: '更新策略取值非法（只能是 off / notify / auto）',
+    en: 'Invalid update policy (must be off / notify / auto)',
+  },
+  'settings.update-source-invalid': {
+    status: 400,
+    zh: '更新下载源必须是 https 地址（留空 = 直连 GitHub）',
+    en: 'The update download source must be an https URL (leave empty to use GitHub directly)',
+  },
   'notification.send-failed': {
     status: 502,
     zh: '邮件发送失败：{detail}',
@@ -308,10 +318,213 @@ const ERROR_CODES = {
     zh: 'Agent 响应超时',
     en: 'Agent timed out',
   },
+  // ---------- 面板自更新（panel/update.js 的判定 + api.js 的接口） ----------
+  // 这些 code 有两个用途：接口出错时直接作为 error 文案；以及作为「为什么不能自更新 /
+  // 为什么没有自动更新」的原因（前端原样显示后端渲染好的文本，避免同一批文案在两边各写一份）。
+  'update.disabled-dirty': {
+    status: 403,
+    zh: '当前是源码工作区且有未提交改动，应用内更新已禁用（请手动 git pull 或先提交改动）',
+    en: 'This is a source checkout with uncommitted changes; in-app update is disabled (use git pull, or commit first)',
+  },
+  'update.disabled-unknown': {
+    status: 403,
+    zh: '无法判断当前安装形态，应用内更新已禁用（请手动下载便携包更新）',
+    en: 'Cannot determine how this copy was installed; in-app update is disabled (update manually from the portable package)',
+  },
+  'update.disabled-git-unknown': {
+    status: 403,
+    zh: '检出了 git 工作区，但无法确认它是否干净（git 不可用或被拦截），应用内更新已禁用',
+    en: 'A git working tree was detected but its status could not be checked (git unavailable or blocked); in-app update is disabled',
+  },
+  'update.disabled-exposed': {
+    status: 403,
+    zh: '面板对外可访问且未开启登录保护，出于安全考虑不允许触发更新',
+    en: 'The panel is reachable from the network without login protection; updating is blocked for safety',
+  },
+  'update.version-not-newer': {
+    status: 400,
+    zh: '目标版本不比当前版本新',
+    en: 'The target version is not newer than the current one',
+  },
+  'update.confirm-mismatch': {
+    status: 400,
+    zh: '确认参数与目标版本不一致，更新未执行',
+    en: 'The confirmation does not match the target version; nothing was updated',
+  },
+  'update.busy': {
+    status: 409,
+    zh: '有实例启停 / 备份 / 安装任务在进行，稍后再试',
+    en: 'An instance operation, backup or install is in progress; try again later',
+  },
+  'update.no-release': {
+    status: 502,
+    zh: '读取 Release 信息失败（网络或 GitHub 限流），稍后再试',
+    en: 'Could not read the release info (network or GitHub rate limit); try again later',
+  },
+  'update.meta-invalid': {
+    status: 502,
+    zh: '该 Release 缺少可用的更新元数据（update.json）',
+    en: 'This release has no usable update metadata (update.json)',
+  },
+  'update.asset-missing': {
+    status: 502,
+    zh: '该 Release 里找不到需要的更新包',
+    en: 'The required update package is missing from this release',
+  },
+  'update.asset-too-large': {
+    status: 400,
+    zh: '更新包超出大小上限（{limit} MB），已中止',
+    en: 'The update package exceeds the size limit ({limit} MB); aborted',
+  },
+  'update.checksum-missing': {
+    status: 502,
+    zh: '该 Release 没有提供校验值，拒绝更新（无法验证完整性）',
+    en: 'This release provides no checksum; refusing to update (integrity cannot be verified)',
+  },
+  'update.download-failed': {
+    status: 502,
+    zh: '更新包下载失败：{error}',
+    en: 'Failed to download the update package: {error}',
+  },
+  'update.hash-mismatch': {
+    status: 400,
+    zh: '更新包校验值不匹配，已丢弃（可能被篡改或传输损坏）',
+    en: 'Update package checksum mismatch; discarded (tampered or corrupted in transit)',
+  },
+  'update.unsupported-payload': {
+    status: 400,
+    zh: '当前安装形态不支持这种更新方式',
+    en: 'This installation cannot be updated this way',
+  },
+  'update.stage-invalid': {
+    status: 500,
+    zh: '更新包内容异常（路径不安全或缺少关键文件），已中止',
+    en: 'The update package is invalid (unsafe path or missing files); aborted',
+  },
+  'update.needs-bridge': {
+    status: 400,
+    zh: '跨版本差距过大，需先升级到 v{version} 再继续',
+    en: 'The version gap is too large; update to v{version} first',
+  },
+  'update.needs-manual': {
+    status: 400,
+    zh: '该版本需要手动升级：下载便携包后保留 data/ 目录覆盖程序文件',
+    en: 'This version needs a manual upgrade: download the portable package and replace the program files, keeping data/',
+  },
+  'update.needs-full-package': {
+    status: 400,
+    zh: '该版本改动了依赖或外壳组件，需要完整便携包（应用包不适用）',
+    en: 'This version changes dependencies or the shell, so the full portable package is required',
+  },
+  'update.irreversible-confirm': {
+    status: 400,
+    zh: '该版本包含不可逆的数据迁移，需要显式确认后才能更新',
+    en: 'This version includes an irreversible data migration and needs explicit confirmation',
+  },
+  'update.node-too-old': {
+    status: 400,
+    zh: '该版本需要 Node.js {version} 或更高版本',
+    en: 'This version requires Node.js {version} or newer',
+  },
+  'update.apply-failed': {
+    status: 500,
+    zh: '应用更新失败：{error}',
+    en: 'Failed to apply the update: {error}',
+  },
+  'update.rollback-no-backup': {
+    status: 404,
+    zh: '没有可用的回滚备份',
+    en: 'No rollback backup available',
+  },
+  'update.rollback-refused': {
+    status: 400,
+    zh: '该版本包含不可逆的数据迁移，不能自动回滚（备份仍保留在 data/update/backup）',
+    en: 'This version migrated data irreversibly, so rollback is not allowed (backups are kept in data/update/backup)',
+  },
+  'update.rollback-failed': {
+    status: 500,
+    zh: '回滚失败：{error}',
+    en: 'Rollback failed: {error}',
+  },
+  // ---- 数据迁移（panel/migrate.js） ----
+  'update.migrate-downgrade': {
+    status: 400,
+    zh: '数据 schema 比程序更新（疑似降级），拒绝迁移',
+    en: 'The data schema is newer than the program (looks like a downgrade); migration refused',
+  },
+  'update.migrate-unsupported': {
+    status: 400,
+    zh: '数据 schema 过旧，超出本版迁移链的范围，请先升级到中间版本',
+    en: 'The data schema is too old for this version\'s migration chain; upgrade through an intermediate version first',
+  },
+  'update.migrate-failed': {
+    status: 500,
+    zh: '数据迁移失败，已保留备份并拒绝启动（详见日志）',
+    en: 'Data migration failed; a backup was kept and startup was refused (see the log)',
+  },
   'internal.error': {
     status: 500,
     zh: '内部错误',
     en: 'Internal error',
+  },
+};
+
+/**
+ * **非 HTTP 错误**的文案表：更新策略的"为什么没自动更新"、升级预览警告、成功提示。
+ * 与 ERROR_CODES 同形（{zh,en}），但不带 status——它们不是"出错"，只是要按当前语言
+ * 渲染给用户的一段文本（接口把它们渲染好随响应返回，前端直接显示）。
+ * 共用 messageOf()：同一批文案只在这一处维护。
+ * @type {Record<string, {zh: string, en: string}>}
+ */
+const REASON_CODES = {
+  'update.meta-missing': {
+    zh: '该 Release 没有更新元数据（update.json），兼容性未知——按"需要人工确认"处理',
+    en: 'This release has no update metadata (update.json); compatibility is unknown, so it needs manual confirmation',
+  },
+  'update.rollback-ok': {
+    zh: '已回滚到 {version}',
+    en: 'Rolled back to {version}',
+  },
+  'update.auto-not-declared': {
+    zh: '该版本未声明可自动安装，需手动确认',
+    en: 'This release is not marked as safe to auto-install; manual confirmation required',
+  },
+  'update.auto-severity': {
+    zh: '只有安全 / 严重更新会自动安装',
+    en: 'Only security or critical updates are installed automatically',
+  },
+  'update.auto-breaking': {
+    zh: '该版本含破坏性变更，不自动安装',
+    en: 'This release has breaking changes; not installed automatically',
+  },
+  'update.auto-agent-reinstall': {
+    zh: '该版本需要手动重装部分 Agent，不自动安装',
+    en: 'This release requires manually reinstalling some Agents; not installed automatically',
+  },
+  'update.auto-irreversible': {
+    zh: '该版本含不可逆迁移，不自动安装',
+    en: 'This release includes an irreversible migration; not installed automatically',
+  },
+  'update.auto-backoff': {
+    zh: '之前连续更新失败，已暂停自动更新（可在设置页手动更新）',
+    en: 'Previous automatic updates failed repeatedly; auto-update is paused (use the manual button)',
+  },
+  'update.auto-cooldown': {
+    zh: '24 小时内已尝试过，暂不重复',
+    en: 'Already attempted within the last 24 hours',
+  },
+  // 升级预览里给用户看的警告
+  'update.warn-breaking': {
+    zh: '该版本含破坏性变更',
+    en: 'This release contains breaking changes',
+  },
+  'update.warn-irreversible': {
+    zh: '该版本的数据迁移不可逆（升级后不能自动回滚）',
+    en: 'Its data migration is irreversible (no automatic rollback afterwards)',
+  },
+  'update.warn-agent-reinstall': {
+    zh: '该版本需要手动重装部分 Agent',
+    en: 'Some Agents must be reinstalled manually after this update',
   },
 };
 
@@ -329,12 +542,17 @@ function renderTemplate(template, params) {
   });
 }
 
-/** 该 code 是否在表中 */
+/** 该 code 是否在错误表中 */
 function hasErrorCode(code) {
   return Object.prototype.hasOwnProperty.call(ERROR_CODES, String(code));
 }
 
-/** 取建议状态码；未知 code 回退 500 */
+/** 该 code 是否在「非错误文案」表中（更新策略原因 / 警告 / 成功提示） */
+function hasReasonCode(code) {
+  return Object.prototype.hasOwnProperty.call(REASON_CODES, String(code));
+}
+
+/** 取建议状态码；未知 code 回退 500（REASON_CODES 不是错误，不参与状态码） */
 function statusOf(code, fallback) {
   const e = ERROR_CODES[code];
   return (e && e.status) || fallback || 500;
@@ -342,12 +560,13 @@ function statusOf(code, fallback) {
 
 /**
  * 取指定语言的文案；未知 code 返回 null（让调用方决定回退策略）。
+ * 两张表共用：ERROR_CODES（HTTP 错误）与 REASON_CODES（非错误的原因/警告/成功提示）。
  * @param {string} code
  * @param {'zh'|'en'} [lang]
  * @param {Record<string, unknown>} [params]
  */
 function messageOf(code, lang, params) {
-  const e = ERROR_CODES[code];
+  const e = ERROR_CODES[code] || REASON_CODES[code];
   if (!e) return null;
   const template = lang === 'en' ? e.en : e.zh;
   return renderTemplate(template, params);
@@ -394,8 +613,10 @@ function langOf(req) {
 
 module.exports = {
   ERROR_CODES,
+  REASON_CODES,
   renderTemplate,
   hasErrorCode,
+  hasReasonCode,
   statusOf,
   messageOf,
   errorResponse,
