@@ -1,8 +1,12 @@
-# 组装 Release 产物：便携版 zip + 纯外壳 zip + 应用包 zip + 版本元数据（含 SHA256SUMS）
+﻿# 组装 Release 产物：便携版 zip + 纯外壳 zip + 应用包 zip + 版本元数据（含 SHA256SUMS）
+#
+# ⚠ 本文件必须保存为 **UTF-8 带 BOM + CRLF**：Windows PowerShell 5.1 按 ANSI 码页读无 BOM 的 .ps1，
+#   中文注释与字符串会变乱码并直接解析失败（实测报 UnexpectedToken，脚本根本跑不起来）。
+#   用编辑器/AI 工具改完这个文件后，务必确认前 3 字节仍是 EF BB BF。
 #
 # 便携版（解压到任意目录双击 BlockNexus.exe 即用）：
 #   外壳运行件（exe/dll/runtimes）+ 内置 Node（runtime/node.exe，托盘 FindNode 的约定位置）
-#   + 运行所需的最小源码树（panel/、agent/agent.js、web/dist、scripts/blocknexus-launcher.js）
+#   + 运行所需的最小源码树（panel/、agent/agent.js、web/dist、scripts/*.js）
 #   + 全新安装的生产依赖（npm ci --omit=dev，不携带开发依赖）
 #   + install.json 安装标记（面板凭它认出自更新形态为 portable；绝不含任何密钥/凭据）
 # 纯外壳（解压到项目根目录，需项目已完成 npm install 与 npm run build:web）：
