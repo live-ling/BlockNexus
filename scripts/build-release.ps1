@@ -1,4 +1,4 @@
-﻿# 组装 Release 产物：便携版 zip + 纯外壳 zip + 应用包 zip + 版本元数据（含 SHA256SUMS）
+# 组装 Release 产物：便携版 zip + 纯外壳 zip + 应用包 zip + 版本元数据（含 SHA256SUMS）
 #
 # 便携版（解压到任意目录双击 BlockNexus.exe 即用）：
 #   外壳运行件（exe/dll/runtimes）+ 内置 Node（runtime/node.exe，托盘 FindNode 的约定位置）
@@ -254,7 +254,11 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $app 'web') | Out-Null
     Copy-Item (Join-Path $root 'web\dist') (Join-Path $app 'web') -Recurse -Force
     Copy-Item (Join-Path $root 'agent\agent.js') (Join-Path $app 'agent') -Force
-    Copy-Item (Join-Path $root 'scripts\blocknexus-launcher.js') (Join-Path $app 'scripts') -Force
+    # scripts/ 下**所有** .js 都要带上：便携版是自更新的主要形态（install.json 会让面板认出
+    # portable 并显示「立即更新」），缺了 panel-updater.js 就会在拉起更新器时 ENOENT。
+    Get-ChildItem (Join-Path $root 'scripts') -Filter '*.js' | ForEach-Object {
+      Copy-Item $_.FullName (Join-Path $app 'scripts') -Force
+    }
 
     # 安装标记：面板凭它认出自更新形态 = portable（panel/update.js 的 readInstallMarker）。
     # 刻意只放形态/版本/构建时刻 —— 绝不放 token、SSH 密码、路径等任何凭据或环境信息。
@@ -277,7 +281,10 @@ try {
     } finally { Pop-Location }
 
     # 压缩前断言关键内容都在（PS5.1 的 Copy-Item 出过静默残缺）
-    foreach ($v in @('web\dist\index.html', 'runtime\node.exe', 'panel\server.js', 'agent\agent.js', 'node_modules\express\package.json')) {
+    # ⚠ scripts\panel-updater.js 是自更新的执行器：便携版缺了它，用户点「立即更新」会失败
+    foreach ($v in @('web\dist\index.html', 'runtime\node.exe', 'panel\server.js', 'panel\update.js',
+                     'agent\agent.js', 'node_modules\express\package.json',
+                     'scripts\blocknexus-launcher.js', 'scripts\panel-updater.js')) {
       if (-not (Test-Path (Join-Path $app $v))) { throw ('打包内容缺失: ' + $v) }
     }
     # 便携包虽含 node_modules，但绝不能带上运行时数据与仓库标记
