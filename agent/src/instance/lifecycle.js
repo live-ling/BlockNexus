@@ -118,6 +118,9 @@ module.exports = {
     rec.proc = child;
     rec.startedAt = Date.now();
     rec.ready = false; // 等控制台的「Done (x.xxxs)」就绪信号，期间状态为启动中
+    // 上一次进程若留有未结算的在线会话（例如 Agent 被硬杀过），先关掉再清空跟踪集，
+    // 否则这些玩家会一直挂在 openSince 上，时长只涨不结
+    this.closeAllPlayerSessions(rec);
     rec.players = new Set(); // 玩家跟踪从空集开始（日志中的 joined/left 会持续更新）
     rec.runtimePort = rec.meta.port; // 本次进程实际监听的端口（properties 改端口要重启才生效）
     clearTimeout(rec.readyTimer);
@@ -161,6 +164,12 @@ module.exports = {
       rec.ready = false;
       clearTimeout(rec.readyTimer);
       rec.readyTimer = null;
+      // 进程没了，玩家当然也都不在了：结算全部在线会话（关机时刻就是会话终点），
+      // 否则这些玩家的时长会一直挂在 openSince 上不落盘。结算后立刻落盘——
+      // 这一刻的数据等不到 60 秒的节拍（Agent 可能紧接着就退出了）。
+      this.closeAllPlayerSessions(rec);
+      this.flushPlayerStatsNow(rec);
+      if (rec.players) rec.players.clear();
       this.emitConsole(rec, `[BlockNexus] 进程退出 (code=${code}${signal ? ' signal=' + signal : ''})`);
       this.emitUpdated(rec);
       // 异常退出（非主动停止且非 0 退出码）→ 交给看门狗
@@ -273,6 +282,8 @@ module.exports = {
     }
     fs.rmSync(this.instDir(name), { recursive: true, force: true });
     this.map.delete(name);
+    // 清掉内存态与未落盘的聊天定时器（文件已随实例目录删除）
+    this.dropPlayerData(rec);
     sendEvent('instance.updated', { instance: name, status: 'deleted' });
     return { ok: true };
   }

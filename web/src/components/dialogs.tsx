@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/select';
 import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary, type SshCheckResult } from '@/lib/api';
 import { uploadFile, uploadFileViaSftp } from '@/lib/upload';
+import { escapeValue, parseProperties, serializeProperties, unescapeValue } from '@/lib/properties';
 import { $, type TranslationKey } from '@/lib/i18n';
 import { UploadChannelSelect, type UploadChannel } from '@/components/upload-channel';
 import { useToastHelpers } from '@/lib/toast';
@@ -38,6 +39,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 
 // 目录还没拉回来时也保证下拉里有得选（顺序与后端 CORE_KINDS 一致）
 // ⚠ 只存 id：显示名在渲染期经 kindLabel() 取，模块顶层取词会把语言固化
@@ -1061,6 +1063,9 @@ export function EditInstanceDialog({
   const [address, setAddress] = useState('');
   const [memory, setMemory] = useState('2048'); // 预设值（MB）或 'custom'
   const [customMem, setCustomMem] = useState('');
+  // 玩家统计 / 聊天记录开关（记录在 Agent 侧；缺省全开，老版本 Agent 不返回该字段）
+  const [trackPlayers, setTrackPlayers] = useState(true);
+  const [trackChat, setTrackChat] = useState(true);
   const [busy, setBusy] = useState(false);
   // server-icon：预览缓存戳 / 404 标记 / 上传中 / 裁切源图
   const [iconV, setIconV] = useState(0);
@@ -1068,6 +1073,12 @@ export function EditInstanceDialog({
   const [iconBusy, setIconBusy] = useState(false);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const iconFileRef = useRef<HTMLInputElement>(null);
+  // MOTD 快捷编辑：值不在实例元信息里，而是 server.properties 的一行，
+  // 所以这里单独读一次、判脏、保存时**重新读一遍再写**（见下面的 saveMotd）。
+  const [motd, setMotd] = useState('');
+  const [motdRaw, setMotdRaw] = useState(''); // 打开时的原值（判脏 + 冒号转义约定）
+  const [motdLoading, setMotdLoading] = useState(false);
+  const [motdErr, setMotdErr] = useState('');
 
   const applyIcon = async (b64: string) => {
     setIconBusy(true);
@@ -1091,10 +1102,16 @@ export function EditInstanceDialog({
     return Math.max(512, Math.min(8192, Math.floor((memTotalMB * 0.5) / 512) * 512));
   }, [memTotalMB]);
 
+  // 实例名单独取出来：下面几个请求/effect 都要用它，写成变量免得每处都写 encodeURIComponent
+  const instanceName = instance?.name ?? '';
+
   useEffect(() => {
     if (open && instance) {
       setNote(instance.note || '');
       setAddress(instance.address || '');
+      // 老版本 Agent 不返回 tracking → 按「全开」显示（与 Agent 侧的默认值一致）
+      setTrackPlayers(instance.tracking?.players !== false);
+      setTrackChat(instance.tracking?.chat !== false);
       const cur = Math.round(instance.memoryMB);
       // 命中预设就用预设，否则走自定义框
       const presets = [512, 1024, 2048, 4096, 8192, 16384];
@@ -1108,11 +1125,110 @@ export function EditInstanceDialog({
     }
   }, [open, instance]);
 
+  // MOTD 单独读：它不在实例元信息里，而是 server.properties 的一行。
+  // 读失败只是这一项不能编辑（其余字段照常），所以错误就地显示、不弹 toast。
+  useEffect(() => {
+    if (!open || !instance) return;
+    let alive = true;
+    (async () => {
+      setMotdLoading(true);
+      setMotdErr('');
+      try {
+        const data = await api<{ content: string }>(
+          `/servers/${server.id}/instances/${encodeURIComponent(instance.name)}/properties`,
+        );
+        if (!alive) return;
+        const { items } = parseProperties(data.content);
+        const map: Record<string, string> = {};
+        for (const it of items) if (it.kind === 'pair') map[it.key] = it.value;
+        // 展示用还原后的值（motd=Hi\\: there → Hi: there），回写时再按原值决定要不要转义
+        const value = unescapeValue(map.motd ?? '');
+        setMotd(value);
+        setMotdRaw(value);
+      } catch (e) {
+        if (alive) setMotdErr(errText(e));
+      } finally {
+        if (alive) setMotdLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, instance, server.id]);
+
   if (!instance) return null;
 
   const resolveMemoryMB = (): number => (memory === 'custom' ? Number(customMem) : Number(memory));
   // 运行中的实例改内存要重启才生效
   const running = instance.status === 'running' || instance.status === 'starting';
+
+  /**
+   * 只改 server.properties 的 motd 一行：写之前**重新读一遍**再回写，
+   * 否则拿打开对话框时的快照去写，会把别人（或属性编辑器）在这期间改的东西抹掉。
+   * 注释、顺序、未知键都由 serializeProperties 原样保留。
+   */
+  const saveMotd = async () => {
+    const url = `/servers/${server.id}/instances/${encodeURIComponent(instanceName)}/properties`;
+    const data = await api<{ content: string }>(url);
+    const parsed = parseProperties(data.content);
+    const rawMap: Record<string, string> = {};
+    for (const it of parsed.items) if (it.kind === 'pair') rawMap[it.key] = it.value;
+    const content = serializeProperties(
+      parsed.items,
+      { motd: escapeValue(motd, rawMap.motd ?? '') },
+      parsed.eol,
+    );
+    return api<{ ok: boolean; metaSynced: boolean }>(url, { method: 'PUT', body: { content } });
+  };
+
+  /** 保存：实例元信息一次 PUT；MOTD 在 server.properties 里，是第二次写，失败单独提示 */
+  const save = async () => {
+    const memMB = resolveMemoryMB();
+    if (!memMB || memMB < 512 || memMB > 32768) {
+      error($('createInstance.error.memoryRange'));
+      return;
+    }
+    setBusy(true);
+    const memChanged = Math.round(instance.memoryMB) !== memMB;
+    // 读失败时 motd 是空的，不能据此把用户的 MOTD 清掉 —— 这时候整项跳过
+    const motdChanged = !motdErr && !motdLoading && motd !== motdRaw;
+    try {
+      await api(`/servers/${server.id}/instances/${encodeURIComponent(instance.name)}`, {
+        method: 'PUT',
+        body: {
+          note,
+          address,
+          memoryMB: memMB,
+          // 老版本 Agent 不认这个字段（instance.edit 只处理出现的字段），
+          // 因此这里一并下发不会有兼容问题
+          tracking: { players: trackPlayers, chat: trackChat },
+        },
+      });
+    } catch (e) {
+      error($('editServer.error.saveFailed'), errText(e));
+      setBusy(false);
+      return;
+    }
+    if (motdChanged) {
+      try {
+        await saveMotd();
+      } catch (e) {
+        // 备注/内存已经存下了，别让人以为整单失败；明确说是 MOTD 这一项没写成
+        error($('editInstance.error.motd'), errText(e));
+        onOpenChange(false);
+        onSaved();
+        setBusy(false);
+        return;
+      }
+    }
+    const notes: string[] = [];
+    if (memChanged && running) notes.push($('editInstance.toast.savedRestart'));
+    if (motdChanged) notes.push(running ? $('property.desc.running') : $('property.toast.synced'));
+    success($('editInstance.toast.saved'), notes.length ? notes.join(' · ') : undefined);
+    onOpenChange(false);
+    onSaved();
+    setBusy(false);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1164,6 +1280,31 @@ export function EditInstanceDialog({
                 {iconBusy ? $('editInstance.icon.uploading') : $('editInstance.icon.change')}
               </Button>
             </div>
+          </div>
+          {/* MOTD 快捷编辑：写的是 server.properties 的 motd 一行（不是面板元信息），
+              改完在这里点保存即可，不必再进「server.properties」工具翻一遍 */}
+          <div className="grid gap-2">
+            <Label htmlFor="ei-motd">{$('property.motd.label')}</Label>
+            <Input
+              id="ei-motd"
+              value={motd}
+              disabled={motdLoading || !!motdErr}
+              onChange={(e) => setMotd(e.target.value)}
+              placeholder="A Minecraft Server"
+            />
+            <p className={`text-[11px] leading-snug ${motdErr ? 'text-destructive' : 'text-muted-foreground'}`}>
+              {motdErr ? (
+                $('editInstance.motd.loadFailed')
+              ) : motdLoading ? (
+                $('property.loading')
+              ) : (
+                <>
+                  {$('property.motd.hint')}
+                  {$('editInstance.motd.hint')}
+                  {running ? $('property.desc.running') : ''}
+                </>
+              )}
+            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="ei-note">{$('editInstance.note')}</Label>
@@ -1219,36 +1360,43 @@ export function EditInstanceDialog({
               {running && $('editInstance.memory.needRestart')}
             </p>
           </div>
+          {/* 玩家统计 / 聊天记录开关：记录发生在 Agent 侧（面板离线也照记），
+              关掉只是不再新增，已保存的历史仍可在详情页查看与清空 */}
+          <div className="grid gap-2 border-t pt-3">
+            <Label>{$('editInstance.tracking')}</Label>
+            <label className="flex items-start gap-2">
+              <Switch
+                checked={trackPlayers}
+                onCheckedChange={setTrackPlayers}
+                aria-label={$('editInstance.tracking.players')}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium">{$('editInstance.tracking.players')}</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">
+                  {$('editInstance.tracking.players.hint')}
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2">
+              <Switch
+                checked={trackChat}
+                onCheckedChange={setTrackChat}
+                aria-label={$('editInstance.tracking.chat')}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium">{$('editInstance.tracking.chat')}</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">
+                  {$('editInstance.tracking.chat.hint')}
+                </span>
+              </span>
+            </label>
+          </div>
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {$('common.cancel')}
           </Button>
-          <Button
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              const memMB = resolveMemoryMB();
-              if (!memMB || memMB < 512 || memMB > 32768) {
-                error($('createInstance.error.memoryRange'));
-                setBusy(false);
-                return;
-              }
-              try {
-                await api(`/servers/${server.id}/instances/${encodeURIComponent(instance.name)}`, {
-                  method: 'PUT',
-                  body: { note, address, memoryMB: memMB },
-                });
-                success($('editInstance.toast.saved'), running ? $('editInstance.toast.savedRestart') : undefined);
-                onOpenChange(false);
-                onSaved();
-              } catch (e) {
-                error($('editServer.error.saveFailed'), errText(e));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
+          <Button disabled={busy} onClick={save}>
             {$('common.save')}
           </Button>
         </DialogFooter>

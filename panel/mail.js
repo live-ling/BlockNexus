@@ -178,10 +178,16 @@ function resetCodeMail({ code, minutes = 15 }) {
   };
 }
 
-/** 服务器离线通知 */
-function offlineMail({ name, host, time }) {
+/**
+ * 服务器离线通知。
+ * since 是「连接断开的时刻」，time 是「判定为故障的时刻」——
+ * 两者相差观察期（2 分钟）；短暂抖动在观察期内自行恢复，不会走到这里。
+ */
+function offlineMail({ name, host, time, since }) {
   return {
-    text: `服务器「${name}」（${host}）的 Agent 连接已断开。\n时间：${time}\n\n面板会自动持续重连。`,
+    text: since
+      ? `服务器「${name}」（${host}）的 Agent 连接已断开。\n断开时间：${since}\n判定离线：${time}\n\n面板会自动持续重连。`
+      : `服务器「${name}」（${host}）的 Agent 连接已断开。\n时间：${time}\n\n面板会自动持续重连。`,
     html: layout({
       title: `服务器离线：${name}`,
       preheader: `服务器「${name}」的 Agent 连接已断开`,
@@ -192,9 +198,15 @@ function offlineMail({ name, host, time }) {
         kv([
           ['服务器', name],
           ['主机', host],
-          ['发生时间', time],
+          ['断开时间', since || time],
+          // 抖动（断线几十秒又连上）不会触发本邮件，这里不用再解释；
+          // 展示确认时间是为了让用户一眼看出「这不是瞬时抖动」
+          ...(since ? [['判定离线', time]] : []),
         ]) +
-        p('面板会自动持续重连，恢复上线后（若已开启恢复通知）会再发一封邮件。', `color:${C.muted};font-size:13px;margin-bottom:0;`),
+        p(
+          '连接中断超过 2 分钟才判定为离线，短暂抖动不会发信。面板会自动持续重连，恢复上线后（若已开启恢复通知）会再发一封邮件。',
+          `color:${C.muted};font-size:13px;margin-bottom:0;`,
+        ),
       footer: '你收到这封邮件是因为在面板「通知设置」中开启了服务器离线通知，可随时在面板中关闭。',
     }),
   };

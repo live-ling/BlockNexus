@@ -39,10 +39,12 @@ class InstanceManager {
     this.bootstrapJobs = new Map(); // name|version -> 进行中的原版核心预下载（并发去重）
     fs.mkdirSync(this.dir, { recursive: true });
     this.scan();
-    // 清理过期传输会话；每 30 秒检查看门狗定时重启与定时备份任务
+    // 清理过期传输会话；每 30 秒检查看门狗定时重启与定时备份任务；
+    // 每 60 秒把在线玩家的时长按节拍结算并落盘（playerdata.js）
     setInterval(() => this.gcTransferSessions(), 10 * 60e3).unref();
     setInterval(() => this.checkWatchdogSchedules(), 30e3).unref();
     setInterval(() => this.checkBackupSchedules(), 30e3).unref();
+    setInterval(() => this.playerStatsTick(), 60e3).unref();
   }
 
   instDir(name) {
@@ -166,10 +168,13 @@ class InstanceManager {
       error: rec.meta.error || '',
       // 是否装了 spark（决定前端要不要显示 Spark 标签页；老版本 Agent 无此字段，前端按未装处理）
       sparkInstalled: this.sparkDetect(rec).installed,
+      // 玩家与聊天记录的两个开关（缺省全开；老版本 Agent 不返回该字段，前端按全开处理）
+      tracking: this.trackingCfg(rec),
     }));
   }
 
-  // 编辑实例元信息：备注（note）与连接地址（address，仅面板展示用）
+  // 编辑实例元信息：备注（note）、连接地址（address，仅面板展示用）、
+  // 玩家统计与聊天记录的开关（tracking：记录在 Agent 侧，面板离线也照记）
   edit(name, patch = {}) {
     const rec = this.get(name);
     if (patch.note !== undefined) rec.meta.note = String(patch.note).slice(0, 200);
@@ -182,9 +187,22 @@ class InstanceManager {
       }
       rec.meta.memoryMB = Math.round(mb);
     }
+    // 两类记录开关：只处理请求里出现的字段（与 note/address 同一约定）。
+    // 关掉只是不再新增记录，已落盘的历史仍可查看与清空。
+    if (patch.tracking && typeof patch.tracking === 'object') {
+      const cur = { ...this.trackingCfg(rec) };
+      if (patch.tracking.players !== undefined) cur.players = !!patch.tracking.players;
+      if (patch.tracking.chat !== undefined) cur.chat = !!patch.tracking.chat;
+      rec.meta.tracking = cur;
+    }
     this.saveMeta(rec);
     this.emitUpdated(rec);
-    return { ok: true, memoryMB: rec.meta.memoryMB, running: !!rec.proc };
+    return {
+      ok: true,
+      memoryMB: rec.meta.memoryMB,
+      running: !!rec.proc,
+      tracking: this.trackingCfg(rec),
+    };
   }
 
   get(name) {
@@ -201,7 +219,11 @@ class InstanceManager {
   }
 
   emitConsole(rec, text) {
-    this.trackPlayers(rec, text);
+    // 玩家跟踪返回本行的事件（join/leave/list），交给玩家统计累计在线时长；
+    // 聊天解析与之并列：两者都只读日志、不向控制台注入任何命令。
+    const ev = this.trackPlayers(rec, text);
+    if (ev) this.applyPlayerEvent(rec, ev);
+    this.recordChat(rec, text);
     // spark 命令输出不进面板控制台：数据已被 trackSpark 解析进 Spark 面板，
     // 而 spark tps 一次要打十来行，留着会把手动看控制台彻底刷屏
     if (this.trackSpark(rec, text)) return;
@@ -232,6 +254,7 @@ Object.assign(
   require('./core.js'),
   require('./catalog-cache.js'),
   require('./players.js'),
+  require('./playerdata.js'),
   require('./watchdog.js'),
   require('./backup-schedule.js'),
   require('./fs.js'),

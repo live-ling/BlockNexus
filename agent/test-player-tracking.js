@@ -1,4 +1,5 @@
-// 玩家跟踪解析验证：从 agent/src/instance/players.js 提取 trackPlayers 里的正则，逐条喂日志行
+// 玩家跟踪解析验证：从 agent/src/instance/players.js 提取 trackPlayers，
+// 逐条喂日志行（含 Forge 系多段日志前缀——只认一段的老写法在那类日志上完全失效）
 const fs = require('fs');
 const path = require('path');
 
@@ -7,30 +8,37 @@ const start = src.indexOf('trackPlayers(rec, line) {');
 if (start < 0) throw new Error('未找到 trackPlayers');
 const body = src.slice(start, src.indexOf('\n  },', start));
 
+// 日志前缀：与源码同一写法（一个或多个 [] 段 + 冒号），剥掉后再匹配事件
+const stripLogPrefix = (line) => {
+  const m = /^(?:\[[^\]]*\]\s*)+:\s*/.exec(line);
+  return m ? line.slice(m[0].length) : line;
+};
+
 // 复刻方法中的四条规则（与 agent.js 保持一致的正则字符串）
 const NAME = '([^\\s]{1,32})';
 const rules = [
-  { re: new RegExp(`^\\S*\\s*\\[[^\\]]*\\]:\\s*${NAME} joined the game\\s*$`), act: 'add' },
-  { re: new RegExp(`^\\S*\\s*\\[[^\\]]*\\]:\\s*${NAME} left the game\\s*$`), act: 'del' },
-  { re: new RegExp(`^\\S*\\s*\\[[^\\]]*\\]:\\s*${NAME} lost connection`), act: 'del' },
+  { re: new RegExp(`^${NAME} joined the game\\s*$`), act: 'add' },
+  { re: new RegExp(`^${NAME} left the game\\s*$`), act: 'del' },
+  { re: new RegExp(`^${NAME} lost connection`), act: 'del' },
   { re: /There are (\d+) of a max of (\d+) players online:?\s*(.*)$/, act: 'set' },
 ];
 
 function track(set, line) {
+  const s = stripLogPrefix(line);
   for (const { re, act } of rules) {
-    const m = re.exec(line);
+    const m = re.exec(s);
     if (!m) continue;
     if (act === 'add') return set.add(m[1]), `add:${m[1]}`;
     if (act === 'del') return set.delete(m[1]), `del:${m[1]}`;
     set.clear();
-    (m[3] || '').split(',').map((s) => s.trim()).filter(Boolean).forEach((n) => set.add(n));
+    (m[3] || '').split(',').map((x) => x.trim()).filter(Boolean).forEach((n) => set.add(n));
     return `set:${[...set].join('|')}`;
   }
   return null;
 }
 
-// 断言：源码里确实包含这四条规则（防止测试与实现漂移）
-for (const frag of [' joined the game', ' left the game', ' lost connection', 'players online']) {
+// 断言：源码里确实包含这四条规则与容错前缀（防止测试与实现漂移）
+for (const frag of [' joined the game', ' left the game', ' lost connection', 'players online', 'stripLogPrefix(line)']) {
   if (!body.includes(frag)) throw new Error('agent.js 中缺少规则: ' + frag);
 }
 
@@ -45,6 +53,12 @@ const tests = [
   ['[22:24:35] [Server thread/INFO]: Done (1.9s)! For help, type "help"', null],
   ['[22:24:40] [Server thread/INFO]: <Steve> hello', null],
   ['[22:24:45] [Server thread/WARN]: Can\'t keep up! Is the server overloaded?', null],
+  // Forge / NeoForge：日志前缀多一段 [mod/Class]
+  ['[22:24:50] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Carol joined the game', 'add:Carol'],
+  ['[22:24:52] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Carol left the game', 'del:Carol'],
+  ['[22:24:54] [Server thread/INFO] [minecraft/MinecraftServer]: There are 1 of a max of 20 players online: Alice', 'set:Alice'],
+  // 无日志前缀（面板注入的提示行）也要能吃
+  ['Steve joined the game', 'add:Steve'],
 ];
 
 let pass = 0;

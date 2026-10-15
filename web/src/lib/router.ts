@@ -2,6 +2,7 @@
 // （面板端对未知 GET 路径回退 index.html；旧式 #/hash 链接进入时一次性迁移为路径）
 
 export type Route =
+  | { name: 'instances' }
   | { name: 'servers' }
   | { name: 'settings' }
   | { name: 'about' }
@@ -18,6 +19,11 @@ export function routeFromLocation(): Route {
   }
   const query = new URLSearchParams(location.search);
   const parts = location.pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  // 默认落地页是**实例总览**（所有服务器的游戏实例），服务器卡片页搬到 /servers。
+  // /instances 也认——写全了这个地址的人不会被 404（面板对未知 GET 一律回退 index.html，
+  // 但那要靠 SPA 兜底才能渲染，显式认下来更稳）。
+  if (parts.length === 0 || parts[0] === 'instances') return { name: 'instances' };
+  if (parts[0] === 'servers') return { name: 'servers' };
   if (parts[0] === 'settings') return { name: 'settings' };
   if (parts[0] === 'about') return { name: 'about' };
   if (parts[0] === 'reset') return { name: 'reset', token: query.get('token') || '' };
@@ -28,7 +34,8 @@ export function routeFromLocation(): Route {
     }
     return { name: 'server', serverId: parts[1] };
   }
-  return { name: 'servers' };
+  // 未知路径（如手打错的 /bogus）也回默认落地页实例总览，与 `/` 保持一致
+  return { name: 'instances' };
 }
 
 /** 编程式导航：pushState 不会触发 popstate，需自行广播 routechange */
