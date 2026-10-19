@@ -46,6 +46,7 @@ export function UninstallDialog({
   const [deleteInstances, setDeleteInstances] = useState(false);
   const [removeServer, setRemoveServer] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   const log = useSyncExternalStore(installLogStore.subscribe, () =>
     installLogStore.get(uninstallLogKey(server.id)),
   );
@@ -54,16 +55,26 @@ export function UninstallDialog({
   useEffect(() => {
     if (open) {
       setBusy(false);
+      setFailed(false);
       setRemoveServer(false);
       if (!stopOnly) setDeleteInstances(false);
     } else {
       setBusy(false);
+      setFailed(false);
     }
   }, [open, stopOnly]);
 
-  // 卸载完成（SSE 写入 done 标记）→ 稍停一拍让用户看到最后日志，自动关闭弹窗
+  // 卸载完成（SSE 写入 done 标记）→ 成功才自动关闭；失败保持打开并把原因摊在用户面前，
+  // 否则「卸载失败」会在 600ms 后随弹窗一起消失，用户只看到服务器还是连不上。
   useEffect(() => {
     if (!busy || log?.done == null) return;
+    if (log.done === false) {
+      setFailed(true);
+      setBusy(false);
+      // 失败也可能已经停掉了服务/进程：刷新一次页面，别让卡片继续显示「在线」
+      onDone();
+      return;
+    }
     const t = window.setTimeout(() => {
       onOpenChange(false);
       onDone();
@@ -73,6 +84,7 @@ export function UninstallDialog({
 
   const start = async () => {
     setBusy(true);
+    setFailed(false);
     installLogStore.open(uninstallLogKey(server.id));
     try {
       // 本机「停止」单独走 /local-agent/stop，语义就是停进程保留数据
@@ -91,8 +103,7 @@ export function UninstallDialog({
       setBusy(false);
       return;
     }
-    // 等日志流结束（done 标记由 SSE 写入）
-    onDone();
+    // 结束由上面的 effect 判断（成功自动关闭，失败留在原地）
   };
 
   const title = stopOnly
@@ -191,6 +202,16 @@ export function UninstallDialog({
                 </span>
               </span>
             </label>
+          )}
+
+          {failed && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0">
+                <strong>{$('uninstall.failed.title')}</strong>
+                <span className="mt-0.5 block text-muted-foreground">{$('uninstall.failed.hint')}</span>
+              </span>
+            </div>
           )}
 
           {log?.lines && <LogViewer lines={log.lines} />}

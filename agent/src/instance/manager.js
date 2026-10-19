@@ -124,7 +124,7 @@ class InstanceManager {
       // 老版本 Node 没有 fs.statfs，回退 df -k -P（POSIX 统一格式，异步执行）
       await new Promise((resolve) => {
         try {
-          execFile('df', ['-k', '-P', this.dir], { timeout: 5000 }, (err, stdout) => {
+          execFile('df', ['-k', '-P', this.dir], { timeout: 5000, windowsHide: true }, (err, stdout) => {
             if (!err) {
               const line = String(stdout).trim().split('\n').pop();
               const cols = line && line.split(/\s+/);

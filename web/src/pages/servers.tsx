@@ -2,14 +2,14 @@ import { navigate } from '@/lib/router';
 // 服务器列表页
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GripVertical, Plus, Server } from 'lucide-react';
-import { AddServerDialog } from '@/components/dialogs';
+import { GripVertical, Rocket, Server } from 'lucide-react';
+import { QuickAddDialog } from '@/components/quick-add-dialog';
 import { ServerLinkBadge } from '@/components/status-badge';
 import { TiltCard } from '@/components/motion/tilt-card';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { CardField } from '@/components/card-field';
-import { api, errText, fmtDiskGB, fmtMB, fmtUptime, timeago, type Me, type ServerSummary } from '@/lib/api';
+import { api, errText, fmtDiskGB, fmtMB, fmtUptime, osLabel, timeago, type Me, type ServerSummary } from '@/lib/api';
 import { $ } from '@/lib/i18n';
 import { MaskedText } from '@/components/masked-text';
 
@@ -25,7 +25,7 @@ export function ServersPage({
   /** 拖动排序后回写全局列表（面板重启后仍保持顺序） */
   onReorder: (ids: string[]) => void;
 }) {
-  const [addOpen, setAddOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
   // 拖动排序：draggingId 是被拖卡片，overId 是当前悬停目标（本地实时预排，松手才持久化）
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -75,10 +75,12 @@ export function ServersPage({
 
   return (
     <div className="mx-auto w-full max-w-5xl px-5 pb-28 pt-7">
-      <div className="flex items-center">
+      <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">{$('servers.title')}</h2>
-        <Button className="ml-auto" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" /> {$('servers.add')}
+        {/* 唯一入口：快速添加会把「装 Agent → 建实例 → 开服」一次做完，
+            需要精细控制的部分都在弹窗的「高级选项」里（原先的「添加服务器」已合并进来）。 */}
+        <Button className="ml-auto" onClick={() => setQuickOpen(true)}>
+          <Rocket className="h-4 w-4" /> {$('servers.quick')}
         </Button>
       </div>
 
@@ -158,7 +160,7 @@ export function ServersPage({
                       <CardField label={$('servers.field.hostname')} value={s.info.hostname} className="col-span-2" />
                       <CardField
                         label={$('servers.field.system')}
-                        value={`${s.info.os} · ${s.info.arch}`}
+                        value={`${osLabel(s.info.os)} · ${s.info.arch}`}
                         className="col-span-2"
                       />
                       <CardField
@@ -210,14 +212,11 @@ export function ServersPage({
         </div>
       )}
 
-      <AddServerDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
+      <QuickAddDialog
+        open={quickOpen}
+        onOpenChange={setQuickOpen}
         panelPort={me.port}
-        onCreated={(s) => {
-          onAdd(s);
-          navigate(`/server/${s.id}`);
-        }}
+        onCreated={(s) => onAdd(s)}
       />
     </div>
   );

@@ -36,6 +36,7 @@ panel/
   agentlink.js  AgentHub：握手状态机、在线连接表、加密请求路由、事件转发
   ssh.js        SSH 安装器（远程 Linux：Node 检测安装、SFTP 上传、systemd 注册、Agent 热更新）
   localagent.js 本机 Agent 托管（面板直接 spawn/stop 进程 + 专用目录，免 SSH/systemd）
+  quick.js      快速添加的默认值推导（内存/端口/实例名/版本/Java 主版本，纯函数、可单测）
   api.js        REST API（登录、服务器 CRUD、安装、实例操作、面板自更新）+ SSE 实时推送
   update.js     自更新判定：安装形态、Release 元数据解析、升级计划、写入白名单（纯函数）
   migrate.js    data/config.json 的 schemaVersion 迁移链
@@ -86,9 +87,13 @@ node agent/agent.js --panel ws://127.0.0.1:3080 --token <token> --id <服务器I
 npm run test:agent                # Agent 全部单元测试（含产物新鲜度：改了 src 忘打包会直接失败）
 node agent/e2e-panel-install.js   # 端到端：隔离面板 + 独立 Agent（加密通道断点续传、面板代下、安装失败兜底）
 node agent/e2e-reset-code.js      # 找回密码三段式与限流（单跑约 10 分钟，CI 里独立跑）
+node agent/test-quick-create.js   # 快速添加默认值推导（纯函数：内存/端口/名字/版本/Java 版本）
+node agent/test-quick-setup.js    # 快速添加编排（真面板 API + 假 Agent，覆盖复用/续装/只装 Agent/失败分支）
+node agent/test-windows-quiet.js  # Windows 静默托管（所有 spawn 必须 windowsHide）+ Windows Java 管理能力
+node agent/test-uninstall.js      # 卸载 Agent：真起替身进程验证 stop/uninstall + 后置核验（服务/进程/目录）
 ```
 
-覆盖范围：模块导入完整性、产物与源码同步 / npm 内联、启动并发去重、看门狗与备份调度规则、玩家进出与在线时长统计、聊天解析与落盘、文件操作与路径越界、面板安全与加固、错误码与中英文案成对、面板自更新与配置迁移、Anvil 解析与地图渲染。
+覆盖范围：模块导入完整性、产物与源码同步 / npm 内联、启动并发去重、看门狗与备份调度规则、玩家进出与在线时长统计、聊天解析与落盘、文件操作与路径越界、面板安全与加固、错误码与中英文案成对、面板自更新与配置迁移、Anvil 解析与地图渲染、Windows 子进程静默与 Java 多版本管理、卸载的后置核验与幂等。
 
 ---
 

@@ -16,7 +16,8 @@ function mavenVersions(xml) {
 // 子进程命令（压缩/解压用系统 tar/zip）：stderr 留尾作错误信息；超时强杀
 function runCmd(cmd, args, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    // windowsHide：压缩/解压在 Windows 上必须后台静默（否则每次备份都闪一个 cmd 窗口）
+    const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     let err = '';
     child.stderr.on('data', (d) => {
       err = (err + d).slice(-4000);

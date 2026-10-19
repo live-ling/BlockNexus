@@ -7,8 +7,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const { installAgent, updateAgentScript, uninstallAgent, checkSsh, sftpUploadStream } = require('./ssh');
+const { installAgent, updateAgentScript, uninstallAgent, sftpUploadStream } = require('./ssh');
 const localAgent = require('./localagent');
+// 「快速添加」的默认值推导（内存/端口/实例名/版本）——纯函数，可单测
+const quick = require('./quick');
 const mailTpl = require('./mail');
 const { errorResponse, langOf, messageOf } = require('./error-codes');
 // 自更新的纯逻辑（安装形态/元数据解析/升级计划/自动策略/写入白名单）与版本比较
@@ -415,6 +417,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   /** serverId -> { since, at, notified, timer }：since=本次掉线起点，at=上次发信时刻，notified=本次故障是否已发过 */
   const offlineNotified = new Map();
 
+  // 主动卸载后的静默窗口：用户刚把 Agent 卸掉，两分钟后再收到一封「服务器离线」纯属噪音。
+  // 期间收到 offline 状态一律不排队通知；服务器重新上线（重装 / 手动拉起）时清掉。
+  const UNINSTALL_QUIET_MS = 10 * 60e3;
+  const uninstalledAt = new Map();
+
   /** 清掉某台服务器的离线跟踪与待发定时器（服务器被移除 / 恢复上线时调用） */
   function clearOfflineTracking(serverId) {
     const rec = offlineNotified.get(serverId);
@@ -427,6 +434,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!st.adminEmail || !smtpConfigured()) return;
 
     if (status === 'offline') {
+      // 刚被主动卸载：这不是故障，别发离线通知（重装后上线会清掉静默窗口）
+      if (Date.now() - (uninstalledAt.get(serverId) || 0) < UNINSTALL_QUIET_MS) {
+        clearOfflineTracking(serverId);
+        return;
+      }
       if (!st.notify.offline) return;
       // 已在跟踪本次掉线（重复 offline 事件，或已发过信正在等补发）：不动 since，保持计时连续
       if (offlineNotified.has(serverId)) return;
@@ -442,6 +454,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
 
     if (status === 'online') {
+      uninstalledAt.delete(serverId); // 重新上线 → 之后的掉线恢复为正常通知
       const rec = offlineNotified.get(serverId);
       if (!rec) return;
       // 抖动：观察期内就恢复了 → 本次不算故障，静默收尾（不发离线信也不发恢复信）
@@ -1794,40 +1807,10 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     res.json({ ok: true, started: true });
   });
 
-  // ---------- 添加服务器前：验证 SSH 连接（不落盘） ----------
-  // 用前端填的主机/账号直连一次：确认凭据可用并预检安装环境（系统/Node/Java/sudo）。
-  // 连接失败返回 400 + error；本机地址不走 SSH，由面板直接托管 Agent。
-  router.post('/servers/ssh-check', async (req, res, next) => {
-    const b = req.body || {};
-    if (!b.host) return fail(res, 'server.host-required');
-    if (!isValidHost(b.host)) return fail(res, 'server.host-invalid');
-    if (localAgent.isLocalHost(b.host)) {
-      return res.json({
-        ok: true,
-        canInstall: true,
-        local: true,
-        os: `${require('os').type()} ${require('os').arch()}`,
-        warnings: ['本机服务器：保存后由面板直接托管 Agent 进程，无需 SSH 与 systemd'],
-      });
-    }
-    const server = {
-      host: String(b.host).trim(),
-      ssh: {
-        port: Number(b.sshPort) || 22,
-        user: String(b.sshUser || 'root').trim(),
-        auth: b.sshAuth === 'key' ? 'key' : 'password',
-        password: String(b.sshPassword || ''),
-        keyPath: String(b.sshKeyPath || '').trim(),
-        key: String(b.sshKey || ''),
-      },
-    };
-    try {
-      res.json(await checkSsh(server));
-    } catch (e) {
-      res.status(400).json({ ok: false, error: e.message });
-    }
-  });
-
+  // 添加服务器（不装 Agent、不建实例的裸入口）：
+  // 面板 UI 已统一走「快速添加」（/servers/quick-create），这里保留给脚本/自动化使用。
+  // 原来的「安装前先验证 SSH」(/servers/ssh-check) 随「添加服务器」弹窗一起删掉了——
+  // 快速添加会在安装过程中如实报错，不需要再多一次握手把耗时翻倍。
   router.post('/servers', (req, res) => {
     const b = req.body || {};
     if (!b.host) return fail(res, 'server.host-required');
@@ -1923,6 +1906,41 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       : `⚠ 安装流程结束，但面板连不上 ${server.agent.host || server.host}:${server.agent.port || 3099}，` +
           '请检查服务器安全组/防火墙是否放行该端口\n';
   }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** 带错误码的异常：让它一路带到任务结果的 `code` 字段，前端据此本地化 */
+  function codedError(code, params) {
+    const e = new Error(messageOf(code, 'zh', params));
+    e.code = code;
+    e.params = params;
+    return e;
+  }
+
+  /**
+   * 安装/重启 Agent 的公共流程（本机托管 / 远程 SSH）。
+   * 「安装按钮」和「快速添加」共用它，避免两条流程各写一份、日后改一处漏一处。
+   * @returns {Promise<boolean>} 是否在 waitMs 内上线
+   */
+  async function runAgentInstall(server, log, { waitMs = 30000 } = {}) {
+    const isLocal = localAgent.isLocalHost(server.host);
+    if (isLocal) {
+      // 本机：面板直接托管 Agent 进程（专用目录，不走 SSH/systemd）
+      log('检测到本机服务器，由面板直接托管 Agent 进程…\n');
+      await localAgent.installAgent(server, log);
+    } else {
+      const installResult = await installAgent(server, log);
+      if (installResult && installResult.tlsFingerprint) {
+        config.updateServer(server.id, { tlsFingerprint: installResult.tlsFingerprint });
+      }
+    }
+    hub.stopOutbound(server.id); // 先断旧连接
+    hub.syncOutbound(); // outbound 模式：面板立刻尝试连入
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline && !hub.isOnline(server.id)) await sleep(500);
+    return hub.isOnline(server.id);
+  }
+
   router.post('/servers/:id/install', async (req, res) => {
     const server = requireServer(req, res);
     if (!server) return;
@@ -1939,24 +1957,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const log = (text) => taskLog(server.id, 'install', text);
     try {
       const isLocal = localAgent.isLocalHost(server.host);
-      if (isLocal) {
-        // 本机：面板直接托管 Agent 进程（专用目录，不走 SSH/systemd）
-        log('检测到本机服务器，由面板直接托管 Agent 进程…\n');
-        await localAgent.installAgent(server, log);
-      } else {
-        const installResult = await installAgent(server, log);
-        if (installResult && installResult.tlsFingerprint) {
-          config.updateServer(server.id, { tlsFingerprint: installResult.tlsFingerprint });
-        }
-      }
-      hub.stopOutbound(server.id); // 先断旧连接
-      hub.syncOutbound(); // outbound 模式：面板立刻尝试连入
-      // 等待连接就绪
-      const deadline = Date.now() + 30000;
-      while (Date.now() < deadline && !hub.isOnline(server.id)) {
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      const ok = hub.isOnline(server.id);
+      const ok = await runAgentInstall(server, log);
       log(installDoneText(server, ok, isLocal));
       taskLogDone(server.id, 'install', { done: true, ok });
     } catch (e) {
@@ -1966,6 +1967,358 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       installing.delete(server.id);
       config.updateServer(server.id, { installing: false });
     }
+  });
+
+  // ---------- 快速添加：加服务器 → 装 Agent → 建实例 → 开服 ----------
+  //
+  // 为什么要有它：原来的「添加服务器 → 保存 → 进详情页点安装 → 再新建实例 → 填一堆参数」
+  // 对只想开个服的人来说步骤太多，实际结果就是大家干脆把 MC 跑在面板机器/本机 Windows 上。
+  // 这里把这几步串成一条后台任务：
+  //   ① 安装 Agent（远程 SSH / 本机托管）→ 等上线
+  //   ② 读实例列表与核心目录，补出合法默认值（名称/端口/内存/版本）
+  //   ③ 创建实例、等核心下载完
+  //   ④ 启动实例，等它打印 Done（真正可连）
+  // 进度写进 'install' 任务日志，复用现成的 SSE 通道与日志面板。
+  const QUICK_INSTALL_TIMEOUT = 15 * 60e3; // 等核心下载的最长时间（Forge 安装器可能很慢）
+  const QUICK_START_TIMEOUT = 180e3; // 等服务器打印 Done 的最长时间（首次启动要生成世界）
+
+  /** 轮询实例列表，直到核心下载完成（失败/超时抛异常） */
+  async function waitInstanceReady(server, name, log) {
+    const t0 = Date.now();
+    let lastNote = t0;
+    for (;;) {
+      const list = await hub.request(server.id, 'instance.list', {}, 20000).catch(() => null);
+      const rec = Array.isArray(list) ? list.find((x) => x && x.name === name) : null;
+      const verdict = quick.readyVerdict(rec);
+      if (verdict === 'ready') return rec;
+      if (verdict === 'failed') {
+        throw new Error((rec && rec.error) || '实例安装失败');
+      }
+      const waited = Date.now() - t0;
+      if (waited > QUICK_INSTALL_TIMEOUT) {
+        throw codedError('instance.quick-timeout', { seconds: Math.round(waited / 1000) });
+      }
+      // 每 15 秒报一次「还在装」，否则慢速网络下界面看起来像卡住了
+      if (Date.now() - lastNote > 15000) {
+        lastNote = Date.now();
+        log(`   …仍在下载/安装核心（已等待 ${Math.round(waited / 1000)} 秒）\n`);
+      }
+      await sleep(2000);
+    }
+  }
+
+  /** 启动实例并等它真正可连（status 变成 running）；启动后立刻退出则抛异常并附控制台尾部 */
+  async function startAndConfirm(server, name, log) {
+    log('启动实例（首次启动会生成世界，通常 30-90 秒）…\n');
+    await hub.request(server.id, 'instance.start', { name }, 30000);
+    const t0 = Date.now();
+    while (Date.now() - t0 < QUICK_START_TIMEOUT) {
+      await sleep(2000);
+      const list = await hub.request(server.id, 'instance.list', {}, 20000).catch(() => null);
+      const rec = Array.isArray(list) ? list.find((x) => x && x.name === name) : null;
+      const st = rec && rec.status;
+      if (st === 'running') return true;
+      if (st === 'stopped' || st === 'failed') {
+        // 起来了又退出：把最后几行控制台发到任务日志里，否则用户只能自己去翻
+        let reason = '进程启动后立即退出';
+        try {
+          const c = await hub.request(server.id, 'instance.console', { name, tail: 12 }, 15000);
+          const lines = (c && Array.isArray(c.lines) ? c.lines : []).map((l) => String(l.text || l)).filter(Boolean);
+          if (lines.length) {
+            log('控制台尾部：\n' + lines.slice(-12).map((l) => '   | ' + l + '\n').join(''));
+            reason = lines[lines.length - 1].slice(0, 300);
+          }
+        } catch {}
+        throw codedError('instance.quick-start-failed', { reason });
+      }
+    }
+    // 超时但没退出：服务器可能只是慢（大型整合包首次启动），不算失败，交给用户在详情页看
+    log('⚠ 180 秒内还没看到启动完成的日志，服务器可能仍在启动，请到实例页确认\n');
+    return false;
+  }
+
+  /**
+   * 确保远端有「足够新」的 Java：没有就自动装一个（全新的 VPS 上通常一个都没有，
+   * 直接启动只会看到 "java: command not found" 进控制台，对快速添加来说太隐晦）。
+   * 只升不降：已装版本 >= 需要版本就跳过。
+   * 装失败不阻断流程——继续启动，失败原因仍会在控制台里出现，用户可去「服务器设置 → Java」手动装。
+   */
+  async function ensureJava(server, log, mcVersion) {
+    const need = quick.javaMajorFor(mcVersion);
+    const readInfo = async () => {
+      try {
+        return await hub.request(server.id, 'sys.info', {}, 20000);
+      } catch {
+        return server.info;
+      }
+    };
+    let info = await readInfo();
+    const j = info && info.java;
+    const have = j && j.installed ? Number(j.major) || 0 : 0;
+    if (have && have >= need) {
+      log(`   Java ${have} 已就绪（${mcVersion} 需要 ${need}+）\n`);
+      return true;
+    }
+
+    log(`   安装 Java ${need}（当前${have ? ' ' + have : '未安装'}）…\n`);
+    try {
+      await hub.request(server.id, 'java.install', { major: need }, 30000);
+    } catch (e) {
+      log(`   ⚠ 自动安装 Java 失败：${e.message}\n`);
+      log('     可在「服务器设置 → Java 环境」里手动安装；现在仍尝试启动\n');
+      return false;
+    }
+
+    const t0 = Date.now();
+    while (Date.now() - t0 < 8 * 60e3) {
+      await sleep(3000);
+      info = await readInfo();
+      const cur = info && info.java;
+      if (cur && cur.installed && Number(cur.major) >= need) {
+        log(`   ✓ Java ${cur.major} 就绪\n`);
+        return true;
+      }
+    }
+    log('   ⚠ 等待 Java 安装超时，仍尝试启动（装好后可在实例页重新启动）\n');
+    return false;
+  }
+
+  /**
+   * 快速添加的主流程。
+   * @param {object} mc 实例参数（source/version/memoryMB/port/name/onlineMode/motd）
+   * @param {object} opts.install 'auto'（已在线就跳过，默认）| 'force'（强制重装）
+   * @param {boolean} opts.createInstance 是否顺便建实例并开服（false = 只装 Agent）
+   * @returns {Promise<{ instance: string|null, started: boolean, reused: boolean }>}
+   */
+  async function quickSetup(server, mc, log, { install = 'auto', createInstance = true } = {}) {
+    // ⓪ 先校验参数再动手：参数写错时不该白等一次 SSH 安装
+    //   （不建实例时没有参数要校验）
+    let base = null;
+    if (createInstance) {
+      const norm = quick.normalizeOptions(mc, {
+        memTotalMB: (server.info && server.info.memTotalMB) || 0,
+      });
+      if (norm.error) throw codedError(norm.error, norm.params);
+      base = norm.params;
+    }
+
+    // ① Agent
+    let online = hub.isOnline(server.id);
+    if (online && install !== 'force') {
+      log('① Agent 已在线，跳过安装\n');
+    } else {
+      log('① 安装 Agent…\n');
+      online = await runAgentInstall(server, log);
+      log(installDoneText(server, online, localAgent.isLocalHost(server.host)));
+      if (!online) throw new Error('Agent 未上线');
+    }
+
+    // 只装 Agent：到此为止（用户没有勾「同时创建实例」）
+    if (!createInstance) {
+      log('✓ 完成：Agent 已就绪，未创建实例（可在服务器详情页「+ 新建实例」随时创建）\n');
+      return { instance: null, started: false, reused: false };
+    }
+
+    // 用户没指定内存时，按**装好 Agent 后**拿到的物理内存重新推荐一次
+    // （建服务器时还不知道目标机器的配置，早算只能按 2GB）
+    if (!(Number(mc && mc.memoryMB) > 0) && server.info && server.info.memTotalMB) {
+      base.memoryMB = quick.recommendMemoryMB(server.info.memTotalMB);
+    }
+
+    // ② 补默认值：名称/端口要避开已有实例
+    log('② 读取实例列表与核心版本清单…\n');
+    let instances = [];
+    try {
+      const list = await hub.request(server.id, 'instance.list', {}, 20000);
+      instances = Array.isArray(list) ? list : [];
+    } catch (e) {
+      log('   ⚠ 读取实例列表失败，按空列表处理：' + e.message + '\n');
+    }
+
+    const nameRes = quick.pickName(instances, base.name);
+    if (nameRes.error) throw codedError(nameRes.error, nameRes.params);
+    const name = nameRes.name;
+    const port = quick.pickPort(instances, base.port);
+    if (!port) throw codedError('instance.quick-port-range');
+
+    // 同名实例已存在 → 按状态分三种处理，都不重复建：
+    //   · 就绪：直接复用（没在跑就顺手启动）
+    //   · 下载中：等它装完
+    //   · 失败/不完整：重跑一次安装
+    // 这条分支就是「重试」的正确落点——否则重试会建出 survival-2，
+    // 而半成品的 survival 永远躺在那里。
+    const existing = instances.find((x) => x && x.name === name);
+    if (existing) {
+      const verdict = quick.readyVerdict(existing);
+      if (verdict === 'ready') {
+        log(`   实例 ${name} 已存在且核心已就位，复用（不重复创建）\n`);
+        if (existing.status !== 'running' && existing.status !== 'starting') {
+          await ensureJava(server, log, existing.version || base.version || '');
+          await startAndConfirm(server, name, log);
+        }
+        log('✓ 完成：' + name + '\n');
+        return { instance: name, started: true, reused: true };
+      }
+      log(`   实例 ${name} 已存在但未就绪（${existing.status || '未知'}），继续把它装完\n`);
+      if (existing.status === 'failed' || existing.status === 'incomplete') {
+        await hub.request(server.id, 'instance.retry-install', { name }, 30000);
+      }
+      log('④ 等待核心下载与安装完成…\n');
+      await waitInstanceReady(server, name, log);
+      log('✓ 核心已就位\n');
+      await ensureJava(server, log, existing.version || base.version || '');
+      const startedExisting = await startAndConfirm(server, name, log);
+      if (startedExisting) log('✓ 完成：' + name + ' 已启动，可以进游戏了\n');
+      return { instance: name, started: startedExisting, reused: true };
+    }
+
+    let catalogs = null;
+    try {
+      catalogs = await hub.request(server.id, 'core.catalogs', {}, 30000);
+    } catch {
+      // Agent 拉不到清单时用面板自己的网络兜底（只影响版本选择，下载仍在 Agent 侧）
+      catalogs = await panelFetchCores().catch(() => null);
+    }
+    const verRes = quick.pickVersion(catalogs, base.source, base.version);
+    if (verRes.error) throw codedError(verRes.error, verRes.params);
+
+    // ③ 创建实例
+    if (port !== base.port) log(`   端口 ${base.port} 已被其他实例占用，改用 ${port}\n`);
+    log(
+      `③ 创建实例 ${name}（${base.source} ${verRes.version}，端口 ${port}，` +
+        `内存 ${base.memoryMB} MB，正版验证${base.onlineMode ? '开' : '关'}）…\n`,
+    );
+    const createBody = {
+      name,
+      port,
+      source: base.source,
+      version: verRes.version,
+      memoryMB: base.memoryMB,
+      onlineMode: base.onlineMode,
+      motd: base.motd,
+      eula: true,
+    };
+    if (verRes.build) createBody.build = verRes.build;
+    await hub.request(server.id, 'instance.create', createBody, 30000);
+    log('④ 等待核心下载与安装完成…\n');
+    await waitInstanceReady(server, name, log);
+    log('✓ 核心已就位\n');
+
+    // ⑤ 开服（先确保 Java 够用，否则只会看到一句 command not found）
+    await ensureJava(server, log, verRes.version);
+    const started = await startAndConfirm(server, name, log);
+    if (started) log('✓ 完成：' + name + ' 已启动，可以进游戏了\n');
+    return { instance: name, started, reused: false };
+  }
+
+  /**
+   * 后台跑快速添加，结果写进任务日志（HTTP 早已返回；前端轮询 /servers/:id/task-log
+   * 读完整日志与最终结果，刷新/重开弹窗也能续上）。
+   */
+  function runQuickSetup(server, mc, log, opts = {}) {
+    quickSetup(server, mc, log, opts)
+      .then((r) => {
+        taskLogDone(server.id, 'install', {
+          done: true,
+          ok: true,
+          instance: r.instance || null,
+          reused: !!r.reused,
+        });
+      })
+      .catch((e) => {
+        log('✗ 快速添加失败: ' + e.message + '\n');
+        log('   服务器记录已保留：修好问题后可在服务器设置页点「安装 Agent」重试，' +
+            '或在详情页手动新建实例\n');
+        taskLogDone(server.id, 'install', {
+          done: true,
+          ok: false,
+          error: e.message,
+          code: e.code || null,
+        });
+      })
+      .finally(() => {
+        installing.delete(server.id);
+        config.updateServer(server.id, { installing: false });
+      });
+  }
+
+  /**
+   * 快速添加入口：保存服务器后立刻开始上面那条链路。
+   *
+   * 刻意**不**先做一次 SSH 预检（/servers/ssh-check）：那要先连一次、装的时候再连一次，
+   * 慢一倍；而且预检失败时用户还得重填。这里直接建记录、把安装失败写进日志——
+   * 服务器记录保留，改完凭据点「重试」即可，不用从头再来。
+   */
+  router.post('/servers/quick-create', (req, res) => {
+    const b = req.body || {};
+    if (!b.host) return fail(res, 'server.host-required');
+    if (!isValidHost(b.host)) return fail(res, 'server.host-invalid');
+    // 「同时创建实例」是可选项：不建实例时不需要 EULA 同意
+    const createInstance = b.createInstance !== false;
+    if (createInstance && b.eula !== true) return fail(res, 'server.quick-eula-required');
+
+    const host = String(b.host).trim();
+    const isLocal = localAgent.isLocalHost(host);
+    // 远程必须先有能用的凭据，否则记录建出来也装不上（本机不需要 SSH）
+    if (!isLocal && b.sshAuth !== 'key' && !String(b.sshPassword || '')) {
+      return fail(res, 'server.quick-credentials-required');
+    }
+    if (!isLocal && b.sshAuth === 'key' && !String(b.sshKey || '').trim() && !String(b.sshKeyPath || '').trim()) {
+      return fail(res, 'server.quick-credentials-required');
+    }
+    if (!isLocal && b.agentMode === 'inbound' && !String(b.panelUrl || '').trim()) {
+      return fail(res, 'server.panel-url-required');
+    }
+
+    const server = config.addServer({
+      name: b.name || host,
+      host,
+      sshPort: b.sshPort,
+      sshUser: b.sshUser,
+      sshAuth: b.sshAuth,
+      sshPassword: b.sshPassword,
+      sshKey: b.sshKey,
+      sshKeyPath: b.sshKeyPath,
+      // 本机服务器固定 outbound：面板就在本机，直接连 127.0.0.1 最省事
+      agentMode: isLocal ? 'outbound' : b.agentMode,
+      agentPort: b.agentPort,
+      agentTls: b.agentTls,
+      panelUrl: b.panelUrl,
+    });
+    hub.syncOutbound();
+
+    installing.add(server.id);
+    config.updateServer(server.id, { installing: true });
+    taskLogReset(server.id, 'install');
+    const log = (text) => taskLog(server.id, 'install', text);
+    log(`快速添加 ${server.name}（${server.host}）\n`);
+    runQuickSetup(server, b.mc || {}, log, { createInstance });
+
+    res.json({ ...sanitize(server, { revealToken: true }), quick: { started: true } });
+  });
+
+  /**
+   * 对已存在的服务器重跑「快速添加」链路（失败后的重试入口，也用于给已有服务器补建实例）。
+   * install: 'auto' 已在线就跳过安装（默认）| 'force' 强制重装 Agent
+   * createInstance: false 只装 Agent
+   */
+  router.post('/servers/:id/quick-setup', (req, res) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    const b = req.body || {};
+    const createInstance = b.createInstance !== false;
+    if (createInstance && b.eula !== true) return fail(res, 'server.quick-eula-required');
+    if (installing.has(server.id)) return fail(res, 'server.quick-running');
+    if ((server.agent.mode || 'outbound') === 'inbound' && !server.agent.panelUrl) {
+      return fail(res, 'server.panel-url-required');
+    }
+    installing.add(server.id);
+    config.updateServer(server.id, { installing: true });
+    taskLogReset(server.id, 'install');
+    const log = (text) => taskLog(server.id, 'install', text);
+    log('重试快速添加' + (b.install === 'force' ? '（强制重装 Agent）' : '') + '…\n');
+    runQuickSetup(server, b.mc || {}, log, { install: b.install === 'force' ? 'force' : 'auto', createInstance });
+    res.json({ ok: true, started: true });
   });
 
   // ---------- 经 Agent 的操作 ----------
@@ -4002,24 +4355,52 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       }
 
       // 2) 停服务并清理：本机由面板直接管进程，远程走 SSH/systemd（递归删安装目录）
+      //    两者都会做**后置核验**：服务/进程/目录任一项没清干净就抛错，不会假报成功。
+      let verdict = { alreadyGone: false };
       if (isLocal) {
-        await localAgent.uninstallAgent(server, log, {
-          keepBackups: !!b.keepBackups,
-          deleteDir: !!b.deleteInstances,
-        });
+        verdict =
+          (await localAgent.uninstallAgent(server, log, {
+            keepBackups: !!b.keepBackups,
+            deleteDir: !!b.deleteInstances,
+          })) || verdict;
       } else {
-        await uninstallAgent(server, log);
+        verdict = (await uninstallAgent(server, log)) || verdict;
       }
 
-      // 3) 可选：同时从面板移除该服务器
+      // 3) 面板侧状态收尾（无论是否移除记录都要做，否则卡片会残留旧状态）
+      //    · 先标静默窗口再断连：kick 的 close 事件是异步的，先设时间戳才能保证
+      //      「卸载 → socket 关闭 → offline 状态」这一串事件都被静默窗口盖住。
+      //    · 断开可能还挂着的 Agent 连接：systemd 已停，但 socket 不一定立刻关，
+      //      不主动断的话卡片还会显示「在线」、点啥都超时。
+      //    · 清掉资源快照与版本更新状态：不要让卡片继续显示卸载前的内存/磁盘或「更新中」。
+      uninstalledAt.set(server.id, Date.now());
+      clearOfflineTracking(server.id);
+      const conn = hub.conns.get(server.id);
+      if (conn) {
+        try {
+          conn.kick('Agent 已卸载');
+        } catch {}
+      }
+      statsCache.delete(server.id);
+      agentUpdateState.delete(server.id);
+      agentUpdateTries.delete(server.id);
+      config.updateServer(server.id, { status: 'offline', info: null });
+
+      // 4) 可选：同时从面板移除该服务器
       if (b.removeServer) {
         clearOfflineTracking(server.id);
+        uninstalledAt.delete(server.id); // 记录都没了，静默窗口也不必留着
         config.removeServer(server.id);
+        hub.stopOutbound(server.id); // 停掉重连循环
+        hub.syncOutbound();
         log('已从面板移除该服务器\n');
       }
-      // 卸载成功：清掉面板缓存的系统信息（Agent 已不存在）
-      config.updateServer(server.id, { status: 'offline', info: null });
-      taskLogDone(server.id, 'uninstall', { done: true, ok: true });
+      taskLogDone(server.id, 'uninstall', {
+        done: true,
+        ok: true,
+        alreadyGone: !!verdict.alreadyGone,
+        removed: !!b.removeServer,
+      });
     } catch (e) {
       log('✗ 卸载失败: ' + e.message + '\n');
       taskLogDone(server.id, 'uninstall', { done: true, ok: false, error: e.message });
@@ -4046,6 +4427,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       done: s ? s.done : null,
       running: installing.has(server.id),
       updatedAt: s ? s.updatedAt : null,
+      // 任务结果：刷新/重开弹窗后也能直接显示「成功/失败 + 实例名」，不必再听一遍 SSE
+      ok: s && s.ok !== undefined ? !!s.ok : null,
+      error: (s && s.error) || null,
+      code: (s && s.code) || null,
+      instance: (s && s.instance) || null,
+      reused: s && s.reused !== undefined ? !!s.reused : null,
     });
   });
 
@@ -4093,9 +4480,22 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const log = (text) => taskLog(server.id, 'uninstall', text);
     try {
       log('停止本机 Agent（保留实例数据）…\n');
-      await localAgent.stopAgent(server, log, { agentRequest: hub.request.bind(hub) });
+      const r = await localAgent.stopAgent(server, log, { agentRequest: hub.request.bind(hub) });
+      // 后置判断：pid 还在就说明没停掉，不能报成功（否则界面显示「已停止」而进程仍占着端口）
+      if (r && r.pid && !r.stopped) {
+        throw new Error(`进程 ${r.pid} 未在超时内退出，请手动结束`);
+      }
+      const conn = hub.conns.get(server.id);
+      if (conn) {
+        try {
+          conn.kick('本机 Agent 已停止');
+        } catch {}
+      }
+      statsCache.delete(server.id);
+      uninstalledAt.set(server.id, Date.now());
+      clearOfflineTracking(server.id);
       config.updateServer(server.id, { status: 'offline' });
-      taskLogDone(server.id, 'uninstall', { done: true, ok: true });
+      taskLogDone(server.id, 'uninstall', { done: true, ok: true, stopped: true });
     } catch (e) {
       log('✗ 停止失败: ' + e.message + '\n');
       taskLogDone(server.id, 'uninstall', { done: true, ok: false, error: e.message });

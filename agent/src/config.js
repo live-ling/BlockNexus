@@ -11,7 +11,9 @@ const state = require('./state.js');
 //        ⚠ 这是**破坏性协议变更**：新旧混用会握手失败，因此必须靠本版本号驱动面板自动更新远端 Agent。
 // 0.5.0：新增玩家在线时长统计与聊天记录（Agent 侧解析 + 落盘 + 3 个新 RPC；
 //        instance.list 多返回 tracking 字段，instance.edit 支持 tracking 开关）。
-const AGENT_VERSION = '0.5.0';
+// 0.5.1：Windows 适配——java 管理（检测/切换/安装/卸载）不再只支持 Linux；
+//        所有子进程调用统一 windowsHide（修 Windows 上反复弹 cmd 窗口）。
+const AGENT_VERSION = '0.5.1';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。

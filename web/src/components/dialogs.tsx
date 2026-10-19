@@ -1,4 +1,4 @@
-// 全部弹窗：添加/编辑服务器、Token、手动安装、新建实例、危险操作确认
+// 全部弹窗：编辑服务器、Token、手动安装、新建实例、危险操作确认
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ImagePlus, RotateCw } from 'lucide-react';
@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary, type SshCheckResult } from '@/lib/api';
+import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INSTALLER_SOURCES, type CoreCatalogs, type Instance, type ServerSummary } from '@/lib/api';
 import { uploadFile, uploadFileViaSftp } from '@/lib/upload';
 import { escapeValue, parseProperties, serializeProperties, unescapeValue } from '@/lib/properties';
 import { $, type TranslationKey } from '@/lib/i18n';
@@ -83,285 +83,6 @@ function coreHint(source: string): string {
   return key ? $(key) : '';
 }
 
-// ---------- 添加服务器 ----------
-
-export function AddServerDialog({
-  open,
-  onOpenChange,
-  panelPort,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  panelPort: number;
-  onCreated: (s: ServerSummary) => void;
-}) {
-  const { error } = useToastHelpers();
-  const [auth, setAuth] = useState<'password' | 'key'>('password');
-  const [mode, setMode] = useState<'outbound' | 'inbound'>('outbound');
-  const [busy, setBusy] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [check, setCheck] = useState<SshCheckResult | null>(null);
-  const defaultPanel = `ws://${location.hostname}:${panelPort}`;
-  const AGENT_PORT = '3099';
-  const [useTls, setUseTls] = useState(false);
-
-  // 连接信息改动后，之前的验证结果作废，必须重新验证
-  const invalidate = () => setCheck(null);
-
-  const doCheck = async () => {
-    const val = (id: string) => (document.getElementById(id) as HTMLInputElement)?.value ?? '';
-    const host = val('add-host').trim();
-    if (!host) {
-      error($('addServer.error.hostRequired'));
-      return;
-    }
-    if (auth === 'password' && !val('add-pass')) {
-      error($('addServer.error.passwordRequired'));
-      return;
-    }
-    if (auth === 'key' && !val('add-key').trim()) {
-      error($('addServer.error.keyRequired'));
-      return;
-    }
-    setChecking(true);
-    setCheck(null);
-    try {
-      const r = await api<SshCheckResult>('/servers/ssh-check', {
-        method: 'POST',
-        body: {
-          host,
-          sshPort: val('add-port'),
-          sshUser: val('add-user').trim(),
-          sshAuth: auth,
-          sshPassword: auth === 'password' ? val('add-pass') : '',
-          sshKey: auth === 'key' ? val('add-key').trim() : '',
-        },
-      });
-      setCheck(r);
-    } catch (e) {
-      setCheck({ ok: false, error: errText(e) });
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>{$('addServer.title')}</DialogTitle>
-          <DialogDescription>
-            {$('addServer.description')}
-          </DialogDescription>
-        </DialogHeader>
-        {/* 表单区自身滚动（no-scrollbar 隐藏滚动条）：未溢出贴合内容，超出即滚，底栏固定可见 */}
-        <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-        {/* 双列紧凑排布：主机/端口、用户/认证方式成对，密码与私钥独占整行 */}
-        <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-          <div className="grid gap-1.5 sm:col-span-2">
-            <Label htmlFor="add-name">{$('addServer.name')}</Label>
-            <Input id="add-name" className="sm:max-w-sm" placeholder={$('addServer.name.placeholder')} />
-          </div>
-
-          {/* 主机占满剩余宽度，端口按内容收敛为固定窄列 */}
-          <div className="flex items-end gap-3 sm:col-span-2">
-            <div className="grid min-w-0 flex-1 gap-1.5">
-              <Label htmlFor="add-host">{$('addServer.sshHost')}</Label>
-              <Input id="add-host" placeholder="1.2.3.4" onChange={invalidate} />
-            </div>
-            <div className="grid w-[110px] shrink-0 gap-1.5">
-              <Label htmlFor="add-port">{$('addServer.sshPort')}</Label>
-              <Input id="add-port" defaultValue="22" onChange={invalidate} />
-            </div>
-          </div>
-
-          <div className="grid gap-1.5">
-            <Label htmlFor="add-user">{$('addServer.sshUser')}</Label>
-            <Input id="add-user" defaultValue="root" onChange={invalidate} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>{$('addServer.auth')}</Label>
-            <Select
-              value={auth}
-              onValueChange={(v) => {
-                setAuth(v as 'password' | 'key');
-                invalidate();
-              }}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="password">{$('addServer.auth.password')}</SelectItem>
-                <SelectItem value="key">{$('addServer.auth.key')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {auth === 'password' ? (
-            <div className="grid gap-1.5 sm:col-span-2">
-              <Label htmlFor="add-pass">{$('addServer.sshPassword')}</Label>
-              <Input
-                id="add-pass"
-                type="password"
-                className="sm:max-w-sm"
-                onChange={invalidate}
-              />
-            </div>
-          ) : (
-            <div className="grid gap-1.5 sm:col-span-2">
-              <Label htmlFor="add-key">{$('addServer.keyPath')}</Label>
-              <Textarea
-                id="add-key"
-                rows={3}
-                placeholder={$('addServer.keyPath.placeholder')}
-                onChange={invalidate}
-              />
-            </div>
-          )}
-
-          {/* 验证结果：连接成功展示环境预检，失败展示原因 */}
-          {check && !check.ok && (
-            <p className="rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-xs text-destructive sm:col-span-2">
-              {$('addServer.check.failed', check.error || $('dialog.cannotConnect'))}
-            </p>
-          )}
-          {check?.ok && (
-            <div className="grid gap-1.5 rounded-md border bg-muted/40 px-3 py-2.5 text-xs sm:col-span-2">
-              {check.local ? (
-                <span className="text-primary">{$('addServer.check.local')}</span>
-              ) : (
-                <>
-                  <span className="text-primary">{$('addServer.check.ok', check.user ?? '')}</span>
-                  <span className="text-muted-foreground">
-                    {$('addServer.check.system', check.os || $('dialog.unknown'), check.arch || '—')}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {$('addServer.check.privilege',
-                      check.isRoot
-                        ? $('addServer.check.root')
-                        : check.sudoOk
-                          ? $('addServer.check.sudo')
-                          : $('addServer.check.user'))}
-                    {' · '}{$('addServer.check.node', check.node || $('dialog.notInstalled'))}
-                    {' · '}{$('addServer.check.java', check.javaMajor ? `Java ${check.javaMajor}` : $('dialog.notInstalled'))}
-                  </span>
-                </>
-              )}
-              {check.warnings?.map((w, i) => (
-                <span key={i} className="text-amber-600 dark:text-amber-400">
-                  ⚠ {w}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {mode === 'outbound' ? (
-            <>
-              <div className="grid gap-1.5">
-                <Label>{$('addServer.mode')}</Label>
-                <Select value={mode} onValueChange={(v) => setMode(v as 'outbound' | 'inbound')}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="outbound">{$('addServer.mode.outbound')}</SelectItem>
-                    <SelectItem value="inbound">{$('addServer.mode.inbound')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid w-[110px] gap-1.5">
-                <Label htmlFor="add-aPort">{$('addServer.agentPort')}</Label>
-                <Input id="add-aPort" defaultValue={AGENT_PORT} />
-              </div>
-              <p className="text-[11px] leading-snug text-muted-foreground sm:col-span-2">
-                {$('addServer.agentPort.hint')}
-              </p>
-              <label className="flex items-start gap-2 text-sm sm:col-span-2">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={useTls}
-                  onCheckedChange={(v) => setUseTls(v === true)}
-                />
-                <span>
-                  {$('addServer.tls')}
-                  <span className="block text-xs text-muted-foreground">
-                    {$('addServer.tls.hint')}
-                  </span>
-                </span>
-              </label>
-            </>
-          ) : (
-            <>
-              <div className="grid gap-1.5">
-                <Label>{$('addServer.mode')}</Label>
-                <Select value={mode} onValueChange={(v) => setMode(v as 'outbound' | 'inbound')}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="outbound">{$('addServer.mode.outbound')}</SelectItem>
-                    <SelectItem value="inbound">{$('addServer.mode.inbound')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="add-panel">{$('addServer.panelUrl')}</Label>
-                <Input id="add-panel" defaultValue={defaultPanel} />
-              </div>
-              <p className="text-[11px] leading-snug text-amber-500/90 sm:col-span-2">
-                {$('addServer.panelUrl.hint')}
-              </p>
-            </>
-          )}
-        </div>
-        </div>
-        <DialogFooter className="shrink-0">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {$('common.cancel')}
-          </Button>
-          <Button variant="secondary" disabled={checking || busy} onClick={doCheck}>
-            {checking ? $('addServer.verifying') : check?.ok ? $('addServer.reverify') : $('addServer.verify')}
-          </Button>
-          <Button
-            disabled={busy || checking || !check?.ok}
-            title={check?.ok ? undefined : $('addServer.verify.first')}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                const val = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
-                const body = {
-                  name: val('add-name') || $('dialog.unnamed'),
-                  host: val('add-host').trim(),
-                  sshPort: val('add-port'),
-                  sshUser: val('add-user').trim(),
-                  sshAuth: auth,
-                  sshPassword: auth === 'password' ? val('add-pass') : '',
-                  sshKey: auth === 'key' ? val('add-key').trim() : '',
-                  agentMode: mode,
-                  agentPort: mode === 'outbound' ? val('add-aPort').trim() : '',
-                  agentTls: mode === 'outbound' && useTls,
-                  panelUrl: mode === 'inbound' ? val('add-panel').trim() : '',
-                };
-                if (!body.host) throw new Error($('addServer.error.hostRequired'));
-                const s = await api<ServerSummary>('/servers', { method: 'POST', body });
-                onOpenChange(false);
-                onCreated(s);
-              } catch (e) {
-                error($('addServer.error.addFailed'), errText(e));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {$('common.save')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ---------- 编辑服务器 ----------
 
 export function EditServerDialog({
@@ -392,30 +113,45 @@ export function EditServerDialog({
         {/* 与添加弹窗一致：双列紧凑排布，端口等短字段按内容收敛宽度 */}
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
           <div className="grid gap-1.5 sm:col-span-2">
-            <Label htmlFor="e-name">{$('addServer.name')}</Label>
+            <Label htmlFor="e-name">{$('serverField.name')}</Label>
             <Input id="e-name" className="sm:max-w-sm" defaultValue={server.name} />
           </div>
-          {/* 主机占满剩余宽度，端口按内容收敛为固定窄列 */}
+          {/* 主机占满剩余宽度，端口按内容收敛为固定窄列。
+              本机服务器由面板直接托管 Agent，SSH 端口/用户/密码对它毫无意义——不显示，
+              免得用户以为「本机也要配 SSH」（Windows 桌面场景尤其容易误解）。 */}
           <div className="flex items-end gap-3 sm:col-span-2">
             <div className="grid min-w-0 flex-1 gap-1.5">
-              <Label htmlFor="e-host">{$('addServer.sshHost')}</Label>
+              <Label htmlFor="e-host">
+                {server.isLocal ? $('serverField.host') : $('serverField.sshHost')}
+              </Label>
               <Input id="e-host" defaultValue={server.host} />
             </div>
-            <div className="grid w-[110px] shrink-0 gap-1.5">
-              <Label htmlFor="e-port">{$('addServer.sshPort')}</Label>
-              <Input id="e-port" defaultValue={String(server.ssh.port)} />
-            </div>
+            {!server.isLocal && (
+              <div className="grid w-[110px] shrink-0 gap-1.5">
+                <Label htmlFor="e-port">{$('serverField.sshPort')}</Label>
+                <Input id="e-port" defaultValue={String(server.ssh.port)} />
+              </div>
+            )}
           </div>
+          {!server.isLocal && (
+            <>
+              <div className="grid gap-1.5">
+                <Label htmlFor="e-user">{$('serverField.sshUser')}</Label>
+                <Input id="e-user" defaultValue={server.ssh.user} />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="e-pass">{$('editServer.sshPassword')}</Label>
+                <Input id="e-pass" type="password" placeholder="••••••" />
+              </div>
+            </>
+          )}
+          {server.isLocal && (
+            <p className="text-[11px] leading-snug text-muted-foreground sm:col-span-2">
+              {$('serverField.localHint')}
+            </p>
+          )}
           <div className="grid gap-1.5">
-            <Label htmlFor="e-user">{$('addServer.sshUser')}</Label>
-            <Input id="e-user" defaultValue={server.ssh.user} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="e-pass">{$('editServer.sshPassword')}</Label>
-            <Input id="e-pass" type="password" placeholder="••••••" />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>{$('addServer.mode')}</Label>
+            <Label>{$('serverField.mode')}</Label>
             <Select value={server.agent.mode || 'outbound'} disabled>
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -428,12 +164,12 @@ export function EditServerDialog({
           </div>
           {(server.agent.mode || 'outbound') === 'inbound' ? (
             <div className="grid gap-1.5">
-              <Label htmlFor="e-panel">{$('addServer.panelUrl')}</Label>
+              <Label htmlFor="e-panel">{$('serverField.panelUrl')}</Label>
               <Input id="e-panel" defaultValue={server.agent.panelUrl} />
             </div>
           ) : (
             <div className="grid w-[110px] gap-1.5">
-              <Label htmlFor="e-aPort">{$('addServer.agentPort')}</Label>
+              <Label htmlFor="e-aPort">{$('serverField.agentPort')}</Label>
               <Input id="e-aPort" defaultValue={String(server.agent.port || 3099)} />
             </div>
           )}
@@ -448,7 +184,7 @@ export function EditServerDialog({
                 onCheckedChange={(v) => setEditTls(v === true)}
               />
               <span>
-                {$('addServer.tls')}
+                {$('serverField.tls')}
                 <span className="block text-xs text-muted-foreground">
                   {$('editServer.tls.hint')}
                 </span>
@@ -471,8 +207,10 @@ export function EditServerDialog({
                 const body: Record<string, unknown> = {
                   name: val('e-name'),
                   host: val('e-host').trim(),
-                  sshPort: val('e-port'),
-                  sshUser: val('e-user').trim(),
+                  // 本机服务器没有 SSH 字段（元素根本没渲染），不能按 id 去读
+                  ...(server.isLocal
+                    ? {}
+                    : { sshPort: val('e-port'), sshUser: val('e-user').trim() }),
                   ...(isOutbound
                     ? { agentPort: val('e-aPort').trim(), agentTls: editTls }
                     : { panelUrl: val('e-panel').trim() }),

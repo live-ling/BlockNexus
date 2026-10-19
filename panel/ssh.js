@@ -6,7 +6,6 @@
 const { Client } = require('ssh2');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 
 const NODE_MIN_MAJOR = 16;
@@ -280,72 +279,6 @@ async function ensureSudo(conn, log) {
   return 'sudo ';
 }
 
-/**
- * 添加服务器前的 SSH 连接验证（不落盘、不改远端）：
- * 确认主机/端口/账号/密码可用，并探测系统与 Node/Java 环境，给安装可行性一个预告。
- * 抛错 = 连接失败；返回 ok=false 表示连上了但环境有安装硬伤（如无 root 且无免密 sudo）。
- */
-async function checkSsh(server) {
-  const conn = await sshConnect(server, 12000);
-  try {
-    const batch = [
-      'echo "===id==="; id -u; id -un',
-      'echo "===sudo==="; sudo -n true 2>/dev/null && echo sudo-ok || echo sudo-no',
-      'echo "===os==="; . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME"; uname -s -m',
-      'echo "===node==="; node -v 2>/dev/null || /usr/local/bin/node -v 2>/dev/null || true',
-      'echo "===java==="; java -version 2>&1 | head -1',
-      'echo "===end==="',
-    ].join('; ');
-    const { out } = await run(conn, batch);
-    const section = (name) => {
-      const m = new RegExp(`===${name}===\\n([\\s\\S]*?)(?:(?:\\n)?===\\w+===|\\n===end===)`, 'm').exec(out);
-      return m ? m[1].trim() : '';
-    };
-    const idOut = section('id').split('\n');
-    const uid = Number(idOut[0] || -1);
-    const user = (idOut[1] || server.ssh.user).trim();
-    const sudoOk = section('sudo') === 'sudo-ok';
-    const osLines = section('os').split('\n');
-    const osName = (osLines[0] || '').trim() || '未知发行版';
-    const unameParts = (osLines[1] || '').trim().split(/\s+/);
-    const sys = unameParts[0] || '';
-    const arch = unameParts[1] || '';
-    const nodeV = section('node');
-    const javaLine = section('java');
-    const jm = /version "(\d+)\./.exec(javaLine);
-    const javaMajor = jm ? Number(jm[1]) : 0;
-
-    const isRoot = uid === 0;
-    const canInstall = isRoot || sudoOk;
-    const warnings = [];
-    if (!canInstall) {
-      warnings.push('该账号不是 root 且无免密 sudo，自动安装 Agent / Java 会失败，请改用 root 或配置免密 sudo');
-    }
-    if (!nodeV) warnings.push('未检测到 Node.js，安装 Agent 时会自动安装（发行版源不可用时自动换镜像下载）');
-    else if (!/^v(\d+)\./.test(nodeV) || Number(/^v(\d+)\./.exec(nodeV)[1]) < NODE_MIN_MAJOR) {
-      warnings.push(`Node.js ${nodeV} 版本过低（需 >=${NODE_MIN_MAJOR}），安装 Agent 时会自动升级`);
-    }
-    if (!javaMajor) warnings.push('未检测到 Java，运行 MC 1.20.5+ 需 Java 21，可在面板一键安装');
-    else if (javaMajor < 21) warnings.push(`Java ${javaMajor} 只能运行 1.20.4 及更早版本，MC 1.20.5+ 需 Java 21`);
-
-    return {
-      ok: true,
-      canInstall,
-      user,
-      isRoot,
-      sudoOk,
-      os: sys === 'Linux' ? osName : `${sys} ${osName}`.trim(),
-      arch,
-      node: nodeV || '',
-      java: javaMajor ? (javaLine || `Java ${javaMajor}`) : '',
-      javaMajor,
-      warnings,
-    };
-  } finally {
-    conn.end();
-  }
-}
-
 function sftpWrite(sftp, remote, content) {
   return new Promise((resolve, reject) => {
     const ws = sftp.createWriteStream(remote);
@@ -454,10 +387,19 @@ async function installAgent(server, log) {
   log(`连接 ${server.ssh.user}@${server.host}:${server.ssh.port} …\n`);
   const conn = await sshConnect(server);
   try {
+    // 先判平台再看权限：Windows 的 OpenSSH 上没有 sudo，先跑 ensureSudo 会报一句
+    // 让人摸不着头脑的「需要 root 或免密 sudo」，而真正的原因是平台不支持。
+    // 用容错的探针：Windows 没有 uname，`ver` 能给出 "Microsoft Windows [Version …]"
+    const probe = await run(conn, 'uname -s -m 2>&1 || ver 2>&1');
+    const uname = String(probe.out || '').trim().split(/\r?\n/)[0] || '';
+    log(`系统: ${uname || '未知'}\n`);
+    if (!uname.startsWith('Linux')) {
+      throw new Error(
+        `该主机不是 Linux（${uname || '未知系统'}）：SSH 自动安装只支持 Linux。` +
+          'Windows / macOS 请在目标机器上手动运行 agent.js（服务器详情页「手动安装」里有带 token 的命令）。',
+      );
+    }
     const sudo = await ensureSudo(conn, log);
-    const uname = await runChecked(conn, 'uname -s -m', log);
-    log(`系统: ${uname}\n`);
-    if (!uname.startsWith('Linux')) throw new Error('目前仅支持 Linux 服务器');
 
     await ensureNode(conn, sudo, log);
     await runChecked(conn, `${sudo}mkdir -p ${dir}`, log);
@@ -535,44 +477,83 @@ async function installAgent(server, log) {
   }
 }
 
-// 判断本机面板地址给 Agent 用（添加服务器时的默认值提示）
-function suggestPanelUrl(reqHost) {
-  const port = process.env.BLOCKNEXUS_PORT || 3080;
-  // reqHost 形如 127.0.0.1:3080 或 myhost:3080
-  const hostname = String(reqHost || '').split(':')[0] || os.hostname();
-  return `ws://${hostname}:${port}`;
-}
-
-// 卸载 Agent：停服务 → 删单元 → 递归删除安装目录（含 instances / .backups）
+// 卸载 Agent：停服务 → 删单元 → 递归删除安装目录（含 instances / .backups）→ **后置核验**
+//
+// 「后置核验」是这一版的重点：以前只检查了目录是否删掉，服务停没停、进程还在不在全凭
+// `systemctl ... || true` 的运气——失败也会显示「✓ Agent 已卸载」，用户下次安装才发现
+// 端口被旧进程占着。现在逐项核对，任何一项没通过就抛错（面板据此判 ok=false）。
 async function uninstallAgent(server, log) {
   const dir = server.agent.installDir || '/opt/blocknexus-agent';
   log(`连接 ${server.ssh.user}@${server.host}:${server.ssh.port} …\n`);
   const conn = await sshConnect(server);
   try {
     const sudo = await ensureSudo(conn, log);
-
     const hasSystemd =
       (await run(conn, '[ -d /run/systemd/system ] && echo yes || echo no')).out.trim() === 'yes';
+    const unitExists =
+      (await run(conn, '[ -f /etc/systemd/system/blocknexus-agent.service ] && echo yes || echo no')).out.trim() ===
+      'yes';
+    const dirExists = (await run(conn, `[ -e ${dir} ] && echo yes || echo no`)).out.trim() === 'yes';
+    // 用固定串匹配进程，避免把路径里的 . 当成正则通配
+    const procCount = async () =>
+      Number(
+        (
+          await run(
+            conn,
+            `ps -eo args 2>/dev/null | grep -F "node ${dir}/agent.js" | grep -v grep | wc -l`,
+          )
+        ).out.trim() || 0,
+      );
+
+    if (!unitExists && !dirExists && (await procCount()) === 0) {
+      log('✓ 未检测到 Agent 安装（服务、目录、进程都不存在），无需卸载\n');
+      return { alreadyGone: true };
+    }
+
     if (hasSystemd) {
       log('停止并禁用 systemd 服务 blocknexus-agent …\n');
       await run(conn, `${sudo}systemctl disable --now blocknexus-agent 2>&1 || true`, (c) => log(c, true));
       await run(conn, `${sudo}rm -f /etc/systemd/system/blocknexus-agent.service`);
       await run(conn, `${sudo}systemctl daemon-reload`);
-    } else {
-      log('停止 nohup 进程 …\n');
-      await run(conn, `${sudo}pkill -f "node ${dir}/agent.js" 2>&1 || true`, (c) => log(c, true));
     }
+    // 无 systemd、或 systemd 停不掉（旧版 nohup 残留）：都再按进程名兜一刀
+    log('结束残留的 agent.js 进程（如有）…\n');
+    await run(conn, `${sudo}pkill -f "node ${dir}/agent.js" 2>&1 || true`, (c) => log(c, true));
+    // 给进程一点退出时间，随后再核验
+    await run(conn, 'sleep 1');
 
     log(`递归删除安装目录 ${dir}（含实例与备份）…\n`);
     await runChecked(conn, `${sudo}rm -rf ${dir}`, log);
 
-    // 确认删除干净
+    // ---------- 后置核验：服务 / 进程 / 目录，逐项确认 ----------
+    const problems = [];
+    if (hasSystemd) {
+      const active = (await run(conn, 'systemctl is-active blocknexus-agent 2>/dev/null || true')).out.trim();
+      if (active === 'active' || active === 'activating' || active === 'deactivating') {
+        problems.push(`服务仍是 ${active}`);
+      } else {
+        log(`✓ 服务已停止（systemd: ${active || 'unknown'}）\n`);
+      }
+    }
+    const leftProcs = await procCount();
+    if (leftProcs > 0) problems.push(`仍有 ${leftProcs} 个 agent.js 进程在运行`);
+    else log('✓ 进程已结束\n');
+
     const left = (await run(conn, `[ -e ${dir} ] && echo exists || echo gone`)).out.trim();
-    log(left === 'gone' ? '✓ 安装目录已删除\n' : '⚠ 目录仍存在，请手动检查\n');
-    log('✓ Agent 已卸载\n');
+    if (left !== 'gone') problems.push(`安装目录仍存在：${dir}`);
+    else log('✓ 安装目录已删除\n');
+
+    if (problems.length) {
+      throw new Error(
+        `卸载未完成：${problems.join('；')}。请在服务器上手动检查（可先执行 ` +
+          `systemctl status blocknexus-agent 与 ps aux | grep agent.js）。`,
+      );
+    }
+    log('✓ Agent 已卸载（服务/进程/目录均已清理）\n');
+    return { alreadyGone: false };
   } finally {
     conn.end();
   }
 }
 
-module.exports = { installAgent, updateAgentScript, uninstallAgent, checkSsh, suggestPanelUrl, sftpUploadStream, hostKeyFingerprint, verifyHostKey };
+module.exports = { installAgent, updateAgentScript, uninstallAgent, sftpUploadStream, hostKeyFingerprint, verifyHostKey };

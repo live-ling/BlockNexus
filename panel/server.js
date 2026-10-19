@@ -104,6 +104,18 @@ migrateConfigBeforeLoad();
 const config = new Config(CONFIG_FILE);
 config.data.panel.port = PORT;
 config.data.panel.host = HOST;
+
+// 上一次进程遗留的「安装中」标记：新进程里不可能还有任务在跑。
+// 不清掉的话该服务器会一直显示「Agent 安装中」，并且所有安装入口都会回 409
+// （install-in-progress）——只能手改 config.json 才能恢复。
+{
+  const stale = config.listServers().filter((s) => s && s.installing);
+  if (stale.length) {
+    for (const s of stale) s.installing = false;
+    config.save();
+  }
+}
+
 const bus = new EventEmitter();
 const hub = new AgentHub(config, bus);
 

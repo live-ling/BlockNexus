@@ -404,6 +404,13 @@ async function main() {
   } finally {
     mail.restore();
     panelSrv.close();
+    // 只 close() 不够：Node 18+ 的全局 fetch 走 undici，会把到 127.0.0.1 的
+    // keep-alive 连接留在池里，脚本打印完结果后仍有一个句柄活着 → 进程不退出。
+    // CI 上表现为该步骤一直挂着，直到整个作业被取消（日志末尾只剩一句
+    // "Error: The operation was canceled."，看着像测试失败，其实 22/22 全绿）。
+    try {
+      panelSrv.closeAllConnections?.();
+    } catch {}
   }
 
   const failed = results.filter((r) => !r.ok);
@@ -412,9 +419,24 @@ async function main() {
     console.log('失败：\n' + failed.map((f) => `  - ${f.name}: ${f.detail}`).join('\n'));
     process.exitCode = 1;
   }
+  exitSoon();
+}
+
+/**
+ * 兜底硬退出（见 finally 里的说明）。
+ *
+ * 用 unref 的定时器而不是直接 process.exit()：
+ *   · 没有别的句柄时它不会阻止进程自然退出，stdout 也能正常 flush（直接
+ *     process.exit() 在管道下可能截断还没写完的输出）；
+ *   · 万一将来又引入新的常驻句柄（定时器 / 连接池 / socket），最坏也只是
+ *     多等 200ms 就退出，而不是像这次一样挂到 CI 超时被取消。
+ */
+function exitSoon() {
+  setTimeout(() => process.exit(process.exitCode || 0), 200).unref();
 }
 
 main().catch((e) => {
   console.error('E2E 异常:', e);
   process.exitCode = 1;
+  exitSoon();
 });

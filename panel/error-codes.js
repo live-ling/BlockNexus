@@ -231,6 +231,23 @@ const ERROR_CODES = {
     en: 'Agent is already installing; no panel-side download needed',
   },
 
+  // ---------- 快速添加（添加服务器 → 装 Agent → 建实例 → 开服，一条龙） ----------
+  'server.quick-credentials-required': {
+    status: 400,
+    zh: '快速添加远程服务器需要 SSH 密码或私钥（本机服务器请把主机填 127.0.0.1）',
+    en: 'Quick add on a remote host needs an SSH password or private key (use 127.0.0.1 for the local machine)',
+  },
+  'server.quick-eula-required': {
+    status: 400,
+    zh: '请先阅读并同意 Minecraft EULA',
+    en: 'You must accept the Minecraft EULA first',
+  },
+  'server.quick-running': {
+    status: 409,
+    zh: '该服务器正在执行快速添加，请等它结束',
+    en: 'Quick add is already running for this server',
+  },
+
   // ---------- 实例 ----------
   'instance.not-found': {
     status: 404,
@@ -251,6 +268,42 @@ const ERROR_CODES = {
     status: 400,
     zh: '实例名格式无效',
     en: 'Invalid instance name',
+  },
+  // ---------- 实例：快速添加的参数与结果 ----------
+  'instance.quick-source-invalid': {
+    status: 400,
+    zh: '快速添加不支持该核心类型：{source}（可选 Paper/Vanilla/Purpur/Folia/Fabric/Forge/NeoForge）',
+    en: 'Quick add does not support this core type: {source} (use Paper/Vanilla/Purpur/Folia/Fabric/Forge/NeoForge)',
+  },
+  'instance.quick-memory-range': {
+    status: 400,
+    zh: '内存需在 512 - 32768 MB 之间',
+    en: 'Memory must be between 512 and 32768 MB',
+  },
+  'instance.quick-port-range': {
+    status: 400,
+    zh: '端口需在 1024 - 65535 之间',
+    en: 'Port must be between 1024 and 65535',
+  },
+  'instance.quick-catalog-missing': {
+    status: 502,
+    zh: '拉取 {source} 的版本清单失败，请稍后重试，或改用「新建实例」手动选版本',
+    en: 'Could not fetch the {source} version list. Retry later or create the instance manually',
+  },
+  'instance.quick-version-invalid': {
+    status: 400,
+    zh: '该核心没有 {version} 这个版本',
+    en: 'That core has no version {version}',
+  },
+  'instance.quick-timeout': {
+    status: 504,
+    zh: '等待实例就绪超时（{seconds} 秒），请到服务器详情页查看进度',
+    en: 'Timed out waiting for the instance to become ready ({seconds}s); check the server page for progress',
+  },
+  'instance.quick-start-failed': {
+    status: 500,
+    zh: '实例已创建，但启动后立刻退出：{reason}',
+    en: 'The instance was created but exited right after starting: {reason}',
   },
 
   // ---------- 地图（P4-1） ----------

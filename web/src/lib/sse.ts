@@ -25,6 +25,8 @@ export type SseEvent =
       done?: boolean;
       ok?: boolean;
       error?: string;
+      /** true = 只是停止本机 Agent（不是卸载），用于区分完成提示文案 */
+      stopped?: boolean;
     }
   | {
       /** Agent 自动更新进度（远端版本落后时面板自动执行） */

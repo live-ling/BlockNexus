@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { fmtSize } = require('../util.js');
+const { fmtSize, tarCmd } = require('../util.js');
 const { MAP_CACHE_DIR } = require('./map-cache.js');
 
 
@@ -27,7 +27,8 @@ module.exports = {
 
   tarRun(args, cwd) {
     return new Promise((resolve, reject) => {
-      const child = spawn('tar', args, { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
+      // windowsHide：Windows 上被打包/校验的机器可能在用桌面外壳，别闪 cmd 窗口
+      const child = spawn(tarCmd(), args, { cwd, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
       let err = '';
       child.stderr.on('data', (d) => {
         err += d.toString();

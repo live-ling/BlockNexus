@@ -292,9 +292,27 @@ async function stopAgent(server, log, { agentRequest } = {}) {
 /**
  * 卸载本机 Agent：停进程（+可选优雅收尾），可选删除专用目录（含实例与备份）。
  * 注意：删的是 data/local-agents/<id> 这个专用目录，**不会**碰到项目源码或 agent.js。
+ *
+ * 后置判断：
+ *   · 停进程后必须确认 pid 已消失，否则直接抛错——带着活进程去删目录，
+ *     Windows 上只会得到一个莫名其妙的 EBUSY/EPERM；
+ *   · 删目录后确认目录确实不存在，残留同样抛错（面板据此判 ok=false，而不是假成功）。
  */
 async function uninstallAgent(server, log, { keepBackups = false, deleteDir = true, agentRequest } = {}) {
-  await stopAgent(server, log, { agentRequest });
+  const stop = await stopAgent(server, log, { agentRequest });
+  if (stop.pid && !stop.stopped) {
+    throw new Error(`本机 Agent 进程仍在运行（pid ${stop.pid}），请手动结束后再试`);
+  }
+
+  // 停止后端口应已释放；若仍有人监听，多半是别的进程占了同一端口，说清楚避免误判
+  if ((server.agent.mode || 'outbound') !== 'inbound') {
+    const port = server.agent.port || 3099;
+    if (await portOpen(port)) {
+      log(`⚠ 端口 ${port} 仍有进程在监听（可能是其它程序占用，与本 Agent 无关）\n`);
+    } else {
+      log(`✓ 端口 ${port} 已释放\n`);
+    }
+  }
 
   const dir = localDir(server);
   if (keepBackups) {
@@ -314,12 +332,13 @@ async function uninstallAgent(server, log, { keepBackups = false, deleteDir = tr
     } catch (e) {
       throw new Error(`删除目录失败: ${e.message}`);
     }
-    const gone = !fs.existsSync(dir);
-    log(gone ? '✓ 专用目录已删除\n' : '⚠ 目录仍存在，请手动检查\n');
+    if (fs.existsSync(dir)) throw new Error(`专用目录仍存在：${dir}（可能有文件被占用）`);
+    log('✓ 专用目录已删除\n');
   } else {
     log('已保留专用目录（实例与存档未删除）\n');
   }
   log('✓ 本机 Agent 已卸载\n');
+  return { alreadyGone: !stop.pid, keptDir: !deleteDir };
 }
 
 module.exports = {

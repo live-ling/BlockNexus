@@ -7,8 +7,8 @@
 // 离线/安装中的服务器不发出请求（它们一定会失败），分组小标题上挂 Agent 状态徽章。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Plus, Server } from 'lucide-react';
-import { AddServerDialog } from '@/components/dialogs';
+import { Rocket, Server } from 'lucide-react';
+import { QuickAddDialog } from '@/components/quick-add-dialog';
 import { AgentBadge, InstanceStatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -49,7 +49,7 @@ export function InstancesPage({
   servers: ServerSummary[];
   onAdd: (s: ServerSummary) => void;
 }) {
-  const [addOpen, setAddOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
   // 每台服务器的拉数结果。key 是 serverId；找不到就当 null（还没拉过 / 拉失败）。
   const [data, setData] = useState<Record<string, ServerInstanceData>>({});
   // 顺序：与 servers prop 完全对齐；不引入第二份排序，否则拖动排序会和总览对不上。
@@ -231,8 +231,8 @@ export function InstancesPage({
             )}
           </p>
         )}
-        <Button className="ml-auto" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" /> {$('instances.add')}
+        <Button className="ml-auto" onClick={() => setQuickOpen(true)}>
+          <Rocket className="h-4 w-4" /> {$('servers.quick')}
         </Button>
       </div>
 
@@ -264,15 +264,11 @@ export function InstancesPage({
         </div>
       )}
 
-      <AddServerDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
+      <QuickAddDialog
+        open={quickOpen}
+        onOpenChange={setQuickOpen}
         panelPort={me.port}
-        onCreated={(s) => {
-          onAdd(s);
-          // 新服务器大概率需要先去「服务器设置」装 Agent——直接跳过去
-          navigate(`/server/${s.id}/settings`);
-        }}
+        onCreated={(s) => onAdd(s)}
       />
     </div>
   );

@@ -89,6 +89,23 @@ export function agentOutdated(s: Pick<ServerSummary, 'info' | 'agentBundled'>): 
 }
 
 /**
+ * 系统名展示：把 Node 的 `os.type() + release()` 转成人能读的形式。
+ *
+ * Windows 的 `os.type()` 恒为 `Windows_NT`、版本是内核号（10.0.22631），直接显示
+ * 会变成「Windows_NT 10.0.22631」——既不直观，看起来也像 Linux 那套系统名。
+ * 按 build 号映射成 Windows 10/11 并保留 build，其余平台原样返回。
+ */
+export function osLabel(os: string): string {
+  const s = String(os || '').trim();
+  if (!s) return '—';
+  if (!/^Windows_NT/i.test(s)) return s;
+  const m = /^Windows_NT\s+\d+\.\d+\.(\d+)/i.exec(s);
+  if (!m) return 'Windows';
+  const build = Number(m[1]);
+  return `Windows ${build >= 22000 ? 11 : 10} (${build})`;
+}
+
+/**
  * 版本号展示值：**只返回裸版本号**，'v' 前缀由调用方或译文负责。
  *
  * 为什么值得单独一个函数：系统信息里那行「远端 v0.5.0 · 本地 v{0}」的 'v' 由**译文**
@@ -99,25 +116,6 @@ export function agentOutdated(s: Pick<ServerSummary, 'info' | 'agentBundled'>): 
 export function agentVersionText(v: string | null | undefined, fallback = '—'): string {
   const s = String(v ?? '').trim().replace(/^v/i, '');
   return s || fallback;
-}
-
-/** 添加服务器前的 SSH 连接验证结果（POST /servers/ssh-check） */
-export interface SshCheckResult {
-  ok: boolean;
-  /** 环境是否满足自动安装条件（root 或免密 sudo） */
-  canInstall?: boolean;
-  /** 本机服务器：面板直接托管 Agent，不走 SSH */
-  local?: boolean;
-  user?: string;
-  isRoot?: boolean;
-  sudoOk?: boolean;
-  os?: string;
-  arch?: string;
-  node?: string;
-  java?: string;
-  javaMajor?: number;
-  warnings?: string[];
-  error?: string;
 }
 
 export type InstanceStatus =
@@ -694,7 +692,7 @@ export function saveBackupSchedule(
 
 // ---------- Java 环境（多版本安装 / 切换 / 卸载，Temurin 落位 /opt/blocknexus-java） ----------
 
-/** /opt/blocknexus-java 下的一个托管 Java 目录（system 项为系统包 Java） */
+/** 托管 Java 目录（system 项为系统包 Java；Windows 上还会列出各厂商装的 JDK） */
 export interface JavaEntry {
   /** 托管目录绝对路径；系统包 Java 固定为 'system' */
   path: string;
@@ -705,6 +703,11 @@ export interface JavaEntry {
   active: boolean;
   /** java -version 首行原文（仅系统包 Java 返回） */
   raw?: string;
+  /**
+   * 是否可卸载（只有落在面板托管目录里的版本才允许删）。
+   * 老 Agent 不返回该字段 → 按可卸载处理（Linux 托管列表全是它自己装的）。
+   */
+  removable?: boolean;
 }
 
 export interface JavaListResult {

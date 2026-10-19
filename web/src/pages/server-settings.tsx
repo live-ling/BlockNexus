@@ -69,6 +69,7 @@ import {
   javaVersionText,
   latencyTone,
   listJavas,
+  osLabel,
   timeago,
   switchJava,
   uninstallJava,
@@ -230,7 +231,8 @@ export function ServerSettingsPage({
         if (e.log) installLogStore.push(key, e.log);
         if (e.done) {
           installLogStore.markDone(key, !!e.ok);
-          if (e.ok) success($('serverSettings.toast.agentUninstalled'));
+          // 「停止本机 Agent」走的是同一类任务日志，但结果不该说成「已卸载」
+          if (e.ok) success($(e.stopped ? 'serverSettings.toast.agentStopped' : 'serverSettings.toast.agentUninstalled'));
           else error($('serverSettings.error.uninstall'), typeof e.error === 'string' ? e.error : undefined);
           load();
         }
@@ -644,7 +646,7 @@ export function ServerSettingsPage({
           <InfoGrid
             rows={[
               [$('serverSettings.field.hostname'), server.info.hostname],
-              [$('serverSettings.field.os'), `${server.info.os} · ${server.info.arch}`],
+              [$('serverSettings.field.os'), `${osLabel(server.info.os)} · ${server.info.arch}`],
               ['Node', server.info.node],
               [
                 // Agent 版本那行已移进「Agent 守护进程」卡（那里才是它该待的地方）
@@ -1013,14 +1015,14 @@ export function JavaCard({
                         )}
 
                         <div className="justify-self-end">
-                          {sys ? (
-                            // 系统包归发行版管：面板不卸载它，用灰色锁占位（列位不跳动）
+                          {sys || entry.removable === false ? (
+                            // 系统包/厂商装的 JDK 归系统管：面板不卸载它，用灰色锁占位（列位不跳动）
                             <Button
                               variant="ghost"
                               size="icon-sm"
                               disabled
-                              title={$('serverSettings.java.systemNote')}
-                              aria-label={$('serverSettings.java.systemNote')}
+                              title={sys ? $('serverSettings.java.systemNote') : $('serverSettings.java.externalNote')}
+                              aria-label={sys ? $('serverSettings.java.systemNote') : $('serverSettings.java.externalNote')}
                             >
                               <Lock className="h-3.5 w-3.5 text-muted-foreground" />
                             </Button>

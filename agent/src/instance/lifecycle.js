@@ -13,14 +13,46 @@ const { sendEvent } = require('../eventbus.js');
 
 
 module.exports = {
-  // java 可执行文件：优先 PATH 里的 java，找不到再看 /usr/local/bin（Temurin 兜底安装位置）。
+  // java 可执行文件：
+  //   Linux   —— 优先 PATH 里的 java，再看 /usr/local/bin（Temurin 兜底安装位置）；
+  //   Windows —— 优先面板里选定的版本（java-default.json），其次托管目录里最高版本，最后 PATH。
   // 只缓存命中的结果；都没命中时返回 null（装好 Java 后下次调用会重新探测）。
   javaCmd() {
     if (this._javaCmd) return this._javaCmd;
     const probe = (c) => {
-      const r = spawnSync(c, ['-version'], { encoding: 'utf8', timeout: 15000 });
+      if (!c) return false;
+      // windowsHide：Linux 上忽略；Windows 上避免每次探测都闪一个 cmd 窗口
+      const r = spawnSync(c, ['-version'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
       return !r.error && /version "/.test((r.stderr || '') + (r.stdout || ''));
     };
+    if (process.platform === 'win32') {
+      const chosen = this._winJavaChosen();
+      if (probe(chosen)) {
+        this._javaCmd = chosen;
+        return this._javaCmd;
+      }
+      try {
+        const root = this.javaRoot();
+        const dirs = fs
+          .readdirSync(root)
+          .filter((d) => fs.existsSync(path.join(root, d, 'bin', 'java.exe')))
+          .sort((a, b) => {
+            const major = (n) => Number((/^jdk-?(\d+)/.exec(n) || [])[1] || 0);
+            return major(b) - major(a);
+          });
+        for (const d of dirs) {
+          const exe = path.join(root, d, 'bin', 'java.exe');
+          if (probe(exe)) {
+            this._javaCmd = exe;
+            return exe;
+          }
+        }
+      } catch {
+        // 托管目录不存在 → 还没通过面板装过
+      }
+      if (probe('java')) this._javaCmd = 'java';
+      return this._javaCmd || null;
+    }
     if (probe('java')) this._javaCmd = 'java';
     else if (probe('/usr/local/bin/java')) this._javaCmd = '/usr/local/bin/java';
     return this._javaCmd || null;
@@ -30,7 +62,7 @@ module.exports = {
     try {
       const cmd = this.javaCmd();
       if (!cmd) return { installed: false };
-      const r = spawnSync(cmd, ['-version'], { encoding: 'utf8', timeout: 15000 });
+      const r = spawnSync(cmd, ['-version'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
       const out = (r.stderr || '') + (r.stdout || '');
       const m = /version "(\d+)(?:\.(\d+))?/.exec(out);
       if (r.error || !m) return { installed: false };
@@ -114,7 +146,12 @@ module.exports = {
       launch.kind === 'argsfile'
         ? [...mem, '@user_jvm_args.txt', '@' + launch.argsFile, 'nogui']
         : [...mem, '-jar', launch.file, 'nogui'];
-    const child = spawn(this.javaCmd() || 'java', args, { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
+    // windowsHide：Windows 上后台静默托管（否则每启动一个实例都会弹出一个控制台窗口）
+    const child = spawn(this.javaCmd() || 'java', args, {
+      cwd: dir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
     rec.proc = child;
     rec.startedAt = Date.now();
     rec.ready = false; // 等控制台的「Done (x.xxxs)」就绪信号，期间状态为启动中

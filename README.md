@@ -52,18 +52,23 @@ node panel/server.js --host 0.0.0.0   --tls-cert cert.pem --tls-key key.pem     
 
 启动后控制台会打印**访问地址、监听范围与密码保护状态**；浏览器打开 `http://127.0.0.1:3080` 即可（默认免密直接进入）。
 
-### 添加服务器并安装 Agent
+### 快速添加服务器（唯一入口）
 
-1. 首页点「+ 添加服务器」，填写 SSH 主机/端口/用户（建议 root）/密码或私钥；
-2. 选择**连接方式**：
-   - **面板连接 Agent**（默认、推荐）：Agent 在服务器上监听 `3099` 端口，面板主动连入。只需确保服务器安全组/防火墙放行该端口（TCP），**面板无需公网地址**；
-   - **Agent 连接面板**：由 Agent 反向回连，需要在「面板地址」里填服务器能访问到的面板地址（公网 IP / frp / Tailscale）；
-3. 进入服务器详情页点「安装 Agent（SSH）」——面板会自动：检测/安装 Node.js → 上传 `agent.js` → 写入 token 与监听端口 → 注册 `systemd` 服务（`blocknexus-agent`）→ 建立加密通道（面板侧会主动重试，断线每 3–30 秒退避重连）；
+首页或实例总览点「快速添加」，只填**目标机器**（远程填主机 + SSH 账号；本机什么都不用填）。默认只做一件事：**装好 Agent**；勾选「同时创建并启动 Minecraft 实例」才会顺手建服并开服（EULA 也只在勾选后才需要同意）。
 
-   > 本机服务器（host 为 `127.0.0.1`）不需要这一步：面板会直接在本机拉起 Agent，详见下文「本机服务器」。
-4. 上线后即可「+ 新建实例」：选版本（自动拉取 Mojang 版本清单）、端口、内存、MOTD、离线模式，勾选 EULA 后创建，Agent 自动下载 `server.jar`（进度实时显示）。
+勾选实例时，面板一次做完：
 
-如果服务器上没有 Java，详情页会出现「安装 Java」按钮（apt/dnf/yum/apk 自动选择 JDK 17/21）。
+1. **装 Agent**：远程走 SSH（检测/安装 Node.js → 上传 `agent.js` → 注册 `systemd`），本机则由面板直接托管进程；
+2. **建实例**：核心默认 Paper 最新稳定版；实例名、游戏端口、最大内存自动推导——端口从 `25565` 起找空闲的，内存按机器物理内存的一半（下限 512MB、上限 8GB、按 512MB 对齐）；
+3. **装 Java**：机器上没有够用的 Java 时自动装一个（1.20.5+ → 21、1.18–1.20.4 → 17、1.17 → 16、更早 → 8），装不上只告警、不阻断后续步骤；
+4. **开服**：等核心下载完成 → 启动 → 等服务器打印启动完成，最后给「查看服务器」入口。
+
+- 实例参数（核心 / 版本 / 内存 / 端口 / 实例名 / 正版验证 / MOTD）**直接展开**在弹窗里，不需要先点开折叠面板；留空就是按机器资源自动算；
+- 进度实时显示在弹窗里（关掉弹窗任务照常在后台跑，服务器卡片显示「Agent 安装中」）；全程通常 1–3 分钟，Forge/NeoForge 或慢速网络更久；
+- 远程机器要连得上：默认「面板连 Agent」，需在安全组/防火墙放行 Agent 端口（默认 `3099`）；面板在 NAT 后时改用「Agent 连面板」并填服务器能访问到的面板地址；
+- **失败不丢记录**：服务器记录保留，弹窗给「重试 / 重装 Agent 后重试 / 删除这个服务器」；重试会**续装**上次那个实例，不会另建一个 `survival-2`。
+
+> 只想接入一台机器、暂时不建实例？用 API：`POST /api/servers` 保存服务器，再进详情页点「安装 Agent（SSH）」。面板界面只保留「快速添加」这一个入口（原来那套「添加服务器 → 验证连接 → 保存 → 再安装」已删除）。
 
 ### Agent 版本与自动更新
 
@@ -102,7 +107,8 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 - **启停**：设置页的「启动 Agent / 停止 Agent」只管进程，实例与存档**始终保留**，可随时再启动（面板会自动重连）；
 - **安装/重装**：重建 `agent.json` 并拉起进程；若目标端口已被占用会直接报错，不会悄悄失败；
 - **卸载**：默认只停进程、**保留实例数据**；勾选「同时删除专用目录」才清理。删的只是 `data/local-agents/<id>`，不会碰到项目源码（`agent/agent.js`）；
-- 停止时若 Agent 在线，会先让 Agent 优雅停 MC 实例（`stop` 指令，超时才强杀），避免 java 变孤儿进程；Agent 进程本身先 `taskkill /PID`（Windows）等优雅退出，超时再 `/T /F` 杀进程树。
+- 停止时若 Agent 在线，会先让 Agent 优雅停 MC 实例（`stop` 指令，超时才强杀），避免 java 变孤儿进程；Agent 进程本身先 `taskkill /PID`（Windows）等优雅退出，超时再 `/T /F` 杀进程树；
+- **Windows 桌面静默托管**：Agent、MC 的 java 进程、Forge/Fabric 安装器、备份打包、`java -version` 探测全部以隐藏窗口启动（`windowsHide`），不会反复弹出 cmd 窗口；本机服务器在设置页也不显示 SSH 凭据/手动安装这类 Linux 专属入口。
 
 > 面板 own 的进程是 detached 的，面板退出后 Agent 仍存活；要彻底停止请用面板上的「停止 Agent / 卸载」，或 `npm stop`。
 
@@ -174,6 +180,8 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 
 ## 实例管理能力
 
+实例有两条创建路径：**快速添加**（连服务器一起建好并直接开服，见上文）与服务器详情页的 **「+ 新建实例」**（在已有服务器上加一个实例：选核心与版本、端口、内存、MOTD、正版验证，勾选 EULA 后创建，Agent 自动下载 `server.jar` 并实时显示进度）。机器上没有够用的 Java 时，详情页会提示并可一键安装。
+
 实例详情页承载全部单实例操作，按钮区包括：
 
 - **启动 / 停止 / 重启**：状态徽章区分 运行中 / 启动中（等待 `Done (x.xxx)s!` 就绪信号，最长 300 秒兜底）/ 已停止 / 下载中 / 安装失败；
@@ -241,10 +249,14 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 服务器设置页独立的「Java 环境」卡：多版本的 **安装 / 切换 / 卸载**（服务器设置页在 Agent 卡与系统信息卡之间；实例详情页侧栏保留快捷入口）：
 
 - **版本可选**：`Java 25（最新）` / `Java 21（推荐 · 1.20.5+）` / `Java 17（1.17 – 1.20.4）` / `Java 11（旧版备用）` / `Java 8（MC ≤ 1.16）`，旧版到最新全覆盖；
-- **统一走 Temurin JRE**：优先清华 TUNA 镜像（国内快），失败再走 Adoptium 官方 API；每个版本独立目录落位 `/opt/blocknexus-java/jdk-*/`，互不覆盖；
-- **完整安装列表 + 勾选生效**：卡片列出全部可用 Java（面板装的 Temurin 各版本 + 系统包 Java `/usr/bin/java`），点选即切换默认版本（`/usr/local/bin/java` 软链重指，Agent 立即重探测），选中行高亮「使用中」；
-- **卸载**：托管版本可单独卸载（永久删除该版本目录）；卸载正在使用的版本会自动回退到其余版本或系统 Java，唯一可用时拒绝卸载；也可一键「改用系统包 Java」摘除面板的软链；
-- **异步任务**：安装点击后面板立即返回，过程与结果实时推送（下载百分比、解压、链接每一步都显示）；
+- **统一走 Temurin JRE**：优先清华 TUNA 镜像（国内快），失败再走 Adoptium 官方 API；每个版本独立目录落位（Linux：`/opt/blocknexus-java/jdk-*/`；Windows：`data/local-agents/<服务器ID>/java/jdk-*/`），互不覆盖；
+- **完整安装列表 + 勾选生效**：
+  - Linux 列出面板装的 Temurin 各版本 + 系统包 Java `/usr/bin/java`，切换即重指 `/usr/local/bin/java` 软链；
+  - Windows 会扫描 `Program Files` 下各厂商目录（Oracle / Adoptium / Microsoft / Zulu / BellSoft / Corretto / Semeru）、`%USERPROFILE%\.jdks`、`JAVA_HOME` 与 `PATH` 上的 java，选中版本记录在 `java-default.json`，启动实例时直接用该 `java.exe`；
+  - 只有面板托管目录里的版本有卸载按钮，系统/厂商装的 JDK 标为「外部安装」只能切换过去用；
+- **卸载**：托管版本可单独卸载（永久删除该版本目录）；卸载正在使用的版本会自动回退到其余版本或系统 Java，唯一可用时拒绝卸载；也可一键「改用系统 Java」摘除面板的设置；
+- **异步任务**：安装点击后面板立即返回，过程与结果实时推送（下载百分比、解压、切换每一步都显示）；
+- **后台静默**：Agent 拉起 java 进程、跑安装器、备份打包、`java -version` 探测全部带 `windowsHide`，Windows 上不会反复弹 cmd 窗口；
 - 启动实例不再按 Java 版本硬性拦截——选错版本时服务端会自行报错，日志在控制台可见。
 
 ## 卸载 Agent
@@ -252,10 +264,17 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 服务器设置页「Agent」卡片右上角的「卸载」按钮（红色描边）：
 
 1. **优雅收尾**（Agent 在线时）：先逐个停止运行中的实例；勾选「卸载前把实例备份打包到安装目录之外」时，会把 `.backups` 打成 `blocknexus-backups-<时间戳>.tar.gz` 放到**安装目录的上一级**（默认即 `/opt/blocknexus-backups-*.tar.gz`，不会随安装目录一起被删），并把 `.backups` 移出实例目录；
-2. **SSH 卸载**：停止并禁用 systemd 服务 `blocknexus-agent`、删除单元文件、`rm -rf` 安装目录（**递归删除全部实例与存档**）；
+2. **SSH 卸载**：停止并禁用 systemd 服务 `blocknexus-agent`、删除单元文件、清掉残留进程、`rm -rf` 安装目录（**递归删除全部实例与存档**）；
 3. 可选「同时从面板移除该服务器」（不勾选则保留记录、Agent 显示离线，可随时重装）。
 
-全程日志通过 SSE 实时显示在对话框里；执行失败会把错误写明（例如 SSH 连不上），且**不会**清空面板已缓存的系统信息。Agent 离线时也能卸载（跳过第 1 步，运行中的实例会随进程结束）。
+**后置核验（这一版新增）**：卸载不是「发完命令就算成功」，结束后会逐项确认——
+
+- **远程**：`systemctl is-active` 确认服务已停、按固定串匹配 `node <安装目录>/agent.js` 确认没有残留进程、确认安装目录已删净；
+- **本机**：确认 Agent 进程确实退出（超时就报错，不会带着活进程去删目录）、确认专用目录真的删掉，并提示端口是否已释放；
+- 任何一项不通过 → 任务判为**失败**并写明原因（对话框保持打开、显示「操作未完成」与日志），不会出现「显示已卸载、端口还被旧进程占着」；
+- 本来就没装过也算成功（幂等，日志会说明「未检测到 Agent 安装」）。
+
+**面板侧状态同步**：卸载成功后立即断开可能还挂着的连接、清掉资源快照与 Agent 更新状态，并在 10 分钟内**不发送**「服务器离线」通知（刚卸完就收到离线邮件是噪音）；重新装上并上线后恢复正常通知。全程日志通过 SSE 实时显示在对话框里，Agent 离线时也能卸载（跳过第 1 步，运行中的实例会随进程结束）。
 
 ## 配置设置（server.properties 可视化编辑）
 
@@ -332,6 +351,9 @@ POST /api/reset-password             (以上三个匿名，找回密码)
 GET  /api/license                    (MIT 全文，匿名，关于页展示)
 GET|PUT /api/settings                POST /api/settings/smtp-test
 GET|POST /api/servers                GET|PUT|DELETE /api/servers/:id
+POST /api/servers/quick-create       (快速添加：建服务器 → 装 Agent → 建实例 → 装 Java → 开服)
+POST /api/servers/:id/quick-setup    (对已有服务器重跑快速添加；install=auto|force)
+GET  /api/servers/:id/task-log?kind=install|uninstall  (任务日志与结果，刷新后重放)
 POST /api/servers/:id/install        POST /api/servers/:id/token/rotate
 POST /api/servers/:id/agent-update   (Agent 版本落后时的手动更新兜底)
 GET|POST /api/servers/:id/instances  DELETE /api/servers/:id/instances/:name

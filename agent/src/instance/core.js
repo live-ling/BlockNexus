@@ -421,7 +421,11 @@ module.exports = {
     }
     this.emitConsole(rec, `[BlockNexus] 运行 ${plan.kind} 安装器: java ${args.join(' ')}`);
     const code = await new Promise((resolve, reject) => {
-      const child = spawn(this.javaCmd() || 'java', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(this.javaCmd() || 'java', args, {
+        cwd: dir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true, // Windows：安装器也必须在后台静默跑，别弹控制台
+      });
       const feed = this.makeLineSplitter((t) => this.emitConsole(rec, t));
       child.stdout.on('data', feed);
       child.stderr.on('data', feed);

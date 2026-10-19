@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, agentOutdated, agentVersionText, api, errText } from './api'
+import { ApiError, agentOutdated, agentVersionText, api, errText, osLabel } from './api'
 import { $, __resetLanguageForTest, setLanguage } from './i18n'
 
 /**
@@ -155,5 +155,22 @@ describe('agentVersionText / agentOutdated（版本号展示契约）', () => {
     expect(agentOutdated({ info: { agentVersion: '0.5.0' }, agentBundled: '0.5.0' } as never)).toBe(false)
     expect(agentOutdated({ info: null, agentBundled: '0.5.0' } as never)).toBe(true)
     expect(agentOutdated({ info: { agentVersion: '0.4.5' }, agentBundled: '' } as never)).toBe(false)
+  })
+})
+
+describe('osLabel：系统名展示', () => {
+  it('Windows 按 build 号映射成 10/11，并保留 build', () => {
+    expect(osLabel('Windows_NT 10.0.22631')).toBe('Windows 11 (22631)')
+    expect(osLabel('Windows_NT 10.0.19045')).toBe('Windows 10 (19045)')
+  })
+
+  it('Linux / macOS 原样返回（不套用 Windows 的规则）', () => {
+    expect(osLabel('Linux 6.8.0-45-generic')).toBe('Linux 6.8.0-45-generic')
+    expect(osLabel('Darwin 24.0.0')).toBe('Darwin 24.0.0')
+  })
+
+  it('缺值 / 只有 Windows_NT 时给出可读兜底', () => {
+    expect(osLabel('')).toBe('—')
+    expect(osLabel('Windows_NT')).toBe('Windows')
   })
 })
