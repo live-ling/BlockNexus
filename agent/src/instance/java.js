@@ -367,7 +367,11 @@ module.exports = {
     }
     sources.push(`https://api.adoptium.net/v3/binary/latest/${major}/ga/windows/${arch}/jre/hotspot/normal/eclipse`);
 
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blocknexus-jre-'));
+    // 临时下载目录放在 Agent 托管目录下（<Agent>/tmp），不往系统 %TEMP% 里丢东西：
+    // 运行时产物都收敛在面板/Agent 目录内，便于排查与清理，也不受 %TEMP% 权限影响。
+    const tmpRoot = path.join(path.dirname(root), 'tmp');
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    const tmpDir = fs.mkdtempSync(path.join(tmpRoot, 'jre-'));
     const tmp = path.join(tmpDir, `jre${major}.zip`);
     let lastErr = null;
     try {

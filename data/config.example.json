@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "panel": {
     "port": 3080,
     "username": "admin",
@@ -16,6 +17,15 @@
       "baseUrl": "",
       "apiKey": "",
       "model": ""
-    }
+    },
+    "ddns": {
+      "enabled": false,
+      "provider": "cloudflare",
+      "domain": "",
+      "ipv4": true,
+      "ipv6": false,
+      "source": "api"
+    },
+    "frp": { "enabled": false, "mode": "sakura", "binaryPath": "" }
   }
 }

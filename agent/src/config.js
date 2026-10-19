@@ -13,7 +13,13 @@ const state = require('./state.js');
 //        instance.list 多返回 tracking 字段，instance.edit 支持 tracking 开关）。
 // 0.5.1：Windows 适配——java 管理（检测/切换/安装/卸载）不再只支持 Linux；
 //        所有子进程调用统一 windowsHide（修 Windows 上反复弹 cmd 窗口）。
-const AGENT_VERSION = '0.5.1';
+// 0.5.2：ban-ip 防误伤——登录行记录玩家来源 IP；经 frp/本机代理接入（回环地址）时
+//        拒绝 ban-ip，避免一条 IP 封禁把所有玩家一起封掉。
+// 0.5.3：Windows 下把 JVM 临时目录指到实例目录的 .tmp，修 %TEMP% 不可写时
+//        server-icon.png 加载失败（ImageIO "Can't create cache file!"）。
+// 0.5.4：Windows 安装 Java 的下载临时目录从系统 %TEMP% 改到 <Agent>/tmp，
+//        运行时产物统一收敛在面板/Agent 托管目录内（便于排查与清理）。
+const AGENT_VERSION = '0.5.4';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。

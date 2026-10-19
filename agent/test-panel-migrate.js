@@ -2,9 +2,9 @@
 // panel/migrate.js 的单测（零依赖，直接 require，不需要面板/网络/真实 data/config.json）
 //
 // 覆盖的是**会毁用户数据的决策**：版本字段怎么读、迁移链怎么串、失败时还敢不敢把数据
-// 交回调用方写盘。生产链当前为空（CURRENT_SCHEMA = 1），所以绝大多数用例跑的是**合成链**
-// （1→2→3、带缺口的链、会抛异常的链、返回非法值的链）——否则这段代码要等到第一次真正的
-// 结构变更时才会被执行，那就太晚了。
+// 交回调用方写盘。生产链当前是 1→2（新增 settings.ddns / settings.frp），所以除了生产
+// 迁移本身，其余用例跑的是**合成链**（1→2→3、带缺口的链、会抛异常的链、返回非法值的链）
+// ——否则这段决策代码只会被真实迁移碰一次，覆盖面太窄。
 //
 // 运行：node agent/test-panel-migrate.js
 
@@ -33,9 +33,9 @@ const SRC = {
 const SRC_SNAPSHOT = JSON.stringify(SRC);
 
 // ---------- 契约常量 ----------
-check('契约: SCHEMA_FIELD / CURRENT_SCHEMA / 生产链当前为空',
-  M.SCHEMA_FIELD === 'schemaVersion' && M.CURRENT_SCHEMA === 1 &&
-    Object.keys(M.MIGRATIONS).length === 0,
+check('契约: SCHEMA_FIELD / CURRENT_SCHEMA / 生产链含 1→2',
+  M.SCHEMA_FIELD === 'schemaVersion' && M.CURRENT_SCHEMA === 2 &&
+    typeof M.MIGRATIONS[1] === 'function',
   JSON.stringify({ field: M.SCHEMA_FIELD, cur: M.CURRENT_SCHEMA, chain: Object.keys(M.MIGRATIONS) }));
 
 // ---------- 1. readSchema ----------
@@ -204,13 +204,24 @@ const boomM = M.createMigrator({
     r.ok === false && r.error === 'update.migrate-unsupported' && r.data === null, JSON.stringify(r));
 }
 {
-  // 生产链当前为空：任何跨版本请求都必须被拒
+  // 生产链 1→2：新增 settings.ddns / settings.frp，其余字段一个都不能动
   const r = M.migrateConfig(SRC, 1, 2);
-  check('不支持: 生产链为空时 1→2 被拒（绝不假装升上去了）',
-    r.ok === false && r.error === 'update.migrate-unsupported' && r.data === null, JSON.stringify(r));
+  const d = r.data || {};
+  check(
+    '生产: 1→2 成功并补齐网络设置',
+    r.ok === true &&
+      r.applied.length === 1 &&
+      !!d.settings &&
+      !!d.settings.ddns &&
+      !!d.settings.frp &&
+      d.servers[0].id === 'srv-a',
+    JSON.stringify(r).slice(0, 300),
+  );
+  check('生产: 1→2 保留服务器/密钥等原有字段', same(d.servers, SRC.servers) && same(d.smtp, SRC.smtp) && same(d.ai, SRC.ai));
+  check('生产: 1→2 不改入参', JSON.stringify(SRC) === SRC_SNAPSHOT);
 }
 
-// ---------- 9. migrateConfig（生产链：1→1 空操作） ----------
+// ---------- 9. migrateConfig（生产链：1→2 一步） ----------
 {
   const cfg = {
     servers: [{ id: 'srv-a', port: 25565 }],
@@ -220,15 +231,21 @@ const boomM = M.createMigrator({
   };
   const before = JSON.stringify(cfg);
   const r = M.migrateConfig(cfg);
-  check('生产: 1→1 是空操作（ok 且 applied 为空）',
-    r.ok === true && r.applied.length === 0 && r.error === '', JSON.stringify(r));
-  check('生产: 数据完整保留（逐字段深比较）', same(r.data, cfg), JSON.stringify(r.data));
-  check('生产: 结果读版本号仍是 1', M.readSchema(r.data) === 1);
+  check('生产: 1→2 只执行一步', r.ok === true && r.applied.length === 1 && r.error === '', JSON.stringify(r).slice(0, 200));
+  check(
+    '生产: 原有字段完整保留',
+    same(r.data.servers, cfg.servers) &&
+      same(r.data.smtp, cfg.smtp) &&
+      same(r.data.ai, cfg.ai) &&
+      r.data.someUnknownFlag === true,
+    JSON.stringify(r.data).slice(0, 200),
+  );
+  check('生产: 结果版本号是 2', M.readSchema(r.data) === 2);
   check('生产: 不改入参（也没有被偷偷写上版本字段）',
     JSON.stringify(cfg) === before && !(M.SCHEMA_FIELD in cfg), JSON.stringify(cfg));
   const r2 = M.migrateConfig(cfg, 1, M.CURRENT_SCHEMA);
-  check('生产: 显式 1→CURRENT_SCHEMA 同样空操作且数据完整',
-    r2.ok === true && r2.applied.length === 0 && same(r2.data, cfg));
+  check('生产: 显式 1→CURRENT_SCHEMA 同样走一步且字段保留',
+    r2.ok === true && r2.applied.length === 1 && same(r2.data.servers, cfg.servers));
   const r3 = M.migrateConfig({ ...cfg, [M.SCHEMA_FIELD]: M.CURRENT_SCHEMA });
   check('生产: 已带版本号的配置照常通过（重复启动幂等）',
     r3.ok === true && r3.applied.length === 0 && M.readSchema(r3.data) === M.CURRENT_SCHEMA);

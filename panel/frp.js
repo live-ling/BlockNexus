@@ -1,0 +1,481 @@
+'use strict';
+// frp 客户端托管：面板管理一个 frpc 进程（SakuraFrp 模式或自建 frps 模式）。
+//
+// 为什么由面板托管而不是让用户自己开黑窗口：
+//   · 进程要跟面板一起活（启动/停止/异常重连），日志要能在面板里看；
+//   · 统一 `windowsHide`，不会再弹 cmd 窗口；
+//   · 配置生成与校验可单测，避免用户手写 TOML/INI 写错。
+//
+// 边界：**不打包、不下载 frpc 二进制**。用户自备（SakuraFrp 官方包或上游 release），
+// 设置里填路径。这样面板体积、CI 与跨平台分发都不受影响。
+
+const fs = require('fs');
+const path = require('path');
+const { spawn, spawnSync } = require('child_process');
+
+const MODES = ['sakura', 'upstream'];
+const TYPES = ['tcp', 'udp'];
+const PROXY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const MAX_PROXIES = 50;
+const MAX_LOG_BYTES = 2 * 1024 * 1024;
+
+const DEFAULTS = {
+  enabled: false,
+  mode: 'sakura',
+  binaryPath: '',
+  sakura: { token: '', tunnels: '' },
+  upstream: { serverAddr: '', serverPort: 7000, authToken: '', proxies: [] },
+};
+
+const isWin = () => process.platform === 'win32';
+
+function clampPort(v, fallback = 0) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return fallback;
+  return n;
+}
+
+/** TOML 基本字符串转义（不能有裸换行/引号/反斜杠） */
+function tomlStr(value) {
+  return '"' + String(value == null ? '' : value).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"';
+}
+
+/** 解析 "1, 2 ,3" → ['1','2','3']（SakuraFrp 的隧道 ID 列表） */
+function parseTunnelIds(input) {
+  return String(input || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => /^\d{1,12}$/.test(s));
+}
+
+/** SakuraFrp 模式启动参数：`frpc -f <token>:<id1,id2> -n`（-n 关闭自动更新检查） */
+function buildSakuraArgs(cfg = {}) {
+  const token = String(cfg.sakura?.token || '').trim();
+  const ids = parseTunnelIds(cfg.sakura?.tunnels);
+  if (!token || !ids.length) return null;
+  return ['-f', `${token}:${ids.join(',')}`, '-n'];
+}
+
+/** 自建 frps：按设置生成 frpc.toml（上游 frp v0.52+ 的 TOML 格式） */
+function buildUpstreamToml(cfg = {}) {
+  const u = cfg.upstream || {};
+  const lines = [];
+  lines.push(`serverAddr = ${tomlStr(u.serverAddr)}`);
+  lines.push(`serverPort = ${clampPort(u.serverPort, 7000)}`);
+  if (String(u.authToken || '').trim()) {
+    lines.push('auth.method = "token"');
+    lines.push(`auth.token = ${tomlStr(u.authToken)}`);
+  }
+  lines.push('log.to = "console"');
+  lines.push('log.level = "info"');
+  for (const p of Array.isArray(u.proxies) ? u.proxies : []) {
+    if (!p || !p.name) continue;
+    lines.push('');
+    lines.push('[[proxies]]');
+    lines.push(`name = ${tomlStr(p.name)}`);
+    lines.push(`type = ${tomlStr(TYPES.includes(p.type) ? p.type : 'tcp')}`);
+    lines.push('localIP = "127.0.0.1"');
+    lines.push(`localPort = ${clampPort(p.localPort, 25565)}`);
+    lines.push(`remotePort = ${clampPort(p.remotePort, 25565)}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** 供 API 返回：凭据只回 has* */
+function publicConfig(cfg = {}) {
+  const c = { ...DEFAULTS, ...cfg };
+  const u = { ...DEFAULTS.upstream, ...(c.upstream || {}) };
+  return {
+    enabled: !!c.enabled,
+    mode: MODES.includes(c.mode) ? c.mode : 'sakura',
+    binaryPath: c.binaryPath || '',
+    sakura: { hasToken: !!c.sakura?.token, tunnels: c.sakura?.tunnels || '' },
+    upstream: {
+      serverAddr: u.serverAddr || '',
+      serverPort: u.serverPort || 7000,
+      hasToken: !!u.authToken,
+      proxies: (Array.isArray(u.proxies) ? u.proxies : []).map((p) => ({
+        name: p.name || '',
+        type: TYPES.includes(p.type) ? p.type : 'tcp',
+        localPort: clampPort(p.localPort, 25565),
+        remotePort: clampPort(p.remotePort, 25565),
+      })),
+    },
+  };
+}
+
+/** 合并 + 校验（空字符串凭据 = 保留原值） */
+function normalizeConfig(input = {}, current = {}) {
+  const cur = { ...DEFAULTS, ...current };
+  const inSakura = input.sakura || {};
+  const inUp = input.upstream || {};
+  const curUp = cur.upstream || {};
+
+  const cfg = {
+    enabled: input.enabled !== undefined ? !!input.enabled : !!cur.enabled,
+    mode: MODES.includes(input.mode) ? input.mode : MODES.includes(cur.mode) ? cur.mode : 'sakura',
+    binaryPath: String(input.binaryPath !== undefined ? input.binaryPath : cur.binaryPath || '').trim(),
+    sakura: {
+      token: String(inSakura.token || cur.sakura?.token || '').trim(),
+      tunnels: String(inSakura.tunnels !== undefined ? inSakura.tunnels : cur.sakura?.tunnels || '').trim(),
+    },
+    upstream: {
+      serverAddr: String(inUp.serverAddr !== undefined ? inUp.serverAddr : curUp.serverAddr || '').trim(),
+      serverPort: clampPort(inUp.serverPort !== undefined ? inUp.serverPort : curUp.serverPort, 7000),
+      authToken: String(inUp.authToken || curUp.authToken || '').trim(),
+      proxies: [],
+    },
+  };
+
+  // proxies 只在请求里带了才覆盖（避免部分更新把列表清空）
+  if (Array.isArray(inUp.proxies)) {
+    // 校验顺序：先确认「自建模式最关键的 serverAddr」，再逐条校代理。
+    // 否则一个空表单会先报「代理名无效」，用户根本不知道该先填什么。
+    if (cfg.enabled && cfg.mode === 'upstream' && !cfg.upstream.serverAddr) {
+      return { error: 'network.frp-server-required' };
+    }
+    if (inUp.proxies.length > MAX_PROXIES) return { error: 'network.frp-proxies-too-many' };
+    for (const p of inUp.proxies) {
+      const name = String(p?.name || '').trim();
+      if (!PROXY_NAME_RE.test(name)) return { error: 'network.frp-proxy-name-invalid', params: { name: name || '?' } };
+      const localPort = Number(p?.localPort);
+      const remotePort = Number(p?.remotePort);
+      if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
+        return { error: 'network.frp-port-invalid', params: { port: String(p?.localPort ?? '') } };
+      }
+      if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+        return { error: 'network.frp-port-invalid', params: { port: String(p?.remotePort ?? '') } };
+      }
+      cfg.upstream.proxies.push({
+        name,
+        type: TYPES.includes(p?.type) ? p.type : 'tcp',
+        localPort,
+        remotePort,
+      });
+    }
+  } else {
+    cfg.upstream.proxies = (Array.isArray(curUp.proxies) ? curUp.proxies : []).map((p) => ({ ...p }));
+  }
+
+  if (cfg.enabled) {
+    if (!cfg.binaryPath) return { error: 'network.frp-binary-required' };
+    if (cfg.mode === 'sakura') {
+      if (!cfg.sakura.token) return { error: 'network.frp-credentials-required', params: { mode: 'SakuraFrp' } };
+      if (!parseTunnelIds(cfg.sakura.tunnels).length) {
+        return { error: 'network.frp-tunnels-required' };
+      }
+    } else {
+      if (!cfg.upstream.serverAddr) return { error: 'network.frp-server-required' };
+      if (!cfg.upstream.proxies.length) return { error: 'network.frp-proxies-required' };
+    }
+  }
+  return { config: cfg };
+}
+
+/** 二进制是否存在/可执行（只做存在性检查，不执行） */
+function binaryOk(bin) {
+  try {
+    return !!bin && fs.statSync(bin).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeJson(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(obj, null, 2));
+}
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    if (!isWin()) return false;
+    try {
+      const out = spawnSync('tasklist', ['/FI', `PID eq ${pid}`], { encoding: 'utf8', windowsHide: true });
+      return new RegExp(`\\b${pid}\\b`).test(out.stdout || '');
+    } catch {
+      return false;
+    }
+  }
+}
+
+function killTree(pid) {
+  try {
+    if (isWin()) {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    } else {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        process.kill(pid, 'SIGKILL');
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * frpc 进程管理器：一个面板只跑一个 frpc（多隧道用 SakuraFrp 的隧道列表 / 自建的多 proxies）。
+ * 目录：data/frp/{frpc.toml, frpc.log, runtime.json}
+ */
+class FrpManager {
+  constructor({ dir, onLog } = {}) {
+    this.dir = dir;
+    this.onLog = onLog || (() => {});
+    this.child = null;
+    this.stopping = false;
+    this.restarts = 0;
+    this.restartTimer = null;
+    // 不在构造时建目录：单测/只读接口创建管理器时不应该在仓库里留空目录。
+    // 真正写入（配置/日志/runtime）前由 start() 调 ensureDir()。
+    this.cleanupStale();
+  }
+
+  ensureDir() {
+    fs.mkdirSync(this.dir, { recursive: true });
+  }
+
+  get configFile() {
+    return path.join(this.dir, 'frpc.toml');
+  }
+
+  get logFile() {
+    return path.join(this.dir, 'frpc.log');
+  }
+
+  get runtimeFile() {
+    return path.join(this.dir, 'runtime.json');
+  }
+
+  cleanupStale() {
+    const rt = readJson(this.runtimeFile);
+    if (rt && rt.pid && !pidAlive(rt.pid)) {
+      try {
+        fs.rmSync(this.runtimeFile, { force: true });
+      } catch {}
+    }
+  }
+
+  /** 最近一次运行的 pid（面板重启后也能找到） */
+  pid() {
+    const rt = readJson(this.runtimeFile);
+    return rt && pidAlive(rt.pid) ? rt.pid : 0;
+  }
+
+  running() {
+    return !!this.pid();
+  }
+
+  logTail(maxLines = 120) {
+    try {
+      const st = fs.statSync(this.logFile);
+      const start = Math.max(0, st.size - 16 * 1024);
+      const fd = fs.openSync(this.logFile, 'r');
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      return buf
+        .toString('utf8')
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-maxLines);
+    } catch {
+      return [];
+    }
+  }
+
+  status() {
+    const rt = readJson(this.runtimeFile) || {};
+    return {
+      running: this.running(),
+      pid: this.pid() || 0,
+      startedAt: rt.startedAt || null,
+      mode: rt.mode || '',
+      log: this.logTail(),
+    };
+  }
+
+  _rotateLog() {
+    try {
+      const st = fs.statSync(this.logFile);
+      if (st.size > MAX_LOG_BYTES) fs.rmSync(this.logFile, { force: true });
+    } catch {}
+  }
+
+  /**
+   * 启动 frpc。返回 { pid }；启动后 800ms 内退出则抛错并附日志尾部。
+   */
+  async start(cfg) {
+    if (this.running()) return { pid: this.pid(), already: true };
+    if (!binaryOk(cfg.binaryPath)) {
+      throw Object.assign(new Error('frpc 可执行文件不存在'), { code: 'network.frp-binary-missing' });
+    }
+    this.ensureDir();
+    let args;
+    if (cfg.mode === 'sakura') {
+      args = buildSakuraArgs(cfg);
+      if (!args) throw Object.assign(new Error('SakuraFrp 配置不完整'), { code: 'network.frp-credentials-required' });
+    } else {
+      fs.writeFileSync(this.configFile, buildUpstreamToml(cfg));
+      args = ['-c', this.configFile];
+    }
+
+    this._rotateLog();
+    const fd = fs.openSync(this.logFile, 'a');
+    const startedAt = Date.now();
+    fs.writeSync(fd, `\n[BlockNexus] ${new Date(startedAt).toISOString()} 启动 frpc（${cfg.mode}）\n`);
+    let child;
+    try {
+      child = spawn(cfg.binaryPath, args, {
+        cwd: this.dir,
+        detached: true, // 面板重启后进程可继续，由 runtime.json 找回
+        stdio: ['ignore', fd, fd],
+        windowsHide: true,
+      });
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+    child.unref();
+    this.child = child;
+    this.stopping = false;
+    writeJson(this.runtimeFile, { pid: child.pid, startedAt, mode: cfg.mode });
+    this.onLog(`frpc 已启动（pid ${child.pid}）`);
+
+    // 早退判定：配置错/端口占用/密钥错都会在 1 秒内退出
+    await new Promise((r) => setTimeout(r, 800));
+    if (!pidAlive(child.pid)) {
+      const tail = this.logTail(20).join('\n');
+      try {
+        fs.rmSync(this.runtimeFile, { force: true });
+      } catch {}
+      this.child = null;
+      throw Object.assign(new Error('frpc 启动后立即退出'), {
+        code: 'network.frp-start-failed',
+        detail: tail,
+      });
+    }
+    this._watch(child, cfg);
+    return { pid: child.pid, args: args.length };
+  }
+
+  /** 异常退出 → 退避重连（5s/15s/60s，最多 3 次）；主动 stop 不重连 */
+  _watch(child, cfg) {
+    // 每个子进程只清理「自己那一份」runtime.json：如果它是被新实例替换掉的旧进程，
+    // 退出时不能把新进程的 pid 记录删掉（否则面板会以为 frp 没在跑，再启一个 → 代理重名冲突）
+    const ownsRuntime = () => {
+      const rt = readJson(this.runtimeFile);
+      return !rt || rt.pid === child.pid;
+    };
+    child.on('exit', (code, signal) => {
+      const current = this.child === child;
+      if (current) this.child = null;
+      if (ownsRuntime()) {
+        try {
+          fs.rmSync(this.runtimeFile, { force: true });
+        } catch {}
+      }
+      // 已经被替换掉的旧进程：只记录日志，不参与重连，也不动新实例的状态
+      if (!current) {
+        this.onLog(`旧 frpc 进程退出（pid ${child.pid}, code=${code}）`);
+        return;
+      }
+      if (this.stopping) return;
+      this.onLog(`frpc 退出（code=${code}, signal=${signal || '-'}）`);
+      if (this.restarts >= 3) {
+        this.onLog('frpc 连续异常退出，已停止自动重连');
+        return;
+      }
+      const delay = [5000, 15000, 60000][Math.min(this.restarts, 2)];
+      this.restarts++;
+      this.restartTimer = setTimeout(() => {
+        this.start(cfg).catch((e) => this.onLog(`frpc 重连失败：${e.message}`));
+      }, delay);
+      if (this.restartTimer.unref) this.restartTimer.unref();
+    });
+  }
+
+  /** 停止：先温和 TERM，2 秒后强杀进程树 */
+  async stop() {
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    const pid = this.pid();
+    if (!pid) {
+      try {
+        fs.rmSync(this.runtimeFile, { force: true });
+      } catch {}
+      return { stopped: false };
+    }
+    try {
+      if (isWin()) {
+        spawnSync('taskkill', ['/PID', String(pid), '/T'], { stdio: 'ignore', windowsHide: true });
+      } else {
+        process.kill(pid, 'SIGTERM');
+      }
+    } catch {}
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && pidAlive(pid)) {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (pidAlive(pid)) killTree(pid);
+    try {
+      fs.rmSync(this.runtimeFile, { force: true });
+    } catch {}
+    this.restarts = 0;
+    this.onLog('frpc 已停止');
+    return { stopped: !pidAlive(pid), pid };
+  }
+
+  async restart(cfg) {
+    await this.stop();
+    return this.start(cfg);
+  }
+
+  /** 同步停止（面板退出钩子用：此时不能再等异步） */
+  stopSync() {
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    const pid = this.pid();
+    if (!pid) return false;
+    killTree(pid);
+    try {
+      fs.rmSync(this.runtimeFile, { force: true });
+    } catch {}
+    return true;
+  }
+}
+
+module.exports = {
+  DEFAULTS,
+  MODES,
+  TYPES,
+  parseTunnelIds,
+  buildSakuraArgs,
+  buildUpstreamToml,
+  tomlStr,
+  clampPort,
+  publicConfig,
+  normalizeConfig,
+  binaryOk,
+  FrpManager,
+};

@@ -6,10 +6,23 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { randomToken } = require('./crypto');
+const { DEFAULTS: DDNS_DEFAULTS } = require('./ddns');
+const { DEFAULTS: FRP_DEFAULTS } = require('./frp');
 
 function scryptHash(plain, salt) {
   return crypto.scryptSync(String(plain), salt, 32).toString('hex');
 }
+
+/** 深合并：patch 里的对象逐层并入 base；数组/标量整体替换（proxies 列表不会被拼起来） */
+function mergeDeep(base, patch) {
+  if (patch === undefined) return base;
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const out = { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}) };
+  for (const [k, v] of Object.entries(patch)) out[k] = mergeDeep(out[k], v);
+  return out;
+}
+
+const clone = (v) => JSON.parse(JSON.stringify(v));
 
 class Config {
   constructor(file) {
@@ -38,6 +51,10 @@ class Config {
         //   dismissed = 「跳过此版本」记录（version → 时间戳），永久对该版本静默。
         //   source = 下载用的镜像前缀（留空=GitHub 直连）；校验值始终来自 GitHub。
         update: { auto: 'notify', source: '', dismissed: {} },
+        // 网络助手（可选功能，默认关闭）：DDNS 同步公网 IP；frp 托管 frpc 进程。
+        // 默认值以 panel/ddns.js、panel/frp.js 的 DEFAULTS 为唯一来源，避免三处各写一份。
+        ddns: clone(DDNS_DEFAULTS),
+        frp: clone(FRP_DEFAULTS),
       },
     };
     this.load();
@@ -62,6 +79,10 @@ class Config {
         notify: { ...defaults.notify, ...((raw.settings || {}).notify || {}) },
         ai: { ...defaults.ai, ...((raw.settings || {}).ai || {}) },
         update: { ...defaults.update, ...((raw.settings || {}).update || {}) },
+        // 嵌套结构（ddns 的 provider 段、frp 的 sakura/upstream 段）必须深合并，
+        // 否则老配置里缺一个子对象就会把默认值整个冲掉
+        ddns: mergeDeep(defaults.ddns, (raw.settings || {}).ddns),
+        frp: mergeDeep(defaults.frp, (raw.settings || {}).frp),
       };
       for (const s of this.data.servers) {
         s.agent = {

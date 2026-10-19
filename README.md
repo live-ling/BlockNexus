@@ -233,6 +233,42 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
 - 对解析出的 IP 做 3 秒超时的 TCP 探测，显示 `✓ IP:端口 · TCP 延迟`（绿色）或失败原因（红色，可换行完整显示）；
 - 域名可带端口（`play.example.com:25565`），协议头会被自动清理；右侧地球按钮可手动重新检测。
 
+## 网络助手（实验）：DDNS 与 frp
+
+> 这两个功能在 `feat/ddns-frp` 分支上实验，默认关闭。它们只服务「家里 / 公司电脑开服」的场景：
+> **DDNS 解决"公网 IP 会变"，frp 解决"根本没有公网 IP"**。CGNAT（很多家宽/公司网）下 DDNS 无效，
+> 只能用 frp 或 IPv6。
+
+**动态 DNS**（设置 → 动态 DNS）：把本机公网 IP 自动同步到 DNS 服务商。
+
+- 服务商：**Cloudflare**（推荐，用 scoped API Token）、**DNSPod**（ID + Token）、**DuckDNS**、**Callback**（自定义 URL，兜底未内置的服务商）；
+- 取址方式三选一：公网接口（内置多个，可自定义 URL）→ 本机网卡 → 自定义命令（输出里含 IP 即可，如 `curl -4 -s ifconfig.me`）；
+- 只有 **IP 变化时才会写记录**（默认 5 分钟检查一次），避免服务商限流；失败按 5/10/30 分钟退避；
+- 面板里的「检测公网 IP」只探测不写记录；「立即同步」强制跑一轮；状态区显示上次时间 / 结果 / 日志；
+- 若提示「NAT/CGNAT，没有公网 IPv4」，说明这条宽带没有公网地址，请改用 frp。
+
+**frp 内网穿透**（设置 → frp 内网穿透）：面板托管**你自备的** `frpc`（不打包、不下载二进制）。
+
+- **SakuraFrp 模式**：先在 [SakuraFrp 面板](https://www.natfrp.com/) 建好隧道（类型选 TCP、本地端口填实例端口），
+  然后把**访问密钥 + 隧道 ID** 填进来，面板以 `frpc -f <密钥>:<隧道ID> -n` 启动并托管；
+  官方节点兼容上游 frpc，但更推荐用它自己分发的 frpc（有 DKC 加密等优化）；
+- **自建 frps 模式**：填 frps 地址/端口/token，以及代理列表（每行 `名称,本地端口,远程端口[,tcp|udp]`），
+  面板生成 `data/frp/frpc.toml` 并用 `frpc -c` 启动；
+- **二进制放哪**：建议放在 `data/frp/bin/frpc.exe`（面板自己的数据目录，跟着便携包一起搬走；
+  别放系统 `%TEMP%`，否则清临时目录/换机器就失效）。Windows Defender 常把 frpc 判成 HackTool，
+  需要把该目录加入排除列表；
+- 进程管理：`windowsHide` 静默启动、日志落 `data/frp/frpc.log`、异常退出按 5s/15s/60s 退避重连（最多 3 次）；
+  面板退出时会停掉 frpc，避免留下没人管的隧道进程；
+- **注意**：SakuraFrp 免费节点共享带宽、按流量计费，官方明确提示"游戏服务器慎用"；所有节点**不支持 IPv6 接入**。
+  小范围联机可用，公开服仍建议公网 VPS 或自建 frps。
+- **IP 封禁要小心**：经 frp（或任何本机端口代理）接入时，服务端看到的玩家地址全是 `127.0.0.1`，
+  `ban-ip` 会把**所有在线玩家**一起封掉。Agent ≥ 0.5.2 会从登录行记录玩家来源 IP，
+  发现是回环地址时直接拒绝 `ban-ip` 并提示改用按玩家名封禁；请在玩家菜单里用「封禁」而不是「封禁其 IP」。
+  若想保留真实 IP，需要 Velocity / BungeeCord 这类支持 PROXY protocol 的代理层，原版服务端做不到。
+
+> 安全：DDNS 的 Token、frp 的访问密钥都存在 `data/config.json`（与 SSH 密码同级别，明文）。
+> 建议用最小权限的 Token；**面板经隧道暴露到公网时必须开启登录保护**。
+
 ## 在线人数与玩家名单
 
 面板通过 Agent 用 **Minecraft 服务器列表协议（SLP，Server List Ping）** 直接查询实例端口（纯 Node 标准库实现，无第三方依赖），拿到实时 `在线人数 / 上限`（上限也可从 `server.properties` 的 `max-players` 兜底）：
@@ -374,6 +410,8 @@ GET  /api/servers/:id/javas          POST /api/servers/:id/java-use|java-uninsta
 POST /api/servers/:id/instances/:name/retry-install|reinstall|panel-install
 POST /api/settings/ai-test           POST /api/settings/ai-models
 POST /api/servers/:id/instances/:name/ai-analyze
+GET|PUT /api/network/ddns            POST /api/network/ddns/check|run   (动态 DNS：配置/检测/立即同步)
+GET|PUT /api/network/frp             POST /api/network/frp/start|stop|restart  (frp 客户端托管)
 GET  /api/version                    (当前版本 + GitHub 最新 Release 与更新日志 + 自更新能力/推荐强度)
 GET  /api/panel-update/status        (更新进度 / 上次结果 / 能否回滚)
 GET  /api/panel-update/preflight?version=X   (升级预览：迁移项、需重装 Agent 的服务器、是否需完整包)

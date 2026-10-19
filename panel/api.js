@@ -11,6 +11,9 @@ const { installAgent, updateAgentScript, uninstallAgent, sftpUploadStream } = re
 const localAgent = require('./localagent');
 // 「快速添加」的默认值推导（内存/端口/实例名/版本）——纯函数，可单测
 const quick = require('./quick');
+// 网络助手：DDNS（纯逻辑 + 注入 fetch）与 frp 客户端托管
+const ddns = require('./ddns');
+const frp = require('./frp');
 const mailTpl = require('./mail');
 const { errorResponse, langOf, messageOf } = require('./error-codes');
 // 自更新的纯逻辑（安装形态/元数据解析/升级计划/自动策略/写入白名单）与版本比较
@@ -20,8 +23,7 @@ const upd = require('./update');
 const migrate = require('./migrate');
 const { semverGreater } = upd;
 
-const COOKIE = 'blocknexussid';
-const SESSION_TTL = 7 * 24 * 3600 * 1000;
+const COOKIE = 'blocknexussid';const SESSION_TTL = 7 * 24 * 3600 * 1000;
 // 勾选「记住我」：Cookie 与会话有效期都放宽到 30 天（滑动续期），关浏览器仍保持登录
 const REMEMBER_TTL = 30 * 24 * 3600 * 1000;
 
@@ -50,6 +52,17 @@ const BUNDLED_AGENT_VERSION = (() => {
     return m ? m[1] : '';
   } catch { return ''; }
 })();
+
+// frp 管理器注册表：面板退出时统一停掉 frpc（只注册一个 exit 钩子）。
+// 不放在 createApi 里逐实例注册：测试会反复 createApi，监听器会累积到警告。
+const frpManagers = new Set();
+process.once('exit', () => {
+  for (const mgr of frpManagers) {
+    try {
+      mgr.stopSync();
+    } catch {}
+  }
+});
 
 // 最新版本检查：GitHub Releases（缓存 10 分钟；?refresh=1 跳过缓存）
 const REPO_URL = 'https://github.com/live-ling/BlockNexus';
@@ -4504,6 +4517,419 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       config.updateServer(server.id, { installing: false });
     }
   });
+
+  // ---------- 网络助手：DDNS / frp（可选，默认关闭） ----------
+  //
+  // 两者都只服务"家里/公司电脑开服"的玩家：DDNS 让域名跟上动态公网 IP，
+  // frp 让没有公网 IP 的用户也能被外网访问。实现原则：
+  //   · DDNS 只做"取 IP → 变了才写 → 记状态"，纯逻辑在 panel/ddns.js（可单测）；
+  //   · frp 只托管**用户自己的** frpc（不打包二进制），逻辑在 panel/frp.js；
+  //   · 凭据读取一律掩码，写入时空值表示保留原值（与 SMTP 同一约定）。
+
+  const DDNS_BACKOFF = [5 * 60e3, 10 * 60e3, 30 * 60e3];
+  const ddnsState = {
+    running: false,
+    busy: false,
+    lastAt: 0,
+    nextAt: 0,
+    result: '',
+    error: '',
+    ipv4: '',
+    ipv6: '',
+    fails: 0,
+    log: [],
+  };
+  let ddnsTimer = null;
+  let ddnsBootTimer = null;
+
+  function ddnsLog(text) {
+    ddnsState.log.push({ at: Date.now(), text: String(text) });
+    if (ddnsState.log.length > 50) ddnsState.log.splice(0, ddnsState.log.length - 50);
+  }
+
+  function ddnsStatus() {
+    return {
+      running: ddnsState.running,
+      busy: ddnsState.busy,
+      lastAt: ddnsState.lastAt || null,
+      nextAt: ddnsState.nextAt || null,
+      result: ddnsState.result,
+      error: ddnsState.error,
+      ipv4: ddnsState.ipv4,
+      ipv6: ddnsState.ipv6,
+      log: ddnsState.log.slice(-20),
+    };
+  }
+
+  function ddnsNextDelay() {
+    const cfg = config.data.settings.ddns || {};
+    const ms = ddns.clampInterval(cfg.intervalSec) * 1000;
+    if (!ddnsState.fails) return ms;
+    return Math.max(ms, DDNS_BACKOFF[Math.min(ddnsState.fails - 1, DDNS_BACKOFF.length - 1)]);
+  }
+
+  async function ddnsSync(reason = 'auto') {
+    if (ddnsState.busy) return { busy: true, ...ddnsStatus() };
+    const cfg = config.data.settings.ddns || {};
+    if (!cfg.enabled) {
+      ddnsState.result = 'disabled';
+      return ddnsStatus();
+    }
+    ddnsState.busy = true;
+    let failed = false;
+    try {
+      const families = [];
+      if (cfg.ipv4) families.push(4);
+      if (cfg.ipv6) families.push(6);
+      if (!families.length) {
+        failed = true;
+        ddnsState.error = '没有选择 IPv4/IPv6';
+      }
+      for (const family of families) {
+        const type = family === 4 ? 'A' : 'AAAA';
+        const source = family === 6 ? cfg.sourceIPv6 || cfg.source : cfg.source;
+        const det = await ddns.detectIp({
+          family,
+          source,
+          sourceUrl: cfg.sourceUrl,
+          command: cfg.command,
+        });
+        if (!det.ip) {
+          failed = true;
+          ddnsState.error = det.error || `未取到 IPv${family}`;
+          ddnsLog(`IPv${family}: ${ddnsState.error}`);
+          continue;
+        }
+        const last = family === 4 ? ddnsState.ipv4 : ddnsState.ipv6;
+        if (!ddns.needsUpdate(last, det.ip)) {
+          ddnsLog(`IPv${family}: ${det.ip} 未变化`);
+          continue;
+        }
+        try {
+          const r = await ddns.applyRecord({
+            provider: cfg.provider,
+            cfg,
+            domain: cfg.domain,
+            type,
+            ip: det.ip,
+            ttl: cfg.ttl,
+          });
+          if (family === 4) ddnsState.ipv4 = det.ip;
+          else ddnsState.ipv6 = det.ip;
+          ddnsLog(`IPv${family}: ${det.ip} → ${cfg.domain}（${r.action === 'created' ? '新建记录' : '更新记录'}）`);
+        } catch (e) {
+          failed = true;
+          ddnsState.error = e.message;
+          ddnsLog(`IPv${family}: 更新失败 — ${e.message}`);
+        }
+      }
+      ddnsState.result = failed ? 'error' : 'ok';
+      if (!failed) ddnsState.error = '';
+    } catch (e) {
+      failed = true;
+      ddnsState.result = 'error';
+      ddnsState.error = e.message;
+      ddnsLog(`同步失败 — ${e.message}`);
+    } finally {
+      ddnsState.busy = false;
+      ddnsState.lastAt = Date.now();
+      ddnsState.fails = failed ? ddnsState.fails + 1 : 0;
+      ddnsState.nextAt = Date.now() + ddnsNextDelay();
+      if (reason === 'manual') ddnsLog('手动同步完成');
+    }
+    return ddnsStatus();
+  }
+
+  function ddnsStop() {
+    if (ddnsTimer) {
+      clearTimeout(ddnsTimer);
+      ddnsTimer = null;
+    }
+    if (ddnsBootTimer) {
+      clearTimeout(ddnsBootTimer);
+      ddnsBootTimer = null;
+    }
+    ddnsState.running = false;
+    ddnsState.nextAt = 0;
+  }
+
+  function ddnsSchedule() {
+    ddnsStop();
+    const cfg = config.data.settings.ddns || {};
+    if (!cfg.enabled) return;
+    ddnsState.running = true;
+    const tick = () => {
+      const cur = config.data.settings.ddns || {};
+      if (!cur.enabled) return ddnsStop();
+      void ddnsSync('auto').finally(() => {
+        if (!(config.data.settings.ddns || {}).enabled) return;
+        const delay = ddnsNextDelay();
+        ddnsState.nextAt = Date.now() + delay;
+        ddnsTimer = setTimeout(tick, delay);
+        if (ddnsTimer.unref) ddnsTimer.unref();
+      });
+    };
+    ddnsState.nextAt = Date.now() + 5000;
+    ddnsBootTimer = setTimeout(tick, 5000); // 启动后 5 秒先跑一次，避免和面板启动抢资源
+    if (ddnsBootTimer.unref) ddnsBootTimer.unref();
+  }
+
+  router.get('/network/ddns', (req, res) => {
+    res.json({ config: ddns.publicConfig(config.data.settings.ddns || {}), status: ddnsStatus() });
+  });
+
+  router.put('/network/ddns', (req, res) => {
+    const r = ddns.normalizeConfig(req.body || {}, config.data.settings.ddns || {});
+    if (r.error) return fail(res, r.error, r.params);
+    config.data.settings.ddns = r.config;
+    config.save();
+    ddnsState.fails = 0;
+    ddnsSchedule();
+    res.json({ ok: true, config: ddns.publicConfig(r.config), status: ddnsStatus() });
+  });
+
+  /** 只检测当前公网 IP（不写记录）；允许带临时参数，免去"先保存再测试" */
+  router.post('/network/ddns/check', async (req, res, next) => {
+    try {
+      const b = req.body || {};
+      const cur = config.data.settings.ddns || {};
+      res.json(
+        await ddns.detectBoth({
+          ipv4: b.ipv4 !== undefined ? !!b.ipv4 : cur.ipv4 !== false,
+          ipv6: b.ipv6 !== undefined ? !!b.ipv6 : !!cur.ipv6,
+          source: b.source || cur.source || 'api',
+          sourceUrl: b.sourceUrl !== undefined ? b.sourceUrl : cur.sourceUrl,
+          sourceIPv6: b.sourceIPv6 !== undefined ? b.sourceIPv6 : cur.sourceIPv6,
+          command: b.command !== undefined ? b.command : cur.command,
+        }),
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/network/ddns/run', async (req, res, next) => {
+    try {
+      res.json(await ddnsSync('manual'));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // ---------- frp 客户端托管 ----------
+  const frpMgr = new frp.FrpManager({
+    dir: path.join(__dirname, '..', 'data', 'frp'),
+    onLog: (t) => console.log('[frp] ' + t),
+  });
+  frpManagers.add(frpMgr);
+  let frpBusy = false;
+
+  function frpStatus() {
+    return { ...frpMgr.status(), config: frp.publicConfig(config.data.settings.frp || {}) };
+  }
+
+  router.get('/network/frp', (req, res) => {
+    res.json(frpStatus());
+  });
+
+  router.put('/network/frp', async (req, res) => {
+    if (frpBusy) return fail(res, 'network.frp-busy');
+    const r = frp.normalizeConfig(req.body || {}, config.data.settings.frp || {});
+    if (r.error) return fail(res, r.error, r.params);
+    frpBusy = true;
+    try {
+      const wasRunning = frpMgr.running();
+      config.data.settings.frp = r.config;
+      config.save();
+      let started = false;
+      let error = '';
+      if (!r.config.enabled) {
+        if (wasRunning) await frpMgr.stop();
+      } else if (wasRunning) {
+        // 运行中改配置：重启让新配置生效；重启失败保留"未运行"状态并把原因带回去
+        try {
+          await frpMgr.restart(r.config);
+          started = true;
+        } catch (e) {
+          error = `${e.message}${e.detail ? '：' + e.detail : ''}`;
+        }
+      }
+      res.json({ ok: true, started, error, config: frp.publicConfig(r.config), status: frpMgr.status() });
+    } finally {
+      frpBusy = false;
+    }
+  });
+
+  /** 启动/停止/重启：共用一把"在途"锁，避免连点造成两个 frpc */
+  async function frpAction(action, res) {
+    if (frpBusy) return fail(res, 'network.frp-busy');
+    const cfg = config.data.settings.frp || {};
+    if (!cfg.enabled) return fail(res, 'network.frp-disabled');
+    frpBusy = true;
+    try {
+      if (action === 'stop') {
+        const r = await frpMgr.stop();
+        return res.json({ ok: true, ...r, status: frpMgr.status() });
+      }
+      if (action === 'restart') await frpMgr.stop();
+      const r = await frpMgr.start(cfg);
+      return res.json({ ok: true, ...r, status: frpMgr.status() });
+    } catch (e) {
+      return fail(res, e.code === 'network.frp-binary-missing' ? e.code : 'network.frp-start-failed', {
+        detail: String(e.detail || e.message).slice(0, 500),
+      });
+    } finally {
+      frpBusy = false;
+    }
+  }
+
+  router.post('/network/frp/start', (req, res) => frpAction('start', res));
+  router.post('/network/frp/stop', (req, res) => frpAction('stop', res));
+  router.post('/network/frp/restart', (req, res) => frpAction('restart', res));
+
+  // ---------- 单实例 frp：在实例页直接绑一个公网端口 ----------
+  //
+  // 背景：设置里的「代理列表」要手填 `名称,本地端口,远程端口`，很容易写错/写重。
+  // 这里把「给某个实例开一个公网端口」做成实例级操作：
+  //   · 本地端口永远取实例当前端口（不会写错）；
+  //   · 代理名自动生成，远程端口冲突在保存前就拦掉；
+  //   · 改完配置后 frpc 正在运行就自动重启应用，不用再回设置页点重启。
+
+  function frpProxyName(instanceName, proxies) {
+    const base = ('mc-' + String(instanceName).replace(/[^A-Za-z0-9_.-]/g, '-')).slice(0, 60);
+    const clash = (proxies || []).some((p) => p && p.name === base);
+    if (!clash) return base;
+    // 同名代理属于别的实例：加随机后缀，绝不覆盖别人的条目
+    return (base.slice(0, 55) + '-' + Math.random().toString(36).slice(2, 6)).slice(0, 63);
+  }
+
+  async function frpInstanceInfo(server, instanceName) {
+    const cfg = config.data.settings.frp || {};
+    const info = {
+      supported: false,
+      reason: '',
+      frpEnabled: !!cfg.enabled,
+      frpcRunning: frpMgr.running(),
+      mode: cfg.mode || 'sakura',
+      serverAddr: String((cfg.upstream && cfg.upstream.serverAddr) || '').trim(),
+      localPort: 0,
+      bound: false,
+      remotePort: 0,
+      publicAddress: '',
+      proxyName: '',
+    };
+    if (!localAgent.isLocalHost(server.host)) {
+      info.reason = 'not-local';
+      return info;
+    }
+    try {
+      const list = await agentRead(server, 'instance.list', {}, 15000);
+      const arr = Array.isArray(list) ? list : (list && list.value) || [];
+      const inst = arr.find((i) => i && i.name === instanceName);
+      info.localPort = inst ? Number(inst.port) || 0 : 0;
+    } catch {
+      info.localPort = 0;
+    }
+    if ((cfg.mode || 'sakura') === 'sakura') {
+      info.reason = 'sakura';
+      return info;
+    }
+    info.supported = true;
+    const proxies = (cfg.upstream && Array.isArray(cfg.upstream.proxies) && cfg.upstream.proxies) || [];
+    const hit = proxies.find((p) => p && info.localPort > 0 && Number(p.localPort) === info.localPort);
+    if (hit) {
+      info.bound = true;
+      info.remotePort = Number(hit.remotePort) || 0;
+      info.proxyName = hit.name || '';
+      info.publicAddress = info.serverAddr ? `${info.serverAddr}:${info.remotePort}` : String(info.remotePort);
+    }
+    return info;
+  }
+
+  router.get('/servers/:id/instances/:name/frp', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await frpInstanceInfo(server, req.params.name));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.put('/servers/:id/instances/:name/frp', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      const cfg = config.data.settings.frp || {};
+      if (!localAgent.isLocalHost(server.host)) return fail(res, 'frp.not-local');
+      if ((cfg.mode || 'sakura') === 'sakura') return fail(res, 'frp.sakura-manual');
+      if (!cfg.enabled) return fail(res, 'frp.disabled');
+      const before = await frpInstanceInfo(server, req.params.name);
+      if (!before.localPort) return fail(res, 'frp.instance-not-found');
+      const body = req.body || {};
+      const enabled = body.enabled !== false;
+      cfg.upstream = cfg.upstream || {};
+      const proxies = Array.isArray(cfg.upstream.proxies) ? cfg.upstream.proxies : [];
+      const idx = proxies.findIndex((p) => p && Number(p.localPort) === before.localPort);
+
+      if (!enabled) {
+        if (idx >= 0) proxies.splice(idx, 1);
+        cfg.upstream.proxies = proxies;
+        config.data.settings.frp = cfg;
+        config.save();
+        let restarted = false;
+        if (frpMgr.running()) {
+          await frpMgr.restart(cfg);
+          restarted = true;
+        }
+        return res.json({ ok: true, restarted, ...(await frpInstanceInfo(server, req.params.name)) });
+      }
+
+      const remotePort = Number(body.remotePort);
+      if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+        return fail(res, 'frp.remote-port-invalid');
+      }
+      if (proxies.some((p, i) => i !== idx && p && Number(p.remotePort) === remotePort)) {
+        return fail(res, 'frp.port-in-use', { port: remotePort });
+      }
+      const name = idx >= 0 ? proxies[idx].name : frpProxyName(req.params.name, proxies);
+      const entry = { name, type: 'tcp', localPort: before.localPort, remotePort };
+      if (idx >= 0) proxies[idx] = entry;
+      else proxies.push(entry);
+      cfg.upstream.proxies = proxies;
+      config.data.settings.frp = cfg;
+      config.save();
+
+      let restarted = false;
+      let error = '';
+      if (frpMgr.running()) {
+        try {
+          await frpMgr.restart(cfg);
+          restarted = true;
+        } catch (e) {
+          error = e.message;
+        }
+      }
+      res.json({ ok: true, restarted, error, ...(await frpInstanceInfo(server, req.params.name)) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+
+  // 启动调度：DDNS 立即按配置起；frp 若已启用则 5 秒后自动拉起（失败只记日志，不阻塞面板）
+  ddnsSchedule();
+  {
+    const cfg = config.data.settings.frp || {};
+    if (cfg.enabled && !frpMgr.running()) {
+      const t = setTimeout(() => {
+        const cur = config.data.settings.frp || {};
+        if (!cur.enabled || frpMgr.running()) return;
+        frpMgr.start(cur).catch((e) => console.error('[frp] 自动启动失败:', e.message));
+      }, 5000);
+      if (t.unref) t.unref();
+    }
+  }
 
   // ---------- agent.js 匿名下载（手动安装用，文件不含密钥） ----------
   router.get('/agent.js', (req, res) => {

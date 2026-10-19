@@ -7,7 +7,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { spawnSync } = require('child_process');
 const { PAPERCLIP_SOURCES } = require('../catalog.js');
-const { fmtSize } = require('../util.js');
+const { fmtSize, ipBanBlockReason } = require('../util.js');
 const { sendEvent } = require('../eventbus.js');
 
 
@@ -139,6 +139,20 @@ module.exports = {
       '-Xmx' + rec.meta.memoryMB + 'M',
       '-XX:+UseG1GC',
     ];
+    // Windows：把 JVM 的临时目录指到实例自己的 .tmp 下。
+    // 背景：MC 加载/写 server-icon.png 时 ImageIO 会在 java.io.tmpdir 建缓存文件，
+    // 某些 Windows 环境里 %TEMP% 的 ACL 对当前进程不可写（AccessDeniedException:
+    // "Can't create cache file!"），图标就加载失败。实例目录本来就可写（日志/存档都在这），
+    // 指过来既绕开权限问题，也不会把缓存丢进系统临时目录。
+    if (process.platform === 'win32') {
+      const tmpDir = path.join(dir, '.tmp');
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+        mem.push('-Djava.io.tmpdir=' + tmpDir);
+      } catch {
+        // 建不出来就退回系统临时目录（至少不比以前更差）
+      }
+    }
     // Forge/NeoForge：java @user_jvm_args.txt @libraries/.../unix_args.txt nogui
     // 内存参数必须放在最前（会被 args.txt 里 @file 之后的内容追加，但 -Xmx 先出现才生效）；
     // user_jvm_args.txt 里默认全是注释，不会冲突。
@@ -292,6 +306,10 @@ module.exports = {
     const rec = this.get(name);
     if (!rec.proc) throw new Error('实例未在运行');
     if (!cmd) throw new Error('空指令');
+    // 防误伤：经 frp / 本机代理接入时服务端看到的玩家地址都是 127.0.0.1，
+    // 这时执行 ban-ip 会把所有玩家一起封掉（见 util.ipBanBlockReason）。
+    const blocked = ipBanBlockReason(cmd, rec.playerIps);
+    if (blocked) throw new Error(blocked);
     rec.proc.stdin.write(cmd + '\n');
     return { ok: true };
   },
