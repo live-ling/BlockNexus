@@ -37,7 +37,9 @@ panel/
   ssh.js        SSH 安装器（远程 Linux：Node 检测安装、SFTP 上传、systemd 注册、Agent 热更新）
   localagent.js 本机 Agent 托管（面板直接 spawn/stop 进程 + 专用目录，免 SSH/systemd）
   quick.js      快速添加的默认值推导（内存/端口/实例名/版本/Java 主版本，纯函数、可单测）
-  api.js        REST API（登录、服务器 CRUD、安装、实例操作、面板自更新）+ SSE 实时推送
+  ddns.js       动态 DNS：IP 判定/域名拆分/服务商请求构造（纯函数）+ 注入 fetch 的网络动作
+  frp.js        frp 客户端托管：配置生成（SakuraFrp 参数 / frpc.toml）、进程状态机、日志
+  api.js        REST API（登录、服务器 CRUD、安装、实例操作、网络助手、面板自更新）+ SSE 实时推送
   update.js     自更新判定：安装形态、Release 元数据解析、升级计划、写入白名单（纯函数）
   migrate.js    data/config.json 的 schemaVersion 迁移链
   mail.js       邮件模板（HTML 卡片样式 + 纯文本兜底）
@@ -91,6 +93,8 @@ node agent/test-quick-create.js   # 快速添加默认值推导（纯函数：�
 node agent/test-quick-setup.js    # 快速添加编排（真面板 API + 假 Agent，覆盖复用/续装/只装 Agent/失败分支）
 node agent/test-windows-quiet.js  # Windows 静默托管（所有 spawn 必须 windowsHide）+ Windows Java 管理能力
 node agent/test-uninstall.js      # 卸载 Agent：真起替身进程验证 stop/uninstall + 后置核验（服务/进程/目录）
+node agent/test-ddns.js           # 动态 DNS：地址判定/域名拆分/四个服务商的请求构造（假 fetch）
+node agent/test-frp.js            # frp 托管：TOML 生成/参数校验/进程早退路径（真子进程）
 ```
 
 覆盖范围：模块导入完整性、产物与源码同步 / npm 内联、启动并发去重、看门狗与备份调度规则、玩家进出与在线时长统计、聊天解析与落盘、文件操作与路径越界、面板安全与加固、错误码与中英文案成对、面板自更新与配置迁移、Anvil 解析与地图渲染、Windows 子进程静默与 Java 多版本管理、卸载的后置核验与幂等。

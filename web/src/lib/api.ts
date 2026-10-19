@@ -1008,3 +1008,121 @@ export function latencyTone(ms: number | null | undefined): 'good' | 'fair' | 'p
   if (ms < 180) return 'fair';
   return 'poor';
 }
+
+// ---------- 网络助手：DDNS / frp（实验功能，后端默认关闭） ----------
+
+export type DdnsProvider = 'cloudflare' | 'dnspod' | 'duckdns' | 'callback';
+export type DdnsSource = 'api' | 'nic' | 'command';
+
+/** GET /api/network/ddns 的 config（凭据只回 has*，不回明文） */
+export interface DdnsConfig {
+  enabled: boolean;
+  provider: DdnsProvider;
+  domain: string;
+  ttl: number;
+  intervalSec: number;
+  ipv4: boolean;
+  ipv6: boolean;
+  source: DdnsSource;
+  sourceUrl: string;
+  sourceIPv6: string;
+  command: string;
+  cloudflare: { zoneId: string; hasToken: boolean };
+  dnspod: { id: string; root: string; line: string; hasToken: boolean };
+  duckdns: { hasToken: boolean };
+  callback: { url: string; body: string };
+}
+
+export interface DdnsLogLine {
+  at: number;
+  text: string;
+}
+
+export interface DdnsStatus {
+  running: boolean;
+  busy: boolean;
+  lastAt: number | null;
+  nextAt: number | null;
+  result: '' | 'ok' | 'error' | 'disabled';
+  error: string;
+  ipv4: string;
+  ipv6: string;
+  log: DdnsLogLine[];
+}
+
+/** 单次取址结果（ip 为空时 error 说明原因，例如 NAT/CGNAT） */
+export interface DdnsIpResult {
+  ip: string;
+  source: string;
+  detail?: string;
+  error?: string;
+}
+
+export interface DdnsCheckResult {
+  ipv4: DdnsIpResult | null;
+  ipv6: DdnsIpResult | null;
+}
+
+export function getDdns(): Promise<{ config: DdnsConfig; status: DdnsStatus }> {
+  return api('/network/ddns');
+}
+
+export function saveDdns(body: Record<string, unknown>): Promise<{
+  ok: boolean;
+  config: DdnsConfig;
+  status: DdnsStatus;
+}> {
+  return api('/network/ddns', { method: 'PUT', body });
+}
+
+export function checkDdnsIp(body: Record<string, unknown> = {}): Promise<DdnsCheckResult> {
+  return api('/network/ddns/check', { method: 'POST', body });
+}
+
+export function runDdns(): Promise<DdnsStatus> {
+  return api('/network/ddns/run', { method: 'POST', body: {} });
+}
+
+export type FrpMode = 'sakura' | 'upstream';
+
+export interface FrpProxy {
+  name: string;
+  type: 'tcp' | 'udp';
+  localPort: number;
+  remotePort: number;
+}
+
+export interface FrpConfig {
+  enabled: boolean;
+  mode: FrpMode;
+  binaryPath: string;
+  sakura: { hasToken: boolean; tunnels: string };
+  upstream: { serverAddr: string; serverPort: number; hasToken: boolean; proxies: FrpProxy[] };
+}
+
+export interface FrpStatus {
+  running: boolean;
+  pid: number;
+  startedAt: number | null;
+  mode: string;
+  log: string[];
+  config: FrpConfig;
+}
+
+export function getFrp(): Promise<FrpStatus> {
+  return api('/network/frp');
+}
+
+export function saveFrp(body: Record<string, unknown>): Promise<{
+  ok: boolean;
+  started: boolean;
+  error: string;
+  config: FrpConfig;
+  status: Omit<FrpStatus, 'config'>;
+}> {
+  return api('/network/frp', { method: 'PUT', body });
+}
+
+export function frpAction(action: 'start' | 'stop' | 'restart'): Promise<{ ok: boolean }> {
+  return api(`/network/frp/${action}`, { method: 'POST', body: {} });
+}

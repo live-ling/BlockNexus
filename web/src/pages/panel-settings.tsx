@@ -6,10 +6,9 @@ import { AlertTriangle, ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, D
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Markdown } from '@/components/markdown';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -38,6 +37,7 @@ import { $ } from '@/lib/i18n';
 import { getLanguage, setLanguage, LANGUAGE_LABELS, type LanguageCode } from '@/lib/i18n';
 import { subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
+import { DdnsCard, FrpCard } from '@/pages/panel-settings-network';
 
 /** 更新策略的兜底值：老后端不返回 update 字段时界面仍要能用（默认仅提醒） */
 const DEFAULT_UPDATE_POLICY: PanelUpdatePolicy = { auto: 'notify', source: '', dismissed: {} };
@@ -109,19 +109,7 @@ function severityText(sev: AppVersionRecommendation['severity']): string {
   }
 }
 
-// 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
-const ACCENTS = {
-  security: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
-  network: 'border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400',
-  mail: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  notify: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  ai: 'border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  update: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
-  language: 'border-pink-500/25 bg-pink-500/10 text-pink-600 dark:text-pink-400',
-  info: 'border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-400',
-} as const;
-
-type Accent = keyof typeof ACCENTS;
+import { SettingsCard, Field, StateChip, ACCENTS, type Accent } from '@/components/settings-card';
 
 export function PanelSettingsPage({
   onBack,
@@ -198,6 +186,9 @@ export function PanelSettingsPage({
       <div className="mt-6 grid grid-cols-12 gap-5">
         <AuthCard data={data} onAuthChanged={onAuthChanged} reload={load} accent="security" className="col-span-12 md:col-span-6" />
         <DomainCard data={data} reload={load} accent="network" className="col-span-12 md:col-span-6" />
+        {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
+        <DdnsCard accent="network" className="col-span-12" />
+        <FrpCard accent="network" className="col-span-12" />
         <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
         <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
         <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
@@ -208,48 +199,6 @@ export function PanelSettingsPage({
         <AboutEntryCard accent="info" className="col-span-12" />
       </div>
     </div>
-  );
-}
-
-/** 统一卡片：图标 + 标题 + 说明 + 右上角状态 + 内容 */
-function SettingsCard({
-  title,
-  description,
-  icon,
-  status,
-  accent,
-  children,
-  className = '',
-}: {
-  title: string;
-  description?: string;
-  icon: React.ReactNode;
-  status?: React.ReactNode;
-  accent?: Accent;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  const iconClass = accent ? ACCENTS[accent] : 'bg-muted/60 text-foreground';
-  return (
-    <Card className={`ring-1 ring-border ${className}`}>
-      <CardContent className="flex flex-col gap-4 p-5">
-        {/* 头部（固定） */}
-        <div className="flex items-center gap-3">
-          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border ${iconClass}`}>
-            {icon}
-          </span>
-          <div className="min-w-0 flex-1">
-            <b className="text-sm">{title}</b>
-            {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
-          </div>
-          {status && <div className="shrink-0 self-start">{status}</div>}
-        </div>
-      {/* 内容区拉伸，按钮沉底 */}
-      <div className="flex flex-1 flex-col gap-4">
-          {children}
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1028,51 +977,6 @@ function ToggleRow({
         onCheckedChange={(v) => onCheckedChange(v === true)}
       />
     </label>
-  );
-}
-
-/** 表单字段：标签行内带提示/错误，控件宽度由调用方按需收敛 */
-function Field({
-  htmlFor,
-  label,
-  hint,
-  error,
-  className = '',
-  children,
-}: {
-  htmlFor?: string;
-  label: string;
-  hint?: string;
-  error?: string;
-  /** 用于跨列（如 sm:col-span-2 让字段占满整行） */
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={`grid content-start gap-1.5 ${className}`}>
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <Label htmlFor={htmlFor}>{label}</Label>
-        {hint && !error && <span className="text-[11px] text-muted-foreground">{hint}</span>}
-        {error && <span className="text-[11px] text-destructive">{error}</span>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/** 卡片右上角的配置状态小标 */
-function StateChip({ ok, okText, badText }: { ok: boolean; okText: string; badText: string }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-        ok
-          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-          : 'border-border bg-muted/50 text-muted-foreground'
-      }`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-muted-foreground/60'}`} />
-      {ok ? okText : badText}
-    </span>
   );
 }
 

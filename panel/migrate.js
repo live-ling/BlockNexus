@@ -23,14 +23,29 @@
 const SCHEMA_FIELD = 'schemaVersion';
 
 /** 当前生产 schema。将来新增一次真正的结构变更时 +1，并在 MIGRATIONS 里补一条迁移。 */
-const CURRENT_SCHEMA = 1;
+const CURRENT_SCHEMA = 2;
 
 /**
  * 生产迁移链：`{ 源schema: (data) => 源+1 的数据 }`。
  * 约定（硬要求）：纯函数、不得有副作用、不得改自己的入参、必须返回对象；
  * 返回非对象会被 migrate() 判为失败——宁可停在旧结构，也不能把写坏的数据落盘。
  */
-const MIGRATIONS = {};
+const MIGRATIONS = {
+  // 2：新增「网络」两块设置（DDNS / frp）。Config.load() 会深合并默认值，
+  // 这里只保证键存在且是对象，避免老配置里出现 `settings.ddns = null` 之类让后续读取炸掉的值。
+  1: (data) => {
+    const out = { ...data };
+    const settings = { ...(data.settings && typeof data.settings === 'object' ? data.settings : {}) };
+    if (!settings.ddns || typeof settings.ddns !== 'object' || Array.isArray(settings.ddns)) {
+      settings.ddns = { enabled: false, provider: 'cloudflare', domain: '', ipv4: true, ipv6: false, source: 'api' };
+    }
+    if (!settings.frp || typeof settings.frp !== 'object' || Array.isArray(settings.frp)) {
+      settings.frp = { enabled: false, mode: 'sakura', binaryPath: '' };
+    }
+    out.settings = settings;
+    return out;
+  },
+};
 
 /** 失败原因（i18n key，与 panel/update.js 的 reasonKey 一样交给前端翻译） */
 const MIGRATE_ERROR = {

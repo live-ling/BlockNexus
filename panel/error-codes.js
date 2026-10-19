@@ -248,6 +248,98 @@ const ERROR_CODES = {
     en: 'Quick add is already running for this server',
   },
 
+  // ---------- 网络助手：DDNS / frp ----------
+  'network.ddns-domain-invalid': {
+    status: 400,
+    zh: '域名格式无效（只填主机名，如 mc.example.com）',
+    en: 'Invalid domain (enter a hostname only, e.g. mc.example.com)',
+  },
+  'network.ddns-domain-required': {
+    status: 400,
+    zh: '请填写要同步的域名',
+    en: 'A domain to update is required',
+  },
+  'network.ddns-ip-family-required': {
+    status: 400,
+    zh: 'IPv4 与 IPv6 至少要选一项',
+    en: 'Select at least one of IPv4 / IPv6',
+  },
+  'network.ddns-command-required': {
+    status: 400,
+    zh: '取址方式为「命令」时必须填写命令',
+    en: 'A command is required when the IP source is "command"',
+  },
+  'network.ddns-url-invalid': {
+    status: 400,
+    zh: 'URL 必须以 http:// 或 https:// 开头',
+    en: 'URL must start with http:// or https://',
+  },
+  'network.ddns-credentials-required': {
+    status: 400,
+    zh: '请先填写 {provider} 的凭据',
+    en: 'Credentials for {provider} are required',
+  },
+  'network.frp-binary-required': {
+    status: 400,
+    zh: '请填写 frpc 可执行文件路径（面板不内置二进制）',
+    en: 'The frpc executable path is required (the panel does not bundle it)',
+  },
+  'network.frp-binary-missing': {
+    status: 400,
+    zh: '找不到 frpc 可执行文件：{path}',
+    en: 'frpc executable not found: {path}',
+  },
+  'network.frp-credentials-required': {
+    status: 400,
+    zh: '缺少 {mode} 的访问密钥',
+    en: 'Access token for {mode} is required',
+  },
+  'network.frp-tunnels-required': {
+    status: 400,
+    zh: '请填写至少一个隧道 ID（逗号分隔）',
+    en: 'At least one tunnel ID is required (comma separated)',
+  },
+  'network.frp-server-required': {
+    status: 400,
+    zh: '请填写 frps 服务器地址',
+    en: 'The frps server address is required',
+  },
+  'network.frp-proxies-required': {
+    status: 400,
+    zh: '请至少添加一条代理（本地端口 → 远程端口）',
+    en: 'Add at least one proxy (local port to remote port)',
+  },
+  'network.frp-proxies-too-many': {
+    status: 400,
+    zh: '代理数量过多（最多 50 条）',
+    en: 'Too many proxies (50 at most)',
+  },
+  'network.frp-proxy-name-invalid': {
+    status: 400,
+    zh: '代理名 {name} 无效（字母数字开头，可用 _ . -，最多 64 位）',
+    en: 'Invalid proxy name {name} (start with a letter/digit; _ . - allowed; up to 64 chars)',
+  },
+  'network.frp-port-invalid': {
+    status: 400,
+    zh: '端口 {port} 无效（需为 1-65535 的整数）',
+    en: 'Invalid port {port} (an integer between 1 and 65535)',
+  },
+  'network.frp-busy': {
+    status: 409,
+    zh: 'frp 正在执行上一步操作，请稍后再试',
+    en: 'frp is still processing the previous operation',
+  },
+  'network.frp-disabled': {
+    status: 400,
+    zh: '请先启用 frp 并保存配置',
+    en: 'Enable frp and save the configuration first',
+  },
+  'network.frp-start-failed': {
+    status: 500,
+    zh: 'frpc 启动失败：{detail}',
+    en: 'frpc failed to start: {detail}',
+  },
+
   // ---------- 实例 ----------
   'instance.not-found': {
     status: 404,
