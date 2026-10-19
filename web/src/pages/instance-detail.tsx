@@ -33,6 +33,7 @@ import {
   Pencil,
   Play,
   Puzzle,
+  RadioTower,
   RotateCw,
   Search,
   Settings2,
@@ -91,14 +92,18 @@ import {
   errText,
   fmtMB,
   fmtUptime,
+  getInstanceFrp,
   getPlayersStats,
   instanceIconUrl,
+  saveInstanceFrp,
   type Instance,
+  type InstanceFrpInfo,
   type PlayersSnapshot,
   type PlayersStats,
   type ServerSummary,
 } from '@/lib/api';
 import { $ } from '@/lib/i18n';
+import { navigate } from '@/lib/router';
 import { subscribeServer } from '@/lib/sse';
 import { fmtDuration, sessionMs, totalWithSession } from '@/lib/player-stats';
 import { copyText } from '@/lib/clipboard';
@@ -147,6 +152,9 @@ export function InstanceDetailPage({
     { state: 'checking' | 'done'; result?: DomainCheckResult } | null
   >(null);
   const [bansOpen, setBansOpen] = useState(false);
+  // frp 端口映射（仅本机实例；远程实例的 frpc 不在面板这台机器上）
+  const [frpOpen, setFrpOpen] = useState(false);
+  const [frpInfo, setFrpInfo] = useState<InstanceFrpInfo | null>(null);
   // 玩家统计（在线时长）与聊天记录页签
   const [statsOpen, setStatsOpen] = useState(false);
   const [playerStats, setPlayerStats] = useState<PlayersStats | null>(null);
@@ -198,6 +206,24 @@ export function InstanceDetailPage({
     loadPlayers();
     loadStats();
   }, [loadServer, loadInstance, loadPlayers, loadStats]);
+
+  // frp 映射状态：只对本机实例查（远程实例由服务器上的 frpc 负责，面板查不到）
+  // 依赖 frpOpen：对话框关闭/保存后重新拉一次，左栏状态才能跟上
+  useEffect(() => {
+    if (!server?.isLocal) {
+      setFrpInfo(null);
+      return;
+    }
+    let alive = true;
+    getInstanceFrp(serverId, instanceName)
+      .then((r) => {
+        if (alive) setFrpInfo(r);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [server?.isLocal, serverId, instanceName, frpOpen]);
 
   // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
   useEffect(() => {
@@ -759,6 +785,34 @@ export function InstanceDetailPage({
                 <DetailRow label={$('instanceDetail.field.memoryLimit')} value={fmtMB(instance.memoryMB)} />
                 <DetailRow label={$('instanceDetail.field.port')} value={String(instance.port)} />
 
+                {/* frp 端口映射：本机实例才显示（frpc 跑在面板这台机器上） */}
+                {server.isLocal && (
+                  <div className="flex items-center gap-1.5">
+                    <RadioTower className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="text-[11px] text-muted-foreground">frp</span>
+                    <span
+                      className="ml-auto min-w-0 truncate font-mono text-[11px]"
+                      title={frpInfo?.publicAddress || ''}
+                    >
+                      {frpInfo
+                        ? frpInfo.bound
+                          ? frpInfo.publicAddress
+                          : frpInfo.supported
+                            ? $('instanceDetail.frp.unbound')
+                            : $('instanceDetail.frp.unsupported')
+                        : '…'}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-5 shrink-0 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+                      onClick={() => setFrpOpen(true)}
+                    >
+                      {$('instanceDetail.frp.set')}
+                    </Button>
+                  </div>
+                )}
+
                 {/* MOTD 放在参数行之后：先配置后描述的阅读顺序 */}
                 <div className="rounded-lg bg-muted p-2.5">
                   <p className="text-[10.5px] leading-[15px] text-muted-foreground">
@@ -1240,6 +1294,15 @@ export function InstanceDetailPage({
           onOpenChange={setBansOpen}
         />
       )}
+      {server?.isLocal && (
+        <InstanceFrpDialog
+          open={frpOpen}
+          onOpenChange={setFrpOpen}
+          serverId={serverId}
+          instanceName={instanceName}
+          onSaved={setFrpInfo}
+        />
+      )}
     </div>
   );
 }
@@ -1576,6 +1639,148 @@ function PlayerActionDialog({
           >
             {busy ? $('instanceDetail.busy') : $('confirm.ok')}
           </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * 单实例 frp 端口映射对话框。
+ *
+ * 为什么要做成实例级：面板设置里的「代理列表」要求手填 `名称,本地端口,远程端口`，
+ * 本地端口写错/远程端口撞车都只能等 frpc 启动失败才发现。这里本地端口直接取实例端口，
+ * 远程端口在保存前做冲突检查，保存后自动重启 frpc 应用。
+ */
+function InstanceFrpDialog({
+  open,
+  onOpenChange,
+  serverId,
+  instanceName,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  serverId: string;
+  instanceName: string;
+  onSaved: (info: InstanceFrpInfo) => void;
+}) {
+  const { success, error } = useToastHelpers();
+  const [info, setInfo] = useState<InstanceFrpInfo | null>(null);
+  const [port, setPort] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setInfo(null);
+    getInstanceFrp(serverId, instanceName)
+      .then((r) => {
+        setInfo(r);
+        setPort(String(r.remotePort || r.localPort || ''));
+      })
+      .catch((e) => error($('instanceDetail.frp.title'), errText(e)));
+  }, [open, serverId, instanceName]);
+
+  const save = async (enabled: boolean) => {
+    if (!info) return;
+    setBusy(true);
+    try {
+      const r = await saveInstanceFrp(serverId, instanceName, {
+        enabled,
+        remotePort: Number(port) || 0,
+      });
+      if (r.error) {
+        error($('instanceDetail.frp.title'), r.error);
+      } else {
+        success(enabled ? $('instanceDetail.frp.saved') : $('instanceDetail.frp.unboundToast'));
+      }
+      setInfo(r);
+      onSaved(r);
+      if (enabled) onOpenChange(false);
+    } catch (e) {
+      error($('instanceDetail.frp.title'), errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{$('instanceDetail.frp.title')}</AlertDialogTitle>
+          <AlertDialogDescription>{$('instanceDetail.frp.desc')}</AlertDialogDescription>
+        </AlertDialogHeader>
+
+        {!info ? (
+          <p className="text-xs text-muted-foreground">{$('common.loading')}</p>
+        ) : !info.supported ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {info.reason === 'sakura' ? $('instanceDetail.frp.sakura') : $('instanceDetail.frp.notLocal')}
+          </p>
+        ) : !info.frpEnabled ? (
+          <div className="grid gap-2">
+            <p className="text-xs leading-relaxed text-muted-foreground">{$('instanceDetail.frp.notEnabled')}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              onClick={() => {
+                onOpenChange(false);
+                navigate('/settings');
+              }}
+            >
+              {$('instanceDetail.frp.goSettings')}
+            </Button>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-xs">
+              <span className="text-muted-foreground">{$('instanceDetail.frp.localPort')}</span>
+              <Input value={String(info.localPort)} disabled readOnly className="font-mono" />
+            </label>
+            <label className="grid gap-1 text-xs">
+              <span className="text-muted-foreground">{$('instanceDetail.frp.remotePort')}</span>
+              <Input
+                inputMode="numeric"
+                value={port}
+                onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, ''))}
+                placeholder={String(info.localPort)}
+                disabled={busy}
+                className="font-mono"
+              />
+              <span className="text-[11px] text-muted-foreground">{$('instanceDetail.frp.remotePortHint')}</span>
+            </label>
+            <div className="rounded-md bg-muted px-3 py-2 text-xs">
+              <span className="text-muted-foreground">{$('instanceDetail.frp.publicAddress')}：</span>
+              <span className="font-mono">
+                {info.serverAddr ? `${info.serverAddr}:${port || info.localPort}` : '—'}
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {info.frpcRunning ? $('instanceDetail.frp.frpcRunning') : $('instanceDetail.frp.frpcStopped')}
+            </p>
+          </div>
+        )}
+
+        <AlertDialogFooter>
+          {info?.supported && info.frpEnabled && info.bound && (
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => save(false)}>
+              {$('instanceDetail.frp.unbind')}
+            </Button>
+          )}
+          <AlertDialogCancel disabled={busy}>{$('common.cancel')}</AlertDialogCancel>
+          {info?.supported && info.frpEnabled && (
+            <AlertDialogAction
+              disabled={busy || !port}
+              onClick={(e) => {
+                e.preventDefault();
+                void save(true);
+              }}
+            >
+              {$('common.save')}
+            </AlertDialogAction>
+          )}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

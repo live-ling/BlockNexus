@@ -1126,3 +1126,38 @@ export function saveFrp(body: Record<string, unknown>): Promise<{
 export function frpAction(action: 'start' | 'stop' | 'restart'): Promise<{ ok: boolean }> {
   return api(`/network/frp/${action}`, { method: 'POST', body: {} });
 }
+
+/**
+ * 单实例的 frp 端口映射状态（GET /servers/:id/instances/:name/frp）。
+ * supported=false 时 reason 说明原因：not-local（远程实例）/ sakura（樱花面板管理）。
+ */
+export interface InstanceFrpInfo {
+  supported: boolean;
+  reason: '' | 'not-local' | 'sakura';
+  frpEnabled: boolean;
+  frpcRunning: boolean;
+  mode: string;
+  serverAddr: string;
+  localPort: number;
+  bound: boolean;
+  remotePort: number;
+  publicAddress: string;
+  proxyName: string;
+}
+
+export function getInstanceFrp(serverId: string, name: string): Promise<InstanceFrpInfo> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(name)}/frp`);
+}
+
+/** 保存/解除单实例映射；enabled=false 时忽略 remotePort */
+export function saveInstanceFrp(
+  serverId: string,
+  name: string,
+  body: { enabled: boolean; remotePort?: number },
+): Promise<{ ok: boolean; restarted: boolean; error?: string } & InstanceFrpInfo> {
+  return api(`/servers/${serverId}/instances/${encodeURIComponent(name)}/frp`, {
+    method: 'PUT',
+    body,
+  });
+}
+

@@ -4787,6 +4787,136 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.post('/network/frp/stop', (req, res) => frpAction('stop', res));
   router.post('/network/frp/restart', (req, res) => frpAction('restart', res));
 
+  // ---------- 单实例 frp：在实例页直接绑一个公网端口 ----------
+  //
+  // 背景：设置里的「代理列表」要手填 `名称,本地端口,远程端口`，很容易写错/写重。
+  // 这里把「给某个实例开一个公网端口」做成实例级操作：
+  //   · 本地端口永远取实例当前端口（不会写错）；
+  //   · 代理名自动生成，远程端口冲突在保存前就拦掉；
+  //   · 改完配置后 frpc 正在运行就自动重启应用，不用再回设置页点重启。
+
+  function frpProxyName(instanceName, proxies) {
+    const base = ('mc-' + String(instanceName).replace(/[^A-Za-z0-9_.-]/g, '-')).slice(0, 60);
+    const clash = (proxies || []).some((p) => p && p.name === base);
+    if (!clash) return base;
+    // 同名代理属于别的实例：加随机后缀，绝不覆盖别人的条目
+    return (base.slice(0, 55) + '-' + Math.random().toString(36).slice(2, 6)).slice(0, 63);
+  }
+
+  async function frpInstanceInfo(server, instanceName) {
+    const cfg = config.data.settings.frp || {};
+    const info = {
+      supported: false,
+      reason: '',
+      frpEnabled: !!cfg.enabled,
+      frpcRunning: frpMgr.running(),
+      mode: cfg.mode || 'sakura',
+      serverAddr: String((cfg.upstream && cfg.upstream.serverAddr) || '').trim(),
+      localPort: 0,
+      bound: false,
+      remotePort: 0,
+      publicAddress: '',
+      proxyName: '',
+    };
+    if (!localAgent.isLocalHost(server.host)) {
+      info.reason = 'not-local';
+      return info;
+    }
+    try {
+      const list = await agentRead(server, 'instance.list', {}, 15000);
+      const arr = Array.isArray(list) ? list : (list && list.value) || [];
+      const inst = arr.find((i) => i && i.name === instanceName);
+      info.localPort = inst ? Number(inst.port) || 0 : 0;
+    } catch {
+      info.localPort = 0;
+    }
+    if ((cfg.mode || 'sakura') === 'sakura') {
+      info.reason = 'sakura';
+      return info;
+    }
+    info.supported = true;
+    const proxies = (cfg.upstream && Array.isArray(cfg.upstream.proxies) && cfg.upstream.proxies) || [];
+    const hit = proxies.find((p) => p && info.localPort > 0 && Number(p.localPort) === info.localPort);
+    if (hit) {
+      info.bound = true;
+      info.remotePort = Number(hit.remotePort) || 0;
+      info.proxyName = hit.name || '';
+      info.publicAddress = info.serverAddr ? `${info.serverAddr}:${info.remotePort}` : String(info.remotePort);
+    }
+    return info;
+  }
+
+  router.get('/servers/:id/instances/:name/frp', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      res.json(await frpInstanceInfo(server, req.params.name));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.put('/servers/:id/instances/:name/frp', async (req, res, next) => {
+    const server = requireServer(req, res);
+    if (!server) return;
+    try {
+      const cfg = config.data.settings.frp || {};
+      if (!localAgent.isLocalHost(server.host)) return fail(res, 'frp.not-local');
+      if ((cfg.mode || 'sakura') === 'sakura') return fail(res, 'frp.sakura-manual');
+      if (!cfg.enabled) return fail(res, 'frp.disabled');
+      const before = await frpInstanceInfo(server, req.params.name);
+      if (!before.localPort) return fail(res, 'frp.instance-not-found');
+      const body = req.body || {};
+      const enabled = body.enabled !== false;
+      cfg.upstream = cfg.upstream || {};
+      const proxies = Array.isArray(cfg.upstream.proxies) ? cfg.upstream.proxies : [];
+      const idx = proxies.findIndex((p) => p && Number(p.localPort) === before.localPort);
+
+      if (!enabled) {
+        if (idx >= 0) proxies.splice(idx, 1);
+        cfg.upstream.proxies = proxies;
+        config.data.settings.frp = cfg;
+        config.save();
+        let restarted = false;
+        if (frpMgr.running()) {
+          await frpMgr.restart(cfg);
+          restarted = true;
+        }
+        return res.json({ ok: true, restarted, ...(await frpInstanceInfo(server, req.params.name)) });
+      }
+
+      const remotePort = Number(body.remotePort);
+      if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+        return fail(res, 'frp.remote-port-invalid');
+      }
+      if (proxies.some((p, i) => i !== idx && p && Number(p.remotePort) === remotePort)) {
+        return fail(res, 'frp.port-in-use', { port: remotePort });
+      }
+      const name = idx >= 0 ? proxies[idx].name : frpProxyName(req.params.name, proxies);
+      const entry = { name, type: 'tcp', localPort: before.localPort, remotePort };
+      if (idx >= 0) proxies[idx] = entry;
+      else proxies.push(entry);
+      cfg.upstream.proxies = proxies;
+      config.data.settings.frp = cfg;
+      config.save();
+
+      let restarted = false;
+      let error = '';
+      if (frpMgr.running()) {
+        try {
+          await frpMgr.restart(cfg);
+          restarted = true;
+        } catch (e) {
+          error = e.message;
+        }
+      }
+      res.json({ ok: true, restarted, error, ...(await frpInstanceInfo(server, req.params.name)) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+
   // 启动调度：DDNS 立即按配置起；frp 若已启用则 5 秒后自动拉起（失败只记日志，不阻塞面板）
   ddnsSchedule();
   {

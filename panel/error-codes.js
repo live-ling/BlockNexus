@@ -340,6 +340,38 @@ const ERROR_CODES = {
     en: 'frpc failed to start: {detail}',
   },
 
+  // ---------- 单实例 frp 端口映射 ----------
+  'frp.not-local': {
+    status: 400,
+    zh: '该实例在远程服务器上：面板托管的 frpc 只能转发面板本机的端口',
+    en: 'This instance lives on a remote server; the panel-hosted frpc can only forward ports on the panel machine',
+  },
+  'frp.sakura-manual': {
+    status: 400,
+    zh: 'SakuraFrp 模式的隧道在樱花面板里管理，不能在这里设置公网端口',
+    en: 'SakuraFrp tunnels are managed in the SakuraFrp dashboard; the public port cannot be set here',
+  },
+  'frp.disabled': {
+    status: 400,
+    zh: 'frp 还没启用：请先在「面板设置 → frp 内网穿透」里启用',
+    en: 'frp is not enabled yet: enable it in Panel settings → frp tunnel first',
+  },
+  'frp.instance-not-found': {
+    status: 404,
+    zh: '实例不存在或还没就绪',
+    en: 'The instance does not exist or is not ready',
+  },
+  'frp.remote-port-invalid': {
+    status: 400,
+    zh: '公网端口无效（需为 1-65535 的整数）',
+    en: 'Invalid public port (an integer between 1 and 65535)',
+  },
+  'frp.port-in-use': {
+    status: 409,
+    zh: '公网端口 {port} 已被其它隧道占用',
+    en: 'Public port {port} is already used by another tunnel',
+  },
+
   // ---------- 实例 ----------
   'instance.not-found': {
     status: 404,
