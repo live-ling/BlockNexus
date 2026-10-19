@@ -139,6 +139,20 @@ module.exports = {
       '-Xmx' + rec.meta.memoryMB + 'M',
       '-XX:+UseG1GC',
     ];
+    // Windows：把 JVM 的临时目录指到实例自己的 .tmp 下。
+    // 背景：MC 加载/写 server-icon.png 时 ImageIO 会在 java.io.tmpdir 建缓存文件，
+    // 某些 Windows 环境里 %TEMP% 的 ACL 对当前进程不可写（AccessDeniedException:
+    // "Can't create cache file!"），图标就加载失败。实例目录本来就可写（日志/存档都在这），
+    // 指过来既绕开权限问题，也不会把缓存丢进系统临时目录。
+    if (process.platform === 'win32') {
+      const tmpDir = path.join(dir, '.tmp');
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+        mem.push('-Djava.io.tmpdir=' + tmpDir);
+      } catch {
+        // 建不出来就退回系统临时目录（至少不比以前更差）
+      }
+    }
     // Forge/NeoForge：java @user_jvm_args.txt @libraries/.../unix_args.txt nogui
     // 内存参数必须放在最前（会被 args.txt 里 @file 之后的内容追加，但 -Xmx 先出现才生效）；
     // user_jvm_args.txt 里默认全是注释，不会冲突。

@@ -117,7 +117,9 @@ const state = __require("src/state.js");
 //        所有子进程调用统一 windowsHide（修 Windows 上反复弹 cmd 窗口）。
 // 0.5.2：ban-ip 防误伤——登录行记录玩家来源 IP；经 frp/本机代理接入（回环地址）时
 //        拒绝 ban-ip，避免一条 IP 封禁把所有玩家一起封掉。
-const AGENT_VERSION = '0.5.2';
+// 0.5.3：Windows 下把 JVM 临时目录指到实例目录的 .tmp，修 %TEMP% 不可写时
+//        server-icon.png 加载失败（ImageIO "Can't create cache file!"）。
+const AGENT_VERSION = '0.5.3';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -640,6 +642,20 @@ module.exports = {
       '-Xmx' + rec.meta.memoryMB + 'M',
       '-XX:+UseG1GC',
     ];
+    // Windows：把 JVM 的临时目录指到实例自己的 .tmp 下。
+    // 背景：MC 加载/写 server-icon.png 时 ImageIO 会在 java.io.tmpdir 建缓存文件，
+    // 某些 Windows 环境里 %TEMP% 的 ACL 对当前进程不可写（AccessDeniedException:
+    // "Can't create cache file!"），图标就加载失败。实例目录本来就可写（日志/存档都在这），
+    // 指过来既绕开权限问题，也不会把缓存丢进系统临时目录。
+    if (process.platform === 'win32') {
+      const tmpDir = path.join(dir, '.tmp');
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+        mem.push('-Djava.io.tmpdir=' + tmpDir);
+      } catch {
+        // 建不出来就退回系统临时目录（至少不比以前更差）
+      }
+    }
     // Forge/NeoForge：java @user_jvm_args.txt @libraries/.../unix_args.txt nogui
     // 内存参数必须放在最前（会被 args.txt 里 @file 之后的内容追加，但 -Xmx 先出现才生效）；
     // user_jvm_args.txt 里默认全是注释，不会冲突。

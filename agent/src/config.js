@@ -15,7 +15,9 @@ const state = require('./state.js');
 //        所有子进程调用统一 windowsHide（修 Windows 上反复弹 cmd 窗口）。
 // 0.5.2：ban-ip 防误伤——登录行记录玩家来源 IP；经 frp/本机代理接入（回环地址）时
 //        拒绝 ban-ip，避免一条 IP 封禁把所有玩家一起封掉。
-const AGENT_VERSION = '0.5.2';
+// 0.5.3：Windows 下把 JVM 临时目录指到实例目录的 .tmp，修 %TEMP% 不可写时
+//        server-icon.png 加载失败（ImageIO "Can't create cache file!"）。
+const AGENT_VERSION = '0.5.3';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
