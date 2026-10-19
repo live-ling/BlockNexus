@@ -590,7 +590,7 @@ export const zh = {
   'instanceDetail.ban.banTitle': '封禁玩家 {0}',
   'instanceDetail.ban.banHint': '封禁后该玩家无法进入服务器；可在控制台用 pardon 解除。',
   'instanceDetail.ban.banIpTitle': '封禁 {0} 的 IP',
-  'instanceDetail.ban.banIpHint': '同一 IP 的所有玩家都会被拦截；可在控制台用 pardon-ip 解除。',
+  'instanceDetail.ban.banIpHint': '同一 IP 的所有玩家都会被拦截；经 frp / 本机代理接入时玩家地址都是 127.0.0.1，此时面板会拒绝按 IP 封禁，请改用「封禁」。',
   'instanceDetail.ban.kicked': '已踢出 {0}',
   'instanceDetail.ban.banned': '已封禁 {0}',
   'instanceDetail.ban.bannedIp': '已封禁 {0} 的 IP',

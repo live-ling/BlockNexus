@@ -583,7 +583,7 @@ export const en = {
   'instanceDetail.ban.banTitle': 'Ban player {0}',
   'instanceDetail.ban.banHint': 'A banned player cannot join the server; lift it with the pardon command in the console.',
   'instanceDetail.ban.banIpTitle': 'Ban the IP of {0}',
-  'instanceDetail.ban.banIpHint': 'Everyone on that IP is blocked; lift it with pardon-ip in the console.',
+  'instanceDetail.ban.banIpHint': 'Everyone on that IP is blocked; behind frp or a local proxy all players share 127.0.0.1, so IP bans are refused — use a name ban instead.',
   'instanceDetail.ban.kicked': 'Kicked {0}',
   'instanceDetail.ban.banned': 'Banned {0}',
   'instanceDetail.ban.bannedIp': 'Banned the IP of {0}',

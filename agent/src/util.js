@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const { spawn } = require('child_process');
 
 /** 从 maven-metadata.xml 里抽出所有 <version> */
@@ -96,4 +97,42 @@ function fmtSize(n) {
   return `${(n / 1024 ** exp).toFixed(exp ? 1 : 0)} ${units[exp]}`;
 }
 
-module.exports = { mavenVersions, runCmd, tarCmdCache, tarCmd, verifyHash, cmpVersion, NAME_RE, fmtSize };
+// ---------- IP 封禁防误伤 ----------
+
+/** 回环地址（IPv4 / IPv6 / IPv4-mapped 写法）。经 frp 或本机代理接入时，玩家在服务端看来都是它。 */
+function isLoopbackIp(ip) {
+  const s = String(ip || '').trim().toLowerCase();
+  if (!s) return false;
+  if (s === '::1' || s === '0:0:0:0:0:0:0:1') return true;
+  if (s.startsWith('::ffff:')) return isLoopbackIp(s.slice(7));
+  return /^127\./.test(s);
+}
+
+/**
+ * ban-ip 误伤防护：目标解析到回环地址时返回拒绝原因（'' = 放行）。
+ *
+ * 为什么必须在 Agent 拦：frp / 本机端口代理下，所有玩家在服务端看来都是 127.0.0.1，
+ * 原生 `ban-ip <玩家>` 会把整个服务器的人一起封掉，而且解封前谁都进不来。
+ * 玩家名 → IP 的映射来自控制台登录行（players.trackPlayers 维护）。
+ */
+function ipBanBlockReason(cmd, playerIps) {
+  const m = /^\s*ban-ip\s+(\S+)\s*$/i.exec(String(cmd || ''));
+  if (!m) return '';
+  const target = m[1].replace(/^["']|["']$/g, '');
+  const ip = net.isIP(target) ? target : playerIps && playerIps.get ? playerIps.get(target) : '';
+  if (!ip || !isLoopbackIp(ip)) return '';
+  return `拒绝执行 ban-ip：${target} 的地址是 ${ip}（经本机或 frp 代理接入），按 IP 封禁会误伤所有玩家；请改用 ban ${target}`;
+}
+
+module.exports = {
+  mavenVersions,
+  runCmd,
+  tarCmdCache,
+  tarCmd,
+  verifyHash,
+  cmpVersion,
+  NAME_RE,
+  fmtSize,
+  isLoopbackIp,
+  ipBanBlockReason,
+};

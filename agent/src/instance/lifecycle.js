@@ -7,7 +7,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { spawnSync } = require('child_process');
 const { PAPERCLIP_SOURCES } = require('../catalog.js');
-const { fmtSize } = require('../util.js');
+const { fmtSize, ipBanBlockReason } = require('../util.js');
 const { sendEvent } = require('../eventbus.js');
 
 
@@ -292,6 +292,10 @@ module.exports = {
     const rec = this.get(name);
     if (!rec.proc) throw new Error('实例未在运行');
     if (!cmd) throw new Error('空指令');
+    // 防误伤：经 frp / 本机代理接入时服务端看到的玩家地址都是 127.0.0.1，
+    // 这时执行 ban-ip 会把所有玩家一起封掉（见 util.ipBanBlockReason）。
+    const blocked = ipBanBlockReason(cmd, rec.playerIps);
+    if (blocked) throw new Error(blocked);
     rec.proc.stdin.write(cmd + '\n');
     return { ok: true };
   },

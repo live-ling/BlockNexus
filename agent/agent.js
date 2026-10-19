@@ -115,7 +115,9 @@ const state = __require("src/state.js");
 //        instance.list 多返回 tracking 字段，instance.edit 支持 tracking 开关）。
 // 0.5.1：Windows 适配——java 管理（检测/切换/安装/卸载）不再只支持 Linux；
 //        所有子进程调用统一 windowsHide（修 Windows 上反复弹 cmd 窗口）。
-const AGENT_VERSION = '0.5.1';
+// 0.5.2：ban-ip 防误伤——登录行记录玩家来源 IP；经 frp/本机代理接入（回环地址）时
+//        拒绝 ban-ip，避免一条 IP 封禁把所有玩家一起封掉。
+const AGENT_VERSION = '0.5.2';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -506,7 +508,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { spawnSync } = require('child_process');
 const { PAPERCLIP_SOURCES } = __require("src/catalog.js");
-const { fmtSize } = __require("src/util.js");
+const { fmtSize, ipBanBlockReason } = __require("src/util.js");
 const { sendEvent } = __require("src/eventbus.js");
 
 
@@ -791,6 +793,10 @@ module.exports = {
     const rec = this.get(name);
     if (!rec.proc) throw new Error('实例未在运行');
     if (!cmd) throw new Error('空指令');
+    // 防误伤：经 frp / 本机代理接入时服务端看到的玩家地址都是 127.0.0.1，
+    // 这时执行 ban-ip 会把所有玩家一起封掉（见 util.ipBanBlockReason）。
+    const blocked = ipBanBlockReason(cmd, rec.playerIps);
+    if (blocked) throw new Error(blocked);
     rec.proc.stdin.write(cmd + '\n');
     return { ok: true };
   },
@@ -1048,6 +1054,7 @@ __modules["src/util.js"] = function (module, exports, __require, __dirname, __fi
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const { spawn } = require('child_process');
 
 /** 从 maven-metadata.xml 里抽出所有 <version> */
@@ -1139,7 +1146,45 @@ function fmtSize(n) {
   return `${(n / 1024 ** exp).toFixed(exp ? 1 : 0)} ${units[exp]}`;
 }
 
-module.exports = { mavenVersions, runCmd, tarCmdCache, tarCmd, verifyHash, cmpVersion, NAME_RE, fmtSize };
+// ---------- IP 封禁防误伤 ----------
+
+/** 回环地址（IPv4 / IPv6 / IPv4-mapped 写法）。经 frp 或本机代理接入时，玩家在服务端看来都是它。 */
+function isLoopbackIp(ip) {
+  const s = String(ip || '').trim().toLowerCase();
+  if (!s) return false;
+  if (s === '::1' || s === '0:0:0:0:0:0:0:1') return true;
+  if (s.startsWith('::ffff:')) return isLoopbackIp(s.slice(7));
+  return /^127\./.test(s);
+}
+
+/**
+ * ban-ip 误伤防护：目标解析到回环地址时返回拒绝原因（'' = 放行）。
+ *
+ * 为什么必须在 Agent 拦：frp / 本机端口代理下，所有玩家在服务端看来都是 127.0.0.1，
+ * 原生 `ban-ip <玩家>` 会把整个服务器的人一起封掉，而且解封前谁都进不来。
+ * 玩家名 → IP 的映射来自控制台登录行（players.trackPlayers 维护）。
+ */
+function ipBanBlockReason(cmd, playerIps) {
+  const m = /^\s*ban-ip\s+(\S+)\s*$/i.exec(String(cmd || ''));
+  if (!m) return '';
+  const target = m[1].replace(/^["']|["']$/g, '');
+  const ip = net.isIP(target) ? target : playerIps && playerIps.get ? playerIps.get(target) : '';
+  if (!ip || !isLoopbackIp(ip)) return '';
+  return `拒绝执行 ban-ip：${target} 的地址是 ${ip}（经本机或 frp 代理接入），按 IP 封禁会误伤所有玩家；请改用 ban ${target}`;
+}
+
+module.exports = {
+  mavenVersions,
+  runCmd,
+  tarCmdCache,
+  tarCmd,
+  verifyHash,
+  cmpVersion,
+  NAME_RE,
+  fmtSize,
+  isLoopbackIp,
+  ipBanBlockReason,
+};
 };
 
 // ---------------------------- src/instance/install.js ----------------------------
@@ -2330,7 +2375,15 @@ module.exports = {
     if (!rec.players) rec.players = new Set();
     const body = this.stripLogPrefix(line);
     const name = '([^\\s]{1,32})';
-    let m = new RegExp(`^${name} joined the game\\s*$`).exec(body);
+    // 登录行带来源地址：Name[/127.0.0.1:63955] logged in with entity id ...
+    // 记下来给 ban-ip 误伤防护用（frp / 本机代理下所有玩家都是 127.0.0.1）
+    let m = new RegExp(`^${name}\\[/([0-9a-fA-F:.]+):\\d+\\] logged in`).exec(body);
+    if (m) {
+      if (!rec.playerIps) rec.playerIps = new Map();
+      rec.playerIps.set(m[1], m[2]);
+      return null;
+    }
+    m = new RegExp(`^${name} joined the game\\s*$`).exec(body);
     if (m) {
       rec.players.add(m[1]);
       return { type: 'join', name: m[1] };
@@ -2338,11 +2391,13 @@ module.exports = {
     m = new RegExp(`^${name} left the game\\s*$`).exec(body);
     if (m) {
       rec.players.delete(m[1]);
+      if (rec.playerIps) rec.playerIps.delete(m[1]);
       return { type: 'leave', name: m[1] };
     }
     m = new RegExp(`^${name} lost connection`).exec(body);
     if (m) {
       rec.players.delete(m[1]);
+      if (rec.playerIps) rec.playerIps.delete(m[1]);
       return { type: 'leave', name: m[1] };
     }
     m = /There are (\d+) of a max of (\d+) players online:?\s*(.*)$/.exec(body);

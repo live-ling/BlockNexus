@@ -240,7 +240,15 @@ module.exports = {
     if (!rec.players) rec.players = new Set();
     const body = this.stripLogPrefix(line);
     const name = '([^\\s]{1,32})';
-    let m = new RegExp(`^${name} joined the game\\s*$`).exec(body);
+    // 登录行带来源地址：Name[/127.0.0.1:63955] logged in with entity id ...
+    // 记下来给 ban-ip 误伤防护用（frp / 本机代理下所有玩家都是 127.0.0.1）
+    let m = new RegExp(`^${name}\\[/([0-9a-fA-F:.]+):\\d+\\] logged in`).exec(body);
+    if (m) {
+      if (!rec.playerIps) rec.playerIps = new Map();
+      rec.playerIps.set(m[1], m[2]);
+      return null;
+    }
+    m = new RegExp(`^${name} joined the game\\s*$`).exec(body);
     if (m) {
       rec.players.add(m[1]);
       return { type: 'join', name: m[1] };
@@ -248,11 +256,13 @@ module.exports = {
     m = new RegExp(`^${name} left the game\\s*$`).exec(body);
     if (m) {
       rec.players.delete(m[1]);
+      if (rec.playerIps) rec.playerIps.delete(m[1]);
       return { type: 'leave', name: m[1] };
     }
     m = new RegExp(`^${name} lost connection`).exec(body);
     if (m) {
       rec.players.delete(m[1]);
+      if (rec.playerIps) rec.playerIps.delete(m[1]);
       return { type: 'leave', name: m[1] };
     }
     m = /There are (\d+) of a max of (\d+) players online:?\s*(.*)$/.exec(body);
