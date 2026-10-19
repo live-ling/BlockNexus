@@ -375,11 +375,25 @@ class FrpManager {
 
   /** 异常退出 → 退避重连（5s/15s/60s，最多 3 次）；主动 stop 不重连 */
   _watch(child, cfg) {
+    // 每个子进程只清理「自己那一份」runtime.json：如果它是被新实例替换掉的旧进程，
+    // 退出时不能把新进程的 pid 记录删掉（否则面板会以为 frp 没在跑，再启一个 → 代理重名冲突）
+    const ownsRuntime = () => {
+      const rt = readJson(this.runtimeFile);
+      return !rt || rt.pid === child.pid;
+    };
     child.on('exit', (code, signal) => {
-      if (this.child === child) this.child = null;
-      try {
-        fs.rmSync(this.runtimeFile, { force: true });
-      } catch {}
+      const current = this.child === child;
+      if (current) this.child = null;
+      if (ownsRuntime()) {
+        try {
+          fs.rmSync(this.runtimeFile, { force: true });
+        } catch {}
+      }
+      // 已经被替换掉的旧进程：只记录日志，不参与重连，也不动新实例的状态
+      if (!current) {
+        this.onLog(`旧 frpc 进程退出（pid ${child.pid}, code=${code}）`);
+        return;
+      }
       if (this.stopping) return;
       this.onLog(`frpc 退出（code=${code}, signal=${signal || '-'}）`);
       if (this.restarts >= 3) {
