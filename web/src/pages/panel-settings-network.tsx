@@ -397,25 +397,35 @@ export function DdnsCard({ accent, className = '' }: { accent?: Accent; classNam
 
 // ---------- frp 客户端托管 ----------
 
-function serializeProxies(list: { name: string; type: string; localPort: number; remotePort: number }[]): string {
+// 每行：名称,本地端口,远程端口[,tcp|udp[,转发地址]]
+// 转发地址（localIP）默认 127.0.0.1；局域网实例填那台机器的内网 IP。
+function serializeProxies(
+  list: { name: string; type: string; localPort: number; remotePort: number; localIP?: string }[],
+): string {
   return (list || [])
-    .map((p) => `${p.name},${p.localPort},${p.remotePort}${p.type === 'udp' ? ',udp' : ''}`)
+    .map((p) => {
+      const ip = String(p.localIP || '').trim();
+      const base = `${p.name},${p.localPort},${p.remotePort}`;
+      if (ip && ip !== '127.0.0.1') return `${base},${p.type === 'udp' ? 'udp' : 'tcp'},${ip}`;
+      return p.type === 'udp' ? `${base},udp` : base;
+    })
     .join('\n');
 }
 
 function parseProxies(
   text: string,
-): { name: string; type: 'tcp' | 'udp'; localPort: number; remotePort: number }[] {
-  const out: { name: string; type: 'tcp' | 'udp'; localPort: number; remotePort: number }[] = [];
+): { name: string; type: 'tcp' | 'udp'; localPort: number; remotePort: number; localIP: string }[] {
+  const out: { name: string; type: 'tcp' | 'udp'; localPort: number; remotePort: number; localIP: string }[] = [];
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    const [name, local, remote, type] = line.split(',').map((s) => s.trim());
+    const [name, local, remote, type, ip] = line.split(',').map((s) => s.trim());
     out.push({
       name: name || '',
       localPort: Number(local) || 0,
       remotePort: Number(remote) || 0,
       type: type === 'udp' ? 'udp' : 'tcp',
+      localIP: ip || '127.0.0.1',
     });
   }
   return out;

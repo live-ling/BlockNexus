@@ -4805,6 +4805,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
   async function frpInstanceInfo(server, instanceName) {
     const cfg = config.data.settings.frp || {};
+    const host = String(server.host || '').trim();
+    const isLocal = localAgent.isLocalHost(host);
+    // 面板托管的 frpc 只能转发「面板能直连的地址」：本机 → 127.0.0.1；局域网/主机名 → 服务器地址；
+    // 公网 IP → 不在这里做（那台机器本来就该直接对外，或由它自己跑 frpc）。判断集中在 frp.frpTarget。
+    const target = frp.frpTarget(host, isLocal);
+    const lan = target.lan;
     const info = {
       supported: false,
       reason: '',
@@ -4813,12 +4819,15 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       mode: cfg.mode || 'sakura',
       serverAddr: String((cfg.upstream && cfg.upstream.serverAddr) || '').trim(),
       localPort: 0,
+      // 目标地址：frpc 实际连接的 host（本机是 127.0.0.1，局域网是服务器内网 IP）
+      targetHost: target.targetHost,
+      lan,
       bound: false,
       remotePort: 0,
       publicAddress: '',
       proxyName: '',
     };
-    if (!localAgent.isLocalHost(server.host)) {
+    if (!lan) {
       info.reason = 'not-local';
       return info;
     }
@@ -4861,10 +4870,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!server) return;
     try {
       const cfg = config.data.settings.frp || {};
-      if (!localAgent.isLocalHost(server.host)) return fail(res, 'frp.not-local');
       if ((cfg.mode || 'sakura') === 'sakura') return fail(res, 'frp.sakura-manual');
       if (!cfg.enabled) return fail(res, 'frp.disabled');
       const before = await frpInstanceInfo(server, req.params.name);
+      // 公网地址的远程服务器不在这里做（面板 frpc 到不了；应由那台机器自己跑 frpc）
+      if (!before.lan) return fail(res, 'frp.not-local');
       if (!before.localPort) return fail(res, 'frp.instance-not-found');
       const body = req.body || {};
       const enabled = body.enabled !== false;
@@ -4893,7 +4903,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         return fail(res, 'frp.port-in-use', { port: remotePort });
       }
       const name = idx >= 0 ? proxies[idx].name : frpProxyName(req.params.name, proxies);
-      const entry = { name, type: 'tcp', localPort: before.localPort, remotePort };
+      // localIP：本机实例是 127.0.0.1；局域网实例用服务器内网地址（frpc 直接连过去）
+      const entry = {
+        name,
+        type: 'tcp',
+        localPort: before.localPort,
+        remotePort,
+        localIP: before.targetHost || '127.0.0.1',
+      };
       if (idx >= 0) proxies[idx] = entry;
       else proxies.push(entry);
       cfg.upstream.proxies = proxies;

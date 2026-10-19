@@ -1770,6 +1770,20 @@ function InstanceFrpDialog({
               <Input value={String(info.localPort)} disabled readOnly className="font-mono" />
             </label>
             <label className="grid gap-1 text-xs">
+              <span className="text-muted-foreground">{$('instanceDetail.frp.target')}</span>
+              <Input
+                value={`${info.targetHost}:${info.localPort}`}
+                disabled
+                readOnly
+                className="font-mono"
+              />
+              {info.targetHost !== '127.0.0.1' && (
+                <span className="text-[11px] leading-relaxed text-muted-foreground">
+                  {$('instanceDetail.frp.lanHint', info.targetHost, String(info.localPort))}
+                </span>
+              )}
+            </label>
+            <label className="grid gap-1 text-xs">
               <span className="text-muted-foreground">{$('instanceDetail.frp.remotePort')}</span>
               <Input
                 inputMode="numeric"

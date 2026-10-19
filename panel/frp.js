@@ -11,11 +11,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const { spawn, spawnSync } = require('child_process');
 
 const MODES = ['sakura', 'upstream'];
 const TYPES = ['tcp', 'udp'];
 const PROXY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+// localIP 允许 IP 或主机名（frpc 会自己解析）；不接受空格/换行等会破坏 TOML 的字符
+const LOCAL_IP_RE = /^[A-Za-z0-9][A-Za-z0-9.:_-]{0,252}$/;
 const MAX_PROXIES = 50;
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 
@@ -74,7 +77,8 @@ function buildUpstreamToml(cfg = {}) {
     lines.push('[[proxies]]');
     lines.push(`name = ${tomlStr(p.name)}`);
     lines.push(`type = ${tomlStr(TYPES.includes(p.type) ? p.type : 'tcp')}`);
-    lines.push('localIP = "127.0.0.1"');
+    // localIP：默认回环（实例与面板同机）；局域网/远程实例写成那台机器的地址
+    lines.push(`localIP = ${tomlStr(p.localIP || '127.0.0.1')}`);
     lines.push(`localPort = ${clampPort(p.localPort, 25565)}`);
     lines.push(`remotePort = ${clampPort(p.remotePort, 25565)}`);
   }
@@ -99,6 +103,7 @@ function publicConfig(cfg = {}) {
         type: TYPES.includes(p.type) ? p.type : 'tcp',
         localPort: clampPort(p.localPort, 25565),
         remotePort: clampPort(p.remotePort, 25565),
+        localIP: p.localIP || '127.0.0.1',
       })),
     },
   };
@@ -146,11 +151,16 @@ function normalizeConfig(input = {}, current = {}) {
       if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
         return { error: 'network.frp-port-invalid', params: { port: String(p?.remotePort ?? '') } };
       }
+      const localIP = String(p?.localIP || '').trim();
+      if (localIP && !LOCAL_IP_RE.test(localIP)) {
+        return { error: 'network.frp-localip-invalid', params: { ip: localIP } };
+      }
       cfg.upstream.proxies.push({
         name,
         type: TYPES.includes(p?.type) ? p.type : 'tcp',
         localPort,
         remotePort,
+        localIP: localIP || '127.0.0.1',
       });
     }
   } else {
@@ -465,10 +475,38 @@ class FrpManager {
   }
 }
 
+/**
+ * 是否私有/回环 IPv4。用途：判断「服务器是不是和面板在同一局域网」——
+ * 是的话面板托管的 frpc 可以把 localIP 指过去，转发到那台机器上的实例端口。
+ * （公网地址不走这条：那台机器本来就该直接对外，或由它自己跑 frpc。）
+ */
+function isPrivateIPv4(host) {
+  const s = String(host || '').trim();
+  if (net.isIP(s) !== 4) return false;
+  const [a, b] = s.split('.').map(Number);
+  if (a === 10 || a === 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+/**
+ * 实例的转发目标：本机 → 127.0.0.1；同一局域网（私有 IP）或主机名 → 服务器地址；
+ * 公网 IP → lan=false（面板托管的 frpc 到不了，应由那台机器自己跑 frpc）。
+ * 返回 { targetHost, lan }。
+ */
+function frpTarget(host, isLocal) {
+  const h = String(host || '').trim();
+  const local = !!isLocal || h === '127.0.0.1' || h.toLowerCase() === 'localhost';
+  const lan = local || isPrivateIPv4(h) || !net.isIP(h);
+  return { targetHost: local ? '127.0.0.1' : h, lan: !!lan };
+}
+
 module.exports = {
   DEFAULTS,
   MODES,
   TYPES,
+  LOCAL_IP_RE,
   parseTunnelIds,
   buildSakuraArgs,
   buildUpstreamToml,
@@ -477,5 +515,7 @@ module.exports = {
   publicConfig,
   normalizeConfig,
   binaryOk,
+  isPrivateIPv4,
+  frpTarget,
   FrpManager,
 };

@@ -55,6 +55,21 @@ async function main() {
   ok('TOML 含两条 proxy', (toml.match(/\[\[proxies\]\]/g) || []).length === 2);
   ok('TOML 含 remotePort', toml.includes('remotePort = 30001') && toml.includes('remotePort = 30002'));
   ok('TOML 含 udp 类型', toml.includes('type = "udp"'));
+  ok('TOML 默认 localIP=127.0.0.1', toml.includes('localIP = "127.0.0.1"'));
+  const lanToml = frp.buildUpstreamToml({
+    upstream: {
+      serverAddr: 'x',
+      serverPort: 7000,
+      proxies: [{ name: 'mc', type: 'tcp', localPort: 25565, remotePort: 30001, localIP: '192.168.1.50' }],
+    },
+  });
+  ok('TOML 按条目写 localIP（局域网实例）', lanToml.includes('localIP = "192.168.1.50"'));
+  ok('isPrivateIPv4 认私网/回环', ['192.168.1.5', '10.0.0.2', '172.16.0.1', '127.0.0.1'].every((ip) => frp.isPrivateIPv4(ip)));
+  ok('isPrivateIPv4 不认公网/主机名', !frp.isPrivateIPv4('8.8.8.8') && !frp.isPrivateIPv4('mc.example.com'));
+  eq('frpTarget: 本机 → 127.0.0.1', frp.frpTarget('127.0.0.1', true), { targetHost: '127.0.0.1', lan: true });
+  eq('frpTarget: 局域网内网 IP', frp.frpTarget('192.168.1.50', false), { targetHost: '192.168.1.50', lan: true });
+  eq('frpTarget: 主机名按可达处理', frp.frpTarget('mc.lan', false), { targetHost: 'mc.lan', lan: true });
+  eq('frpTarget: 公网 IP 不接（应由对方跑 frpc）', frp.frpTarget('8.8.8.8', false), { targetHost: '8.8.8.8', lan: false });
   const noAuth = frp.buildUpstreamToml({ upstream: { serverAddr: 'x', serverPort: 7000 } });
   ok('无 token 时省略 auth 段', !noAuth.includes('auth.'));
 
@@ -105,6 +120,31 @@ async function main() {
         { mode: 'upstream', upstream: { proxies: [{ name: '坏名字', localPort: 1, remotePort: 2 }] } },
         {},
       ).error === 'network.frp-proxy-name-invalid',
+    );
+    const lanCfg = frp.normalizeConfig(
+      {
+        mode: 'upstream',
+        upstream: {
+          proxies: [{ name: 'mc', localPort: 25565, remotePort: 30001, localIP: '192.168.1.50' }],
+        },
+      },
+      {},
+    );
+    eq('代理的 localIP 被保留（局域网实例）', lanCfg.config.upstream.proxies[0].localIP, '192.168.1.50');
+    const noIpCfg = frp.normalizeConfig(
+      { mode: 'upstream', upstream: { proxies: [{ name: 'mc', localPort: 25565, remotePort: 30001 }] } },
+      {},
+    );
+    eq('未填 localIP 时默认 127.0.0.1', noIpCfg.config.upstream.proxies[0].localIP, '127.0.0.1');
+    ok(
+      'localIP 非法 → 报错',
+      frp.normalizeConfig(
+        {
+          mode: 'upstream',
+          upstream: { proxies: [{ name: 'mc', localPort: 1, remotePort: 2, localIP: 'bad ip' }] },
+        },
+        {},
+      ).error === 'network.frp-localip-invalid',
     );
     const merged = frp.normalizeConfig(
       { upstream: { serverAddr: 'a' } },

@@ -324,6 +324,11 @@ const ERROR_CODES = {
     zh: '端口 {port} 无效（需为 1-65535 的整数）',
     en: 'Invalid port {port} (an integer between 1 and 65535)',
   },
+  'network.frp-localip-invalid': {
+    status: 400,
+    zh: '转发目标地址 {ip} 无效（填 IP 或主机名）',
+    en: 'Invalid forward target {ip} (use an IP or hostname)',
+  },
   'network.frp-busy': {
     status: 409,
     zh: 'frp 正在执行上一步操作，请稍后再试',

@@ -1090,6 +1090,8 @@ export interface FrpProxy {
   type: 'tcp' | 'udp';
   localPort: number;
   remotePort: number;
+  /** frpc 转发目标：默认 127.0.0.1；局域网实例为那台机器的内网地址 */
+  localIP?: string;
 }
 
 export interface FrpConfig {
@@ -1139,6 +1141,10 @@ export interface InstanceFrpInfo {
   mode: string;
   serverAddr: string;
   localPort: number;
+  /** frpc 实际连接的目标地址（本机 127.0.0.1；局域网实例为服务器内网 IP） */
+  targetHost: string;
+  /** 服务器是否在面板可直连的范围（本机/局域网/主机名） */
+  lan: boolean;
   bound: boolean;
   remotePort: number;
   publicAddress: string;
