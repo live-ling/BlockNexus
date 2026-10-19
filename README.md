@@ -254,6 +254,9 @@ Agent 参数也可写入同目录 `agent.json`：`{ "panel": "...", "token": "..
   官方节点兼容上游 frpc，但更推荐用它自己分发的 frpc（有 DKC 加密等优化）；
 - **自建 frps 模式**：填 frps 地址/端口/token，以及代理列表（每行 `名称,本地端口,远程端口[,tcp|udp]`），
   面板生成 `data/frp/frpc.toml` 并用 `frpc -c` 启动；
+- **二进制放哪**：建议放在 `data/frp/bin/frpc.exe`（面板自己的数据目录，跟着便携包一起搬走；
+  别放系统 `%TEMP%`，否则清临时目录/换机器就失效）。Windows Defender 常把 frpc 判成 HackTool，
+  需要把该目录加入排除列表；
 - 进程管理：`windowsHide` 静默启动、日志落 `data/frp/frpc.log`、异常退出按 5s/15s/60s 退避重连（最多 3 次）；
   面板退出时会停掉 frpc，避免留下没人管的隧道进程；
 - **注意**：SakuraFrp 免费节点共享带宽、按流量计费，官方明确提示"游戏服务器慎用"；所有节点**不支持 IPv6 接入**。
