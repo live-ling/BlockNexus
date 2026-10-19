@@ -785,34 +785,6 @@ export function InstanceDetailPage({
                 <DetailRow label={$('instanceDetail.field.memoryLimit')} value={fmtMB(instance.memoryMB)} />
                 <DetailRow label={$('instanceDetail.field.port')} value={String(instance.port)} />
 
-                {/* frp 端口映射：本机实例才显示（frpc 跑在面板这台机器上） */}
-                {server.isLocal && (
-                  <div className="flex items-center gap-1.5">
-                    <RadioTower className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    <span className="text-[11px] text-muted-foreground">frp</span>
-                    <span
-                      className="ml-auto min-w-0 truncate font-mono text-[11px]"
-                      title={frpInfo?.publicAddress || ''}
-                    >
-                      {frpInfo
-                        ? frpInfo.bound
-                          ? frpInfo.publicAddress
-                          : frpInfo.supported
-                            ? $('instanceDetail.frp.unbound')
-                            : $('instanceDetail.frp.unsupported')
-                        : '…'}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="h-5 shrink-0 px-1 text-[11px] text-muted-foreground hover:text-foreground"
-                      onClick={() => setFrpOpen(true)}
-                    >
-                      {$('instanceDetail.frp.set')}
-                    </Button>
-                  </div>
-                )}
-
                 {/* MOTD 放在参数行之后：先配置后描述的阅读顺序 */}
                 <div className="rounded-lg bg-muted p-2.5">
                   <p className="text-[10.5px] leading-[15px] text-muted-foreground">
@@ -855,6 +827,64 @@ export function InstanceDetailPage({
                 )}
               </div>
             </section>
+
+            {/* frp 穿透：本机实例才有（frpc 跑在面板这台机器上）。
+                单独一卡而不是塞进参数行——端口映射是「对外」能力，值得一个显眼入口 */}
+            {server.isLocal && (
+              <section className="rounded-xl border bg-card p-3.5">
+                <div className="flex items-center gap-1.5">
+                  <RadioTower className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <b className="text-[13px] font-semibold">{$('instanceDetail.frp.title')}</b>
+                  <span
+                    className={`ml-auto rounded-full px-2 py-[1px] text-[10.5px] ${
+                      frpInfo?.bound
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    {frpInfo?.bound ? $('instanceDetail.frp.bound') : $('instanceDetail.frp.unbound')}
+                  </span>
+                </div>
+
+                {frpInfo?.bound ? (
+                  <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-2">
+                    <span
+                      className="min-w-0 flex-1 truncate font-mono text-[12px]"
+                      title={frpInfo.publicAddress}
+                    >
+                      {frpInfo.publicAddress}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(frpInfo.publicAddress)}
+                      title={$('instanceDetail.copied.tooltip')}
+                      aria-label={$('instanceDetail.copied.tooltip')}
+                      className="grid h-5 w-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
+                    >
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {frpInfo && !frpInfo.supported
+                      ? frpInfo.reason === 'sakura'
+                        ? $('instanceDetail.frp.sakura')
+                        : $('instanceDetail.frp.notLocal')
+                      : $('instanceDetail.frp.unboundHint')}
+                  </p>
+                )}
+
+                <Button
+                  size="sm"
+                  variant={frpInfo?.bound ? 'outline' : 'default'}
+                  className="mt-2 h-7 w-full text-[11px]"
+                  disabled={!!frpInfo && !frpInfo.supported}
+                  onClick={() => setFrpOpen(true)}
+                >
+                  {frpInfo?.bound ? $('instanceDetail.frp.manage') : $('instanceDetail.frp.enable')}
+                </Button>
+              </section>
+            )}
 
             {/* ② 常用工具：2×2，高度统一（整卡 ~194px → ~156px：格子 h-16→h-12，图标/文字同步收一档；
                 卡片内边距保持 p-3.5 与同列的有边框卡一致，否则标题左边线会和上下卡错开 2px） */}
