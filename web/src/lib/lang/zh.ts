@@ -482,6 +482,7 @@ export const zh = {
   'instanceDetail.tab.console': '终端',
   'instanceDetail.tab.overview': '概览',
   'instanceDetail.panel.title': '实例控制面板',
+  'instanceDetail.switch': '切换实例',
   'instanceDetail.panel.open': '控制面板',
   'instanceDetail.panel.tab.basic': '基础信息',
   'instanceDetail.panel.tab.network': '网络与端口',

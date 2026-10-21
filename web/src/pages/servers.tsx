@@ -29,8 +29,6 @@ import { navigate } from '@/lib/router';
 import {
   api,
   errText,
-  fmtDiskGB,
-  fmtMB,
   fmtUptime,
   osLabel,
   timeago,
@@ -264,7 +262,7 @@ function Resource({ label, value, pct }: { label: string; value: string; pct: nu
     <div className="flex items-center gap-2 text-[10.5px]">
       <span className="w-8 shrink-0 tracking-wide text-muted-foreground">{label}</span>
       <Bar value={pct} tone={usageTone(pct)} className="min-w-0 flex-1" />
-      <span className="w-16 shrink-0 text-right font-mono tabular-nums">{value}</span>
+      <span className="w-[86px] shrink-0 text-right font-mono whitespace-nowrap tabular-nums">{value}</span>
     </div>
   );
 }
@@ -338,13 +336,13 @@ function ServerCard({
         <div className="grid gap-1.5">
           <Resource
             label="MEM"
-            value={`${fmtMB(s.stats.memUsedMB)}/${fmtMB(s.stats.memTotalMB)}`}
+            value={`${(s.stats.memUsedMB / 1024).toFixed(1)}/${(s.stats.memTotalMB / 1024).toFixed(1)} GB`}
             pct={memPct}
           />
           {s.stats.disk && (
             <Resource
               label="DISK"
-              value={fmtDiskGB(s.stats.disk.totalGB - s.stats.disk.freeGB, s.stats.disk.totalGB)}
+              value={`${(s.stats.disk.totalGB - s.stats.disk.freeGB).toFixed(0)}/${s.stats.disk.totalGB.toFixed(0)} GB`}
               pct={diskPct}
             />
           )}

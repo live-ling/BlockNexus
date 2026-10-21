@@ -16,11 +16,14 @@ import {
   Archive,
   ArrowLeft,
   Ban,
+  Check,
   ChevronRight,
   Copy,
+  ChevronDown,
   Eraser,
   FolderOpen,
   Globe,
+  HardDrive,
   Info,
   LogOut,
   Map as MapIcon,
@@ -59,7 +62,7 @@ import { PropertiesDialog } from '@/components/properties-dialog';
 import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
 import { InstanceControlPanel } from '@/components/instance-control-panel';
-import { InstanceStatusBadge, LatencyBadge } from '@/components/status-badge';
+import { LatencyBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -77,6 +80,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -107,6 +111,14 @@ import { useToastHelpers } from '@/lib/toast';
 /** 主区视图：终端 / AI 日志分析 / spark 性能 / 地图 / 聊天记录 */
 type MainView = 'overview' | 'ai' | 'spark' | 'map' | 'chat';
 
+/** 状态 → 呼吸灯色（头部与「切换实例」下拉共用；颜色只在这里定义） */
+function statusDotClass(status: string): string {
+  if (status === 'running') return 'bg-emerald-500';
+  if (status === 'starting') return 'bg-amber-400';
+  if (status === 'failed') return 'bg-red-500';
+  return 'bg-muted-foreground/40';
+}
+
 export function InstanceDetailPage({
   serverId,
   instanceName,
@@ -119,6 +131,8 @@ export function InstanceDetailPage({
   const { success, error } = useToastHelpers();
   const [server, setServer] = useState<ServerSummary | null>(null);
   const [instance, setInstance] = useState<Instance | null>(null);
+  // 同服务器的实例清单（头部「切换实例」下拉；与当前实例同一份响应，不额外请求）
+  const [siblings, setSiblings] = useState<Instance[]>([]);
   const [players, setPlayers] = useState<PlayersSnapshot[string] | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -187,6 +201,8 @@ export function InstanceDetailPage({
   const loadInstance = useCallback(() => {
     api<Instance[]>(`/servers/${serverId}/instances`)
       .then((list) => {
+        // 同服务器的其它实例：头部「切换实例」下拉用（不额外发请求，列表本来就在手）
+        setSiblings(list);
         const hit = list.find((i) => i.name === instanceName);
         if (hit) setInstance(hit);
         else setNotFound(true);
@@ -556,8 +572,33 @@ export function InstanceDetailPage({
           ? $('instanceDetail.players.noResponse')
           : $('instanceDetail.players.noList');
   const playersTone = !active ? 'bg-zinc-400' : players?.unreachable ? 'bg-amber-500' : 'bg-emerald-500';
-  // 核心：Paper 1.21.4（构建号/完整版本有就带上）
-  const coreText = `${CORE_LABEL[instance.source ?? 'vanilla'] ?? instance.source ?? '—'} ${instance.build || instance.version}`;
+  // 核心：Paper 1.21.4（构建号/完整版本有就带上）。
+  // 版本串常常自带核心名（"Fabric-1.21.1"），别再拼一次，否则显示成「Fabric Fabric-1.21.1」。
+  const coreLabel = CORE_LABEL[instance.source ?? 'vanilla'] ?? instance.source ?? '—';
+  const coreVersion = instance.build || instance.version;
+  const coreText = coreVersion.toLowerCase().startsWith(coreLabel.toLowerCase())
+    ? coreVersion
+    : `${coreLabel} ${coreVersion}`;
+
+  // 头部呼吸灯 / 状态文案：颜色只在这一处按状态取（其余地方一律中性色）
+  const statusDotTone = running
+    ? 'bg-emerald-500'
+    : starting
+      ? 'bg-amber-400'
+      : isFailed
+        ? 'bg-red-500'
+        : 'bg-muted-foreground/40';
+  const instanceStatusText = isFailed
+    ? $('console.status.failed')
+    : running
+      ? $('console.status.running')
+      : starting
+        ? $('console.status.starting')
+        : instance.status === 'downloading'
+          ? $('console.status.downloading')
+          : instance.status === 'incomplete'
+            ? $('console.status.incomplete')
+            : $('console.status.stopped');
 
   // 依赖运行时的页签在停止时收敛为 概览 / 终端 / 地图 / 聊天
   const tabs: { key: MainView; icon: LucideIcon; label: string }[] = [
@@ -576,85 +617,140 @@ export function InstanceDetailPage({
     // 整页不滚动（h-screen + overflow-hidden）：指挥条与指标条永远留在原位，
     // 只有终端日志、玩家名单这类内部区域自己滚。之前是 min-h-screen（文档可滚），
     // 滚轮会把整页内容推上推下。
-    <div className="flex h-screen flex-col overflow-hidden">
-      {/* ---------- 指挥条：高度与主操作位恒定，不随状态跳动 ---------- */}
-      <header className="h-14 shrink-0 border-b bg-card">
-        <div className="mx-auto flex h-full w-full max-w-[1600px] items-center gap-3 px-5">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8 shrink-0 rounded-lg"
-            aria-label={$('common.back')}
-            onClick={onBack}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <InstanceIcon serverId={server.id} instance={instance.name} />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="truncate text-[19px] font-semibold leading-tight">{instance.name}</h1>
-              <InstanceStatusBadge status={instance.status} />
-              {active && server.latency != null && <LatencyBadge latency={server.latency} />}
-            </div>
-            <p className="mt-1 flex min-w-0 items-center gap-1 text-[11px] leading-none text-muted-foreground">
-              <span className="min-w-0 truncate">{server.name}</span>
-              <span className="shrink-0">·</span>
-              {/* 与服务器列表/详情页一致：主机地址默认脱敏，点击才显示 */}
-              <MaskedText value={server.host} dots={8} className="shrink-0" />
-              <span className="shrink-0">·</span>
-              <span className="min-w-0 truncate">
-                {server.online ? $('instanceDetail.agent.online') : $('server.detail.agentOffline')}
-              </span>
-            </p>
-          </div>
+    <div className="flex h-screen flex-col overflow-hidden bg-muted/30">
+      {/* ---------- 头部：状态呼吸灯 + 名称 + 详情｜单一主操作 + 更多（/proto 第六版） ---------- */}
+      <header className="flex h-11 shrink-0 items-center gap-2.5 border-b border-border/70 bg-background px-4">
+        <button
+          type="button"
+          onClick={onBack}
+          title={$('common.back')}
+          aria-label={$('common.back')}
+          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
 
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            {/* 控制面板：设置/自动化/备份/危险操作的唯一入口 */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-[34px] px-3 text-xs"
-              onClick={() => setPanelOpen(true)}
-            >
-              <Settings2 className="h-3.5 w-3.5" /> {$('instanceDetail.panel.open')}
-            </Button>
+        <InstanceIcon serverId={server.id} instance={instance.name} />
 
-            {/* 重启：非运行态禁用（无 hover 反馈），位置恒定 */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-[34px] px-3 text-xs disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
-              disabled={busy || !active}
-              title={starting ? $('instanceDetail.op.restart.disabled') : undefined}
-              onClick={() => op('restart')}
-            >
-              <RotateCw className="h-3.5 w-3.5" /> {$('instanceDetail.op.restart')}
-            </Button>
+        <div className="flex min-w-0 flex-col">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="relative flex h-2 w-2 shrink-0">
+              {(running || starting) && (
+                <span
+                  className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 motion-reduce:animate-none ${statusDotTone}`}
+                />
+              )}
+              <span className={`relative inline-flex h-2 w-2 rounded-full ${statusDotTone}`} />
+            </span>
+            <h1 className="truncate text-[13px] font-medium tracking-tight">{instance.name}</h1>
+            <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
+              {instanceStatusText}
+            </span>
+            {active && server.latency != null && <LatencyBadge latency={server.latency} />}
 
-            {/* 主操作位：只换内容不换位置（运行中=停止，启动中=停止启动，否则=启动）。
-                min-w 按最长文案（en「Stop starting」）取齐：否则按钮宽度随状态变化，
-                右对齐的按钮组会把左边的「更多」「重启」一起推走 */}
-            {active ? (
-              <Button
-                size="sm"
-                className="h-[34px] min-w-[136px] bg-foreground px-3.5 text-xs text-background hover:bg-foreground/90"
-                disabled={busy}
-                onClick={() => op('stop')}
-              >
-                <Square className="h-3.5 w-3.5 fill-current" />
-                {starting ? $('instanceDetail.op.stopStarting') : $('instanceDetail.op.stop')}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                className="h-[34px] min-w-[136px] bg-foreground px-3.5 text-xs text-background hover:bg-foreground/90"
-                disabled={busy || instance.status !== 'stopped'}
-                onClick={() => op('start')}
-              >
-                <Play className="h-3.5 w-3.5 fill-current" /> {$('instanceDetail.op.start')}
-              </Button>
+            {/* 切换实例：同一服务器的其它实例直接跳转（列表来自 loadInstance 的同一份响应） */}
+            {siblings.length > 1 && (
+              <>
+                <span className="shrink-0 text-muted-foreground/40">/</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {$('instanceDetail.switch')}
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                      {server.name}
+                    </DropdownMenuLabel>
+                    {siblings.map((s) => (
+                      <DropdownMenuItem
+                        key={s.name}
+                        className="gap-2 text-[13px]"
+                        onSelect={() => navigate(`/server/${server.id}/instance/${encodeURIComponent(s.name)}`)}
+                      >
+                        <span className={`size-1.5 shrink-0 rounded-full ${statusDotClass(s.status)}`} />
+                        <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                        {s.name === instance.name && <Check className="h-3.5 w-3.5 text-muted-foreground" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             )}
           </div>
+          <p className="flex min-w-0 items-center gap-1 text-[10.5px] leading-4 text-muted-foreground">
+            <span className="min-w-0 truncate">{server.name}</span>
+            <span className="shrink-0">·</span>
+            {/* 与服务器列表/详情页一致：主机地址默认脱敏，点击才显示 */}
+            <MaskedText value={server.host} dots={8} className="shrink-0" />
+            <span className="shrink-0">·</span>
+            <span className="min-w-0 truncate">
+              {server.online ? $('instanceDetail.agent.online') : $('server.detail.agentOffline')}
+            </span>
+          </p>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* 主操作位：只换内容不换位置（运行中=停止，启动中=停止启动，否则=启动）。
+              min-w 按最长文案（en「Stop starting」）取齐：否则按钮宽度随状态变化，
+              右对齐的按钮组会把左边的「更多」一起推走 */}
+          {active ? (
+            <Button
+              size="sm"
+              className="h-7 min-w-[124px] bg-foreground px-3 text-[13px] font-normal text-background hover:bg-foreground/85"
+              disabled={busy}
+              onClick={() => op('stop')}
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              {starting ? $('instanceDetail.op.stopStarting') : $('instanceDetail.op.stop')}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              className="h-7 min-w-[124px] bg-foreground px-3 text-[13px] font-normal text-background hover:bg-foreground/85"
+              disabled={busy || instance.status !== 'stopped'}
+              onClick={() => op('start')}
+            >
+              <Play className="h-3.5 w-3.5 fill-current" /> {$('instanceDetail.op.start')}
+            </Button>
+          )}
+
+          {/* 重启 / 控制面板 / 备份收进「更多」：头部只留一个主操作 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={$('ui.action.more')}
+                title={$('ui.action.more')}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <MoreVertical />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                className="gap-2 text-[13px]"
+                disabled={busy || !active}
+                onSelect={() => op('restart')}
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+                {$('instanceDetail.op.restart')}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setPanelOpen(true)}>
+                <Settings2 className="h-3.5 w-3.5" />
+                {$('instanceDetail.panel.open')}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setBackupOpen(true)}>
+                <Archive className="h-3.5 w-3.5" />
+                {$('instanceDetail.backups')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -723,10 +819,10 @@ export function InstanceDetailPage({
           </div>
         </div>
 
-        {/* ---------- 状态总览条：3 张等高指标卡（玩家 / 内存 / 运行时长） ---------- */}
+        {/* ---------- 驾驶舱：3 项大数字（玩家 / 运行时长 / 内存），与 /proto 一致 ---------- */}
         <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
           {/* 在线玩家 */}
-          <MetricCard label={$('instanceDetail.field.players')}>
+          <MetricCard icon={<Users />} label={$('instanceDetail.field.players')}>
             {playersOnline != null ? (
               <>
                 <MetricValue value={String(playersOnline)} suffix={`/ ${playersMax}`} />
@@ -745,13 +841,15 @@ export function InstanceDetailPage({
           </MetricCard>
 
           {/* 运行时长（停止时标题改「上次运行」） */}
-          <MetricCard label={active ? $('instanceDetail.metric.uptime') : $('instanceDetail.idle.lastRun')}>
+          <MetricCard
+            icon={<Activity />}
+            label={active ? $('instanceDetail.metric.uptime') : $('instanceDetail.idle.lastRun')}
+          >
             {uptimeText ? (
               <>
                 <MetricValue value={uptimeText} />
                 <MetricHelper>
-                  <Dot />
-                  <span className="text-emerald-600 dark:text-emerald-400">{$('console.status.running')}</span>
+                  <MetricTrend>{$('console.status.running')}</MetricTrend>
                 </MetricHelper>
               </>
             ) : (
@@ -774,7 +872,7 @@ export function InstanceDetailPage({
 
           {/* 内存上限（实例级实时占用后端没有数据源，不编造）：
               大号数值 = 本实例上限；条形图与其右侧数值都是**主机内存已用/总量**（两者同源，不再互相打脸） */}
-          <MetricCard label={$('instanceDetail.field.memoryLimit')}>
+          <MetricCard icon={<HardDrive />} label={$('instanceDetail.field.memoryLimit')}>
             <MetricValue value={active ? fmtMB(instance.memoryMB) : '—'} />
             {!active ? (
               <MetricHelper>
@@ -785,7 +883,7 @@ export function InstanceDetailPage({
             ) : hostTotalMB ? (
               <MetricBar
                 ratio={hostUsedMB != null ? hostUsedMB / hostTotalMB : 0}
-                tone="bg-sky-500"
+                tone="bg-muted-foreground/40"
                 trailing={hostUsedMB != null ? `${fmtMB(hostUsedMB)} / ${fmtMB(hostTotalMB)}` : undefined}
                 title={$(
                   'instanceDetail.memory.host',
@@ -942,16 +1040,14 @@ export function InstanceDetailPage({
           {/* ---------- 中区：概览（默认）/ AI / Spark / 地图 / 聊天；终端固定在底部 ---------- */}
           <section
             ref={centerRef}
-            className="flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-xl bg-card"
+            className="flex min-w-[380px] flex-1 flex-col overflow-hidden"
           >
-            <div className="flex h-[46px] shrink-0 items-center gap-1 border-b bg-card px-2.5">
+            <div className="flex h-10 shrink-0 items-stretch gap-0.5 border-b border-border/60 px-1">
               {tabs.map((t) => (
                 <ViewTab
                   key={t.key}
-                  icon={t.icon}
                   label={t.label}
                   active={mainView === t.key}
-                  dark={false}
                   onClick={() => setMainView(t.key)}
                 />
               ))}
@@ -1471,38 +1567,58 @@ export function InstanceDetailPage({
 /* ---------------- 局部组件（只服务本页，不改动通用组件） ---------------- */
 
 /**
- * 指标卡外壳：高度写死 84px，内部固定三段（标签 16 / 数值 26 / 辅助 14，间距 4、上下内边距 10）。
- * 高度写死是为了运行态/停止态切换时卡片不跳动；84 是视觉上收紧过的一档
- * （最初按设计稿做的 104px 实测太占地方，终端被压得不够高）。
+ * 指标卡外壳（/proto 第六版驾驶舱）：11px 大写标签 + 右上图标胶囊 + 24px 大数字 + 底部辅助行。
+ * 高度写死 104px 是为了运行态/停止态切换时卡片不跳动。
  */
-function MetricCard({ label, children }: { label: string; children: React.ReactNode }) {
+function MetricCard({
+  icon,
+  label,
+  children,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="flex h-[84px] flex-col gap-1 rounded-xl border bg-card px-3.5 py-2.5">
-      <p className="h-4 shrink-0 truncate text-[11.5px] leading-4 text-muted-foreground">{label}</p>
-      {children}
+    <div className="flex h-[104px] flex-col justify-between rounded-xl border border-border/70 bg-card p-4 shadow-xs">
+      <div className="flex items-start justify-between gap-2">
+        <p className="truncate text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
+        {icon && (
+          <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-muted/50 text-muted-foreground ring-1 ring-border/60 [&_svg]:size-4">
+            {icon}
+          </span>
+        )}
+      </div>
+      <div className="flex min-w-0 flex-col gap-1.5">{children}</div>
     </div>
   );
 }
 
-/** 数值行：22px mono + 小字号后缀 */
+/** 数值行：24px mono + 小字号后缀 */
 function MetricValue({ value, suffix }: { value: string; suffix?: string }) {
   return (
-    <div className="flex h-[26px] shrink-0 items-center gap-1 overflow-hidden">
-      <span className="truncate font-mono text-[22px] font-semibold leading-none tabular-nums">{value}</span>
+    <div className="flex h-6 shrink-0 items-baseline gap-1 overflow-hidden">
+      <span className="truncate text-[24px] leading-none font-semibold tracking-tight tabular-nums">{value}</span>
       {suffix && <span className="shrink-0 text-[11px] text-muted-foreground">{suffix}</span>}
     </div>
   );
 }
 
-/** 辅助行：文字/绿点/进度条都装在 h-3.5 里，保证文字型与条型辅助行等高 */
+/** 辅助行：文字/进度条都装在 h-4 里，保证文字型与条型辅助行等高 */
 function MetricHelper({ children, title }: { children: React.ReactNode; title?: string }) {
   return (
-    <div
-      className="flex h-3.5 shrink-0 items-center gap-1.5 text-[10.5px] leading-[14px] text-muted-foreground"
-      title={title}
-    >
+    <div className="flex h-4 shrink-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={title}>
       {children}
     </div>
+  );
+}
+
+/** 趋势/状态胶囊（中性灰，不用状态色——颜色留给头部呼吸灯） */
+function MetricTrend({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-muted px-2 text-[11px] font-medium text-muted-foreground tabular-nums">
+      {children}
+    </span>
   );
 }
 
@@ -1558,36 +1674,18 @@ function ToolTile({ icon: Icon, label, onClick }: { icon: LucideIcon; label: str
   );
 }
 
-/** 主区页签（终端卡内深色 / 其余卡片浅色，两套配色由 dark 决定） */
-function ViewTab({
-  icon: Icon,
-  label,
-  active,
-  dark,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  active: boolean;
-  /** 所在页签栏是不是深色（= 当前在终端页签）：文字/悬停色必须跟着栏底走 */
-  dark: boolean;
-  onClick: () => void;
-}) {
+/** 主区页签：下划线式（与 /proto 一致），不用灰底药丸，避免和驾驶舱抢层级 */
+function ViewTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors ${
-        dark
-          ? active
-            ? 'bg-zinc-800 text-white'
-            : 'text-zinc-400 hover:bg-zinc-800/50'
-          : active
-            ? 'bg-muted text-foreground'
-            : 'text-muted-foreground hover:bg-muted/60'
+      className={`relative -mb-px flex h-10 shrink-0 items-center border-b-2 px-3 text-[13px] transition-colors ${
+        active
+          ? 'border-foreground font-medium text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground'
       }`}
     >
-      <Icon className="h-3.5 w-3.5 shrink-0" />
       {label}
     </button>
   );
