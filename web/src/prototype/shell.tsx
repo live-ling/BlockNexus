@@ -75,7 +75,13 @@ export function ProtoShell({
   return (
     <NavContext.Provider value={{ screen, onScreen }}>
       <div className="flex h-screen flex-col overflow-hidden bg-background text-[13px] text-foreground">
-        <main className="flex min-w-0 flex-1 flex-col">{children}</main>
+        {/*
+          min-h-0 是必须的：main 是 column flex 的子项，自动最小高度会取「内容高度」，
+          不写这行时它会被撑到内容那么高（实测 1181 > 窗口 578），里面的 overflow-auto
+          就拿到内容高度、scrollHeight == clientHeight，滚动与目录跳转全部失效。
+          overflow-hidden 顺手兜住内容，避免任何一页把外壳撑出滚动条。
+        */}
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
         {!hideNav && (
           <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center">
             <div className="pointer-events-auto">

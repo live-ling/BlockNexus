@@ -12,17 +12,33 @@ import { InstanceScreen } from './screens/instance';
 import { PanelSettingsScreen } from './screens/panel-settings';
 import { LoginScreen } from './screens/login';
 
-export function PrototypeApp() {
-  const [screen, setScreen] = useState<ProtoScreen>('instances');
+const SCREENS: ProtoScreen[] = ['instances', 'servers', 'server-settings', 'instance', 'panel-settings', 'login'];
 
-  if (screen === 'login') return <LoginScreen onScreen={setScreen} />;
+/** 支持 /proto?screen=server-settings 直达某一屏：截图核对、发给别人看布局都方便 */
+function initialScreen(): ProtoScreen {
+  if (typeof location === 'undefined') return 'instances';
+  const want = new URLSearchParams(location.search).get('screen');
+  return SCREENS.includes(want as ProtoScreen) ? (want as ProtoScreen) : 'instances';
+}
+
+export function PrototypeApp() {
+  const [screen, setScreen] = useState<ProtoScreen>(initialScreen);
+
+  const go = (next: ProtoScreen) => {
+    setScreen(next);
+    if (typeof history !== 'undefined') {
+      history.replaceState(null, '', `/proto?screen=${next}`);
+    }
+  };
+
+  if (screen === 'login') return <LoginScreen onScreen={go} />;
 
   return (
-    <ProtoShell screen={screen} onScreen={setScreen} hideNav={screen === 'instance'}>
-      {screen === 'instances' && <InstancesScreen onScreen={setScreen} />}
-      {screen === 'servers' && <ServersScreen onScreen={setScreen} />}
-      {screen === 'server-settings' && <ServerSettingsScreen onScreen={setScreen} />}
-      {screen === 'instance' && <InstanceScreen onScreen={setScreen} />}
+    <ProtoShell screen={screen} onScreen={go} hideNav={screen === 'instance'}>
+      {screen === 'instances' && <InstancesScreen onScreen={go} />}
+      {screen === 'servers' && <ServersScreen onScreen={go} />}
+      {screen === 'server-settings' && <ServerSettingsScreen onScreen={go} />}
+      {screen === 'instance' && <InstanceScreen onScreen={go} />}
       {screen === 'panel-settings' && <PanelSettingsScreen />}
     </ProtoShell>
   );
