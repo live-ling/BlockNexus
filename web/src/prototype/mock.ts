@@ -27,6 +27,8 @@ export type ProtoInstance = {
   serverId: string;
   name: string;
   note?: string;
+  /** 实例自定义图标（data URL 或图片地址）；没有时卡片用服务器图标占位 */
+  icon?: string;
   status: ProtoStatus;
   core: string;
   version: string;

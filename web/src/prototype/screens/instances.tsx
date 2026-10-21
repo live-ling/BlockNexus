@@ -4,12 +4,12 @@
 // 搜索/筛选/排序不再是常驻工具栏，改成右边缘竖标签打开的抽屉。
 
 import { useMemo, useState, type ReactNode } from 'react';
-import { Copy, Plus, RotateCw } from 'lucide-react';
+import { Copy, Plus, RotateCw, Server } from 'lucide-react';
 import { cn } from 'cn';
 import { $ } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { MOCK_INSTANCES, MOCK_SERVERS, type ProtoInstance, type ProtoServer, type ProtoStatus } from '../mock';
-import { Bar, Dot, EmptyState, Pill, SearchInput, Select, type Tone } from '../proto-ui';
+import { Bar, EmptyState, Pill, SearchInput, Select, type Tone } from '../proto-ui';
 import { FilterDrawer, FilterField } from '../filter-drawer';
 import { PageHeader, type ProtoScreen } from '../shell';
 
@@ -185,6 +185,15 @@ function Row({ label, children, mono }: { label: ReactNode; children: ReactNode;
   );
 }
 
+/** 卡片右上角：实例图标；实例没有自定义图标时用服务器图标占位 */
+function InstanceIcon({ icon }: { icon?: string }) {
+  return (
+    <span className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted/40 text-muted-foreground">
+      {icon ? <img src={icon} alt="" className="size-full object-cover" /> : <Server className="size-3.5" />}
+    </span>
+  );
+}
+
 function InstanceCard({
   inst,
   server,
@@ -203,7 +212,6 @@ function InstanceCard({
       className="group grid cursor-pointer content-start gap-2.5 rounded-lg border bg-card p-3.5 text-left transition-colors hover:border-muted-foreground/40"
     >
       <div className="flex min-w-0 items-start gap-2">
-        <Dot tone={st.tone} className="mt-[7px]" />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <b className="truncate text-[13px] font-medium">{inst.name}</b>
@@ -211,17 +219,7 @@ function InstanceCard({
           </div>
           <p className="truncate text-[11px] text-muted-foreground">{inst.note ?? server?.name ?? '—'}</p>
         </div>
-        <Button
-          size="xs"
-          variant="ghost"
-          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen();
-          }}
-        >
-          {$('proto.action.open')}
-        </Button>
+        <InstanceIcon icon={inst.icon} />
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px]">
@@ -258,6 +256,17 @@ function InstanceCard({
         >
           <Copy className="size-3" />
         </button>
+        <Button
+          size="xs"
+          variant="ghost"
+          className="ml-auto shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+        >
+          {$('proto.action.open')}
+        </Button>
       </div>
     </div>
   );
