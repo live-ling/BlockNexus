@@ -60,7 +60,6 @@ node panel/server.js        # http://127.0.0.1:3080
 | [docs/development.md](docs/development.md) | 加密通道、目录结构、前端/Agent 构建、测试、版本号 |
 | [docs/blocknexus-current-state.md](docs/blocknexus-current-state.md) | 现状能力清单（实现细节） |
 | [docs/next-optimization.md](docs/next-optimization.md) | 后续优化方向与优先级 |
-| [AGENTS.md](AGENTS.md) | 给 AI/新会话的工作记忆与发版流程 |
 
 ## 许可证
 

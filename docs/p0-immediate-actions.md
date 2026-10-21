@@ -80,7 +80,7 @@
 ### 0.4 版本与提交约定
 
 - `package.json` 的 `version` 由 `0.3.0` → **`0.3.1`**（`panel/api.js:20-22` 与 `panel/server.js:84` 都从这里读，无需另改）。
-- **本批不发布 GitHub Release**。按 `AGENTS.md`：推送代码不发版，用户面板的更新检查只认 Release 标签。P0 只在代码层落地。
+- **本批不发布 GitHub Release**。约定：推送代码不发版，用户面板的更新检查只认 Release 标签。P0 只在代码层落地。
 - 提交粒度：**6 个独立 commit**（P0-1…P0-6 各一），便于单独 revert。每个 commit 信息写清楚「为什么」。
 - 建议分支：`p0-security-hardening`（若你想走 PR 流程），或直接 `main`（当前是单人开发）。
 
@@ -572,7 +572,7 @@ P0-6 回归测试 ────────────────► 把前四�
 - [ ] `cd web && npx oxlint` 通过
 - [ ] `npm run build:web` 成功（前端未改逻辑，仅确认没连带破坏）
 - [ ] §P0-4 的 UI 回归表**逐项手工点过**，无 415
-- [ ] `README.md` 的「安全注意事项」补上 `--trust-proxy` 与 `--secure-cookies` 的说明与验证方法（**面向用户的主文档，AGENTS.md 要求新功能补对应章节**）
+- [ ] `README.md` 的「安全注意事项」补上 `--trust-proxy` 与 `--secure-cookies` 的说明与验证方法（**面向用户的主文档，新功能要补对应章节**）
 - [ ] 未改 `AGENT_VERSION`、未改 `panel/crypto.js` 的 HKDF 标签、未新增依赖
 - [ ] 确认 `git status` 里没有 `data/`、`.opanel-reference/`、`docs/` 之外的意外改动
 
