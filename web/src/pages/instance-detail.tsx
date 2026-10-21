@@ -109,7 +109,7 @@ import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
 
 /** 主区视图：终端 / AI 日志分析 / spark 性能 / 地图 / 聊天记录 */
-type MainView = 'overview' | 'console' | 'ai' | 'spark' | 'map' | 'chat';
+type MainView = 'overview' | 'ai' | 'spark' | 'map' | 'chat';
 
 export function InstanceDetailPage({
   serverId,
@@ -154,9 +154,13 @@ export function InstanceDetailPage({
   // frp 端口映射（仅本机实例；远程实例的 frpc 不在面板这台机器上）
   const [frpOpen, setFrpOpen] = useState(false);
   const [frpInfo, setFrpInfo] = useState<InstanceFrpInfo | null>(null);
-  // 概览页签：从控制台尾部抓最近事件（错误/加入/离开/备份），以及快捷命令
-  const [overviewLines, setOverviewLines] = useState<string[]>([]);
+  // 概览/底部终端共用：控制台尾部（最近事件、最后一行、错误计数）
+  const [tailLines, setTailLines] = useState<string[]>([]);
   const [overviewCmd, setOverviewCmd] = useState('');
+  // 底部终端面板：收起时只占一行，可展开为半屏/全屏
+  const [dockOpen, setDockOpen] = useState(false);
+  const [dockTall, setDockTall] = useState(false);
+  const lastErrCountRef = useRef(0);
   // 玩家统计（在线时长）与聊天记录页签
   const [statsOpen, setStatsOpen] = useState(false);
   const [playerStats, setPlayerStats] = useState<PlayersStats | null>(null);
@@ -227,16 +231,15 @@ export function InstanceDetailPage({
     };
   }, [server?.isLocal, serverId, instanceName, frpOpen]);
 
-  // 概览页签：每 5 秒拉一次控制台尾部，提取「最近事件」（错误/上下线/备份完成）
+  // 控制台尾部：每 5 秒拉一次（概览的「最近事件」与底部终端共用；收起时也靠它做错误提醒）
   useEffect(() => {
-    if (mainView !== 'overview') return;
     let alive = true;
     const load = () => {
       api<{ lines?: string[] }>(
         `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/console?tail=200`,
       )
         .then((r) => {
-          if (alive) setOverviewLines(Array.isArray(r.lines) ? r.lines : []);
+          if (alive) setTailLines(Array.isArray(r.lines) ? r.lines : []);
         })
         .catch(() => {});
     };
@@ -246,7 +249,26 @@ export function InstanceDetailPage({
       alive = false;
       clearInterval(timer);
     };
-  }, [mainView, serverId, instanceName]);
+  }, [serverId, instanceName]);
+
+  // 出现新的 ERROR 时自动展开底部终端（只对「新增」错误生效，避免一直弹）
+  useEffect(() => {
+    const errors = tailLines.filter((l) => /ERROR|Exception|Caused by/.test(l)).length;
+    if (errors > lastErrCountRef.current && !dockOpen) setDockOpen(true);
+    lastErrCountRef.current = errors;
+  }, [tailLines, dockOpen]);
+
+  // Ctrl+` 展开/收起终端（与编辑器习惯一致）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && (e.key === '`' || e.code === 'Backquote')) {
+        e.preventDefault();
+        setDockOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
   useEffect(() => {
@@ -274,8 +296,8 @@ export function InstanceDetailPage({
   // 依赖运行时的页签（AI 分析 / Spark）在停止后消失：正停留在其上时退回终端，
   // spark 被卸载（Mod 管理删除）时同理。
   useEffect(() => {
-    if (!sparkInstalled && mainView === 'spark') setMainView('console');
-    if (!active && (mainView === 'ai' || mainView === 'spark')) setMainView('console');
+    if (!sparkInstalled && mainView === 'spark') setMainView('overview');
+    if (!active && (mainView === 'ai' || mainView === 'spark')) setMainView('overview');
   }, [sparkInstalled, active, mainView]);
   useEffect(() => {
     if (!running) return;
@@ -454,10 +476,13 @@ export function InstanceDetailPage({
   const connectAddress = instance.address || `${server.host}:${instance.port}`;
 
   // 概览的「最近事件」：从控制台尾部挑出值得看的行（错误、上下线、备份、启动完成）
-  const overviewEvents = overviewLines
+  const overviewEvents = tailLines
     .filter((l) => /ERROR|Exception|Caused by|joined the game|left the game|Done \(|备份|Backup/i.test(l))
     .slice(-8)
     .reverse();
+  // 底部终端收起时的摘要：最后一行 + 错误数
+  const dockErrCount = tailLines.filter((l) => /ERROR|Exception|Caused by/.test(l)).length;
+  const dockLastLine = tailLines[tailLines.length - 1] || '';
 
   const sendOverviewCmd = async () => {
     const cmd = overviewCmd.trim();
@@ -481,7 +506,6 @@ export function InstanceDetailPage({
   // 依赖运行时的页签在停止时收敛为 概览 / 终端 / 地图 / 聊天
   const tabs: { key: MainView; icon: LucideIcon; label: string }[] = [
     { key: 'overview', icon: Info, label: $('instanceDetail.tab.overview') },
-    { key: 'console', icon: Terminal, label: $('instanceDetail.tab.console') },
     ...(active
       ? [{ key: 'ai' as MainView, icon: Sparkles, label: $('instanceDetail.tab.ai') }]
       : []),
@@ -904,60 +928,19 @@ export function InstanceDetailPage({
 
           </aside>
 
-          {/* ---------- 中区：概览（默认）/ 终端（主角） ---------- */}
-          <section
-            className={`flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-xl ${
-              // 深色只属于终端：概览/AI/地图/聊天是浅色卡片
-              mainView === 'console'
-                ? 'self-stretch bg-[#0B0B0F]'
-                : mainView === 'overview'
-                  ? 'self-stretch bg-card'
-                  : 'self-start bg-card'
-            }`}
-          >
-            {/* 页签栏：搜索框与清空只作用于终端。
-                导航底色跟着当前页签走——深色是终端专属的，切到 AI/Spark/地图/聊天后
-                整条栏必须转浅色，否则白卡顶端会留一条黑带（那一版看起来像没切干净）。 */}
-            <div
-              className={`flex h-[46px] shrink-0 items-center gap-1 px-2.5 ${
-                mainView === 'console' ? 'bg-[#131318]' : 'border-b bg-card'
-              }`}
-            >
+          {/* ---------- 中区：概览（默认）/ AI / Spark / 地图 / 聊天；终端固定在底部 ---------- */}
+          <section className="flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-xl bg-card">
+            <div className="flex h-[46px] shrink-0 items-center gap-1 border-b bg-card px-2.5">
               {tabs.map((t) => (
                 <ViewTab
                   key={t.key}
                   icon={t.icon}
                   label={t.label}
                   active={mainView === t.key}
-                  dark={mainView === 'console'}
+                  dark={false}
                   onClick={() => setMainView(t.key)}
                 />
               ))}
-              {mainView === 'console' && (
-                <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
-                    <input
-                      value={logQuery}
-                      onChange={(e) => setLogQuery(e.target.value)}
-                      placeholder={$('console.search')}
-                      aria-label={$('console.search')}
-                      spellCheck={false}
-                      className="h-8 w-[150px] rounded-lg border border-zinc-800 bg-[#1C1C21] pl-7 pr-2 font-mono text-[11.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
-                    />
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-lg text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
-                    title={$('console.clear')}
-                    aria-label={$('console.clear')}
-                    onClick={() => consoleRef.current?.clear()}
-                  >
-                    <Eraser className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              )}
             </div>
             {/* 概览：日常状态与快捷操作；终端仍是一等公民，点「打开终端」即切 */}
             <div
@@ -1019,7 +1002,7 @@ export function InstanceDetailPage({
                     <Button size="sm" variant="outline" onClick={() => setBackupScheduleOpen(true)}>
                       {$('instanceDetail.overview.schedule')}
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => setMainView('console')}>
+                    <Button size="sm" variant="outline" onClick={() => setDockOpen(true)}>
                       {$('instanceDetail.overview.openConsole')}
                     </Button>
                   </div>
@@ -1051,19 +1034,7 @@ export function InstanceDetailPage({
             </div>
             {/* 各面板都常驻挂载，只切换可见性：
                 条件渲染会在切走时卸载组件，AI 的对话记录与进行中的流会一起丢失，
-                终端也会丢掉已拉取的日志与滚动位置，聊天则要重新拉历史。用 hidden 保住状态。 */}
-            <div className={mainView === 'console' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-              <ConsolePanel
-                ref={consoleRef}
-                server={server}
-                instance={instance.name}
-                instanceStatus={instance.status}
-                embedded
-                query={logQuery}
-                // 高度由整页 h-screen 链定死，这里只负责填满；min-h 是极矮窗口时的下限
-                heightClass="min-h-[200px] flex-1"
-              />
-            </div>
+                聊天则要重新拉历史。用 hidden 保住状态。 */}
             <div className={mainView === 'ai' ? '' : 'hidden'}>
               <AiLogPanel
                 serverId={server.id}
@@ -1101,6 +1072,75 @@ export function InstanceDetailPage({
                 players={playerStats?.players}
                 heightClass="h-[45vh] lg:h-[60vh]"
               />
+            </div>
+
+            {/* ---------- 底部终端：收起一行 / 展开半屏或全屏；出现新 ERROR 自动展开 ---------- */}
+            <div className="mt-auto flex shrink-0 flex-col border-t border-zinc-800 bg-[#0B0B0F]">
+              <div className="flex h-9 items-center gap-2 px-3 text-[11px] text-zinc-400">
+                <Terminal className="h-3.5 w-3.5 shrink-0" />
+                <span className="shrink-0">{$('instanceDetail.dock.title')}</span>
+                {dockErrCount > 0 && (
+                  <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-[1px] text-[10px] font-medium text-red-400">
+                    {dockErrCount} ERROR
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500" title={dockLastLine}>
+                  {dockLastLine || '—'}
+                </span>
+                {dockOpen && (
+                  <div className="relative hidden shrink-0 sm:block">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-zinc-500" />
+                    <input
+                      value={logQuery}
+                      onChange={(e) => setLogQuery(e.target.value)}
+                      placeholder={$('console.search')}
+                      aria-label={$('console.search')}
+                      spellCheck={false}
+                      className="h-6 w-[130px] rounded border border-zinc-800 bg-[#1C1C21] pl-6 pr-2 font-mono text-[10.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
+                    />
+                  </div>
+                )}
+                {dockOpen && (
+                  <button
+                    type="button"
+                    title={$('console.clear')}
+                    aria-label={$('console.clear')}
+                    onClick={() => consoleRef.current?.clear()}
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200"
+                  >
+                    <Eraser className="h-3 w-3" />
+                  </button>
+                )}
+                {dockOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setDockTall((v) => !v)}
+                    className="shrink-0 rounded px-1.5 py-[2px] text-[10.5px] text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
+                  >
+                    {dockTall ? $('instanceDetail.dock.half') : $('instanceDetail.dock.full')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDockOpen((v) => !v)}
+                  className="shrink-0 rounded px-1.5 py-[2px] text-[10.5px] text-zinc-300 hover:bg-zinc-800/60 hover:text-zinc-100"
+                >
+                  {dockOpen ? $('instanceDetail.dock.collapse') : $('instanceDetail.dock.expand')}
+                </button>
+              </div>
+              {dockOpen && (
+                <div className={`${dockTall ? 'h-[60vh]' : 'h-[32vh]'} min-h-[160px]`}>
+                  <ConsolePanel
+                    ref={consoleRef}
+                    server={server}
+                    instance={instance.name}
+                    instanceStatus={instance.status}
+                    embedded
+                    query={logQuery}
+                    heightClass="h-full"
+                  />
+                </div>
+              )}
             </div>
           </section>
 
