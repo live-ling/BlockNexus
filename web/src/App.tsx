@@ -19,6 +19,7 @@ import { $ } from '@/lib/i18n';
 import { closeSSE, connectSSE, subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 import { navigate, routeFromLocation, type Route } from '@/lib/router';
+import { PrototypeApp } from '@/prototype';
 
 // 更新进行中的状态（与 panel-settings.tsx 的 RUNNING_STATES 同一份语义）：
 // 这些阶段面板随时会重启，期间不能再去请求 /version（会拿到连接失败），也不该再触发别的操作
@@ -268,6 +269,12 @@ export function App() {
     await api('/logout', { method: 'POST', body: {} }).catch(() => {});
     location.reload();
   };
+
+  // 布局原型：/proto 在登录态判断**之前**渲染——原型不读登录态、不发请求，
+  // 未开启登录保护或已登录都能直接打开对照设计稿。确认排版后随原型代码一起删除。
+  if (location.pathname === '/proto') {
+    return <PrototypeApp />;
+  }
 
   if (me === undefined) {
     return <div className="grid min-h-screen place-items-center text-sm text-muted-foreground">{$('common.loading')}</div>;
