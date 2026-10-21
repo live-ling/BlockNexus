@@ -702,6 +702,13 @@ export const zh = {
   // ---------- 面板设置 ----------
   'panelSettings.title': '面板设置',
   'panelSettings.subtitle': '安全凭据 · 对外访问域名 · SMTP 与通知',
+  'panelSettings.section.access': '访问',
+  'panelSettings.section.network': '网络',
+  'panelSettings.section.notify': '通知',
+  'panelSettings.section.ai': 'AI',
+  'panelSettings.section.update': '版本与更新',
+  'panelSettings.section.appearance': '外观',
+  'panelSettings.section.about': '关于',
   'panelSettings.error.load': '读取设置失败',
   'panelSettings.about.title': '关于 BlockNexus',
   'panelSettings.about.desc': '版本信息、引用服务与开源依赖、免责声明',

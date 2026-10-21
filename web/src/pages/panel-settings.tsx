@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Bell, ChevronDown, ChevronRight, ChevronUp, Download, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, RotateCcw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Markdown } from '@/components/markdown';
-import { PageBody, PageHeader } from '@/components/layout/page-header';
+import { PageHeader } from '@/components/layout/page-header';
+import { SettingsLayout } from '@/components/layout/settings-layout';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -179,26 +180,85 @@ export function PanelSettingsPage({
         actions={<ThemeToggle variant="circle-blur" />}
       />
 
-      <PageBody>
-        <div className="mx-auto w-full max-w-[1400px]">
-          {/* 同排卡片等高（grid 默认 stretch）；内容密度不同的卡片靠留白对齐，避免「矮一截」 */}
-          <div className="grid grid-cols-12 gap-4">
-            <AuthCard data={data} onAuthChanged={onAuthChanged} reload={load} accent="security" className="col-span-12 md:col-span-6" />
-            <DomainCard data={data} reload={load} accent="network" className="col-span-12 md:col-span-6" />
-            {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
-            <DdnsCard accent="network" className="col-span-12" />
-            <FrpCard accent="network" className="col-span-12" />
-            <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
-            <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
-            <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
-            <LanguageCard accent="language" className="col-span-12" />
-            {/* 策略卡紧随版本卡：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
-            <VersionCard data={data} reload={load} accent="update" className="col-span-12" />
-            <UpdatePolicyCard data={data} reload={load} accent="info" className="col-span-12" />
-            <AboutEntryCard accent="info" className="col-span-12" />
-          </div>
-        </div>
-      </PageBody>
+      {/* 左目录 + 右侧全量分区（/proto 的 SettingsLayout）：卡片仍各自管保存，只是排布换了 */}
+      <SettingsLayout
+        sections={[
+          {
+            id: 'access',
+            label: $('panelSettings.section.access'),
+            content: (
+              <div className="grid gap-3">
+                <AuthCard
+                  data={data}
+                  onAuthChanged={onAuthChanged}
+                  reload={load}
+                  accent="security"
+                />
+              </div>
+            ),
+          },
+          {
+            id: 'network',
+            label: $('panelSettings.section.network'),
+            content: (
+              <div className="grid gap-3">
+                <DomainCard data={data} reload={load} accent="network" />
+                {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
+                <DdnsCard accent="network" />
+                <FrpCard accent="network" />
+              </div>
+            ),
+          },
+          {
+            id: 'notify',
+            label: $('panelSettings.section.notify'),
+            content: (
+              <div className="grid gap-3">
+                <SmtpCard data={data} reload={load} accent="mail" />
+                <NotifyCard data={data} reload={load} accent="notify" />
+              </div>
+            ),
+          },
+          {
+            id: 'ai',
+            label: $('panelSettings.section.ai'),
+            content: (
+              <div className="grid gap-3">
+                <AiCard data={data} reload={load} accent="ai" />
+              </div>
+            ),
+          },
+          {
+            id: 'update',
+            label: $('panelSettings.section.update'),
+            content: (
+              <div className="grid gap-3">
+                {/* 策略卡紧随版本卡：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
+                <VersionCard data={data} reload={load} accent="update" />
+                <UpdatePolicyCard data={data} reload={load} accent="info" />
+              </div>
+            ),
+          },
+          {
+            id: 'appearance',
+            label: $('panelSettings.section.appearance'),
+            content: (
+              <div className="grid gap-3">
+                <LanguageCard accent="language" />
+              </div>
+            ),
+          },
+          {
+            id: 'about',
+            label: $('panelSettings.section.about'),
+            content: (
+              <div className="grid gap-3">
+                <AboutEntryCard accent="info" />
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

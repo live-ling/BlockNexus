@@ -38,7 +38,8 @@ import {
   Trash,
   Trash2,
 } from 'lucide-react';
-import { PageBody, PageHeader } from '@/components/layout/page-header';
+import { PageHeader } from '@/components/layout/page-header';
+import { SettingsLayout } from '@/components/layout/settings-layout';
 import { AgentStatusPill } from '@/components/layout/status';
 import { Button } from '@/components/ui/button';
 
@@ -330,10 +331,14 @@ export function ServerSettingsPage({
         }
       />
 
-      <PageBody>
-        <div className="mx-auto w-full max-w-3xl">
-          {/* 连接信息 */}
-          <SettingsCard
+      <SettingsLayout
+        sections={[
+          {
+            id: 'connection',
+            label: $('serverSettings.connection.title'),
+            heading: false,
+            content: (
+              <SettingsCard
         icon={<Network className="h-3.5 w-3.5" />}
         title={$('serverSettings.connection.title')}
         actions={
@@ -393,10 +398,15 @@ export function ServerSettingsPage({
             ? $('serverSettings.connection.hintLocal')
             : $('serverSettings.connection.hintRemote')}
         </p>
-      </SettingsCard>
-
-      {/* Agent 守护进程 */}
-      <SettingsCard
+              </SettingsCard>
+            ),
+          },
+          {
+            id: 'agent',
+            label: $('serverSettings.agent.title'),
+            heading: false,
+            content: (
+              <SettingsCard
         icon={<Bot className="h-3.5 w-3.5" />}
         iconTone={agentRunning ? 'ok' : 'muted'}
         title={$('serverSettings.agent.title')}
@@ -620,10 +630,15 @@ export function ServerSettingsPage({
           </p>
         )}
         {/* 监听地址 / 安装目录 / 实例目录已并入上面的「连接信息」卡 */}
-      </SettingsCard>
-
-      {/* Java 环境（多版本安装/切换/卸载） */}
-      <JavaCard
+              </SettingsCard>
+            ),
+          },
+          {
+            id: 'java',
+            label: $('serverSettings.java.title'),
+            heading: false,
+            content: (
+              <JavaCard
         server={server}
         javaBusy={javaBusy}
         javaMsg={javaMsg}
@@ -632,10 +647,15 @@ export function ServerSettingsPage({
           setJavaBusy(false);
           setJavaMsg('');
         }}
-      />
-
-      {/* 系统信息 */}
-      <SettingsCard
+              />
+            ),
+          },
+          {
+            id: 'system',
+            label: $('serverSettings.sys.title'),
+            heading: false,
+            content: (
+              <SettingsCard
         icon={<Cpu className="h-3.5 w-3.5" />}
         title={$('serverSettings.sys.title')}
         description={server.info ? undefined : $('serverSettings.sys.locked.hint')}
@@ -673,10 +693,15 @@ export function ServerSettingsPage({
           // 未安装/未上报：锁定态而不是空白（说明为什么读不到、装上能得到什么）
           <LockedNotice note={$('serverSettings.sys.locked.sysHint')} />
         )}
-      </SettingsCard>
-
-      {/* 危险操作 */}
-      <section className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-card p-4 shadow-xs">
+              </SettingsCard>
+            ),
+          },
+          {
+            id: 'danger',
+            label: $('serverSettings.danger.title'),
+            heading: false,
+            content: (
+              <section className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-card p-4 shadow-xs">
         <AlertTriangle className="size-4 shrink-0 text-destructive" />
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold">{$('serverSettings.danger.title')}</div>
@@ -692,7 +717,11 @@ export function ServerSettingsPage({
         >
           <Trash2 className="size-3.5" /> {$('common.delete')}
         </Button>
-      </section>
+              </section>
+            ),
+          },
+        ]}
+      />
 
       <EditServerDialog server={server} open={editOpen} onOpenChange={setEditOpen} onSaved={load} />
       <TokenDialog server={server} open={tokenOpen} onOpenChange={setTokenOpen} />
@@ -726,8 +755,6 @@ export function ServerSettingsPage({
           onDeleted();
         }}
       />
-        </div>
-      </PageBody>
     </div>
   );
 }
