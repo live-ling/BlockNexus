@@ -485,6 +485,11 @@ function InstanceCard({
   const online = players?.online;
   const memPct = Math.round((inst.memoryMB / 1024 / Math.max(1, server.info?.memTotalMB ?? 0)) * 100);
   const address = inst.address || `${server.host}:${inst.port}`;
+  // 版本串里常自带核心名（如 "Fabric-1.21.1"）：避免渲染成「Fabric Fabric-1.21.1」
+  const coreLabel = CORE_LABEL[inst.source ?? 'vanilla'] ?? inst.source ?? '—';
+  const coreValue = inst.version.toLowerCase().startsWith(coreLabel.toLowerCase())
+    ? inst.version
+    : `${coreLabel} ${inst.version}`;
 
   return (
     <Surface
@@ -513,7 +518,7 @@ function InstanceCard({
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px]">
         <KV label={$('server.detail.field.core')} mono>
-          {CORE_LABEL[inst.source ?? 'vanilla'] ?? inst.source ?? '—'} {inst.version}
+          {coreValue}
         </KV>
         <KV label={$('ui.col.server')}>{server.name}</KV>
         <KV label={$('ui.col.players')} mono>

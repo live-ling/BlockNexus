@@ -475,6 +475,7 @@ export const en = {
   'instanceDetail.tab.console': 'Console',
   'instanceDetail.tab.overview': 'Overview',
   'instanceDetail.panel.title': 'Instance control panel',
+  'instanceDetail.switch': 'Switch instance',
   'instanceDetail.panel.open': 'Control panel',
   'instanceDetail.panel.tab.basic': 'Basics',
   'instanceDetail.panel.tab.network': 'Network & ports',
