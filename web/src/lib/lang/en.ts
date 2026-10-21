@@ -1772,7 +1772,6 @@ export const en = {
   'proto.field.portRange': 'Port range',
   'proto.btn.deleteServer': 'Delete server',
   'proto.server.deleteHint': 'Deleting the server uninstalls the agent; instance files stay on the host',
-  'proto.save.dirty': 'Unsaved changes',
   'proto.save.discard': 'Discard',
   'proto.save.apply': 'Save',
 

@@ -5,7 +5,7 @@ import { Download, ExternalLink, RefreshCw, Send } from 'lucide-react';
 import { $ } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Field, FormGrid, INPUT_CLASS, KV, SaveBar, Segmented, Select } from '../proto-ui';
+import { Field, FormGrid, INPUT_CLASS, KV, Segmented, Select } from '../proto-ui';
 import { SettingsLayout, type SettingsSection } from '../settings-layout';
 import { PageHeader } from '../shell';
 
@@ -258,18 +258,17 @@ export function PanelSettingsScreen() {
       <PageHeader
         title={<h1 className="truncate text-[13px] font-semibold">{$('proto.ps.title')}</h1>}
         subtitle={<span className="font-mono">v0.6.0</span>}
+        actions={
+          <>
+            <Button size="sm" variant="outline">
+              {$('proto.save.discard')}
+            </Button>
+            <Button size="sm">{$('proto.save.apply')}</Button>
+          </>
+        }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col pb-16">
-        <SettingsLayout sections={sections} />
-        <SaveBar
-          label={$('proto.save.dirty')}
-          discardLabel={$('proto.save.discard')}
-          saveLabel={$('proto.save.apply')}
-          onDiscard={() => {}}
-          onSave={() => {}}
-        />
-      </div>
+      <SettingsLayout sections={sections} />
     </>
   );
 }

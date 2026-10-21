@@ -60,7 +60,7 @@ export function SettingsLayout({ sections }: { sections: SettingsSection[] }) {
           ))}
         </nav>
 
-        <div className="min-w-0 max-w-[720px] flex-1 px-6 pt-5 pb-6">
+        <div className="min-w-0 max-w-[720px] flex-1 px-6 pt-5 pb-24">
           {sections.map((s, i) => (
             <section key={s.id} id={`settings-${s.id}`} className={cn('scroll-mt-2', i > 0 && 'mt-7')}>
               <h2 className="text-[13px] font-semibold">{s.label}</h2>

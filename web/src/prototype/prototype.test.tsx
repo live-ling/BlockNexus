@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { PrototypeApp } from './index';
 import { ServersScreen } from './screens/servers';
+import { ServerSettingsScreen } from './screens/server-settings';
 
 /**
  * `/proto` 布局原型的冒烟测试（本仓库测试环境是 node，没有 jsdom，所以走静态渲染）。
@@ -41,5 +42,12 @@ describe('/proto 原型', () => {
     const markup = renderToStaticMarkup(createElement(ServersScreen, { onScreen: () => {} }));
     expect(markup).toContain('Java 21');
     expect(markup).toContain('Java 17');
+  });
+
+  it('设置页一次列出全部分区，撤销/保存在页头', () => {
+    const markup = renderToStaticMarkup(createElement(ServerSettingsScreen, { onScreen: () => {} }));
+    for (const label of ['连接', '运行时', '删除服务器']) expect(markup).toContain(label);
+    expect(markup).toContain('撤销');
+    expect(markup).toContain('保存');
   });
 });
