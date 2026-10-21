@@ -5,7 +5,6 @@
 // 任何状态，抽成无依赖组件最干净。
 
 import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
 
 // 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
 export const ACCENTS = {
@@ -41,23 +40,23 @@ export function SettingsCard({
 }) {
   const iconClass = accent ? ACCENTS[accent] : 'bg-muted/60 text-foreground';
   return (
-    <Card className={`ring-1 ring-border ${className}`}>
-      <CardContent className="flex flex-col gap-4 p-5">
-        {/* 头部（固定） */}
-        <div className="flex items-center gap-3">
-          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border ${iconClass}`}>
+    <section className={`rounded-xl border border-border/70 bg-card shadow-xs ${className}`}>
+      <div className="flex flex-col gap-3.5 p-4">
+        {/* 头部（固定）：28px 图标胶囊 + 13px 标题 + 11px 说明 */}
+        <div className="flex items-start gap-2.5">
+          <span className={`grid size-7 shrink-0 place-items-center rounded-lg border [&_svg]:size-4 ${iconClass}`}>
             {icon}
           </span>
           <div className="min-w-0 flex-1">
-            <b className="text-sm">{title}</b>
-            {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
+            <b className="text-[13px] font-semibold">{title}</b>
+            {description && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{description}</p>}
           </div>
           {status && <div className="shrink-0 self-start">{status}</div>}
         </div>
         {/* 内容区拉伸，按钮沉底 */}
-        <div className="flex flex-1 flex-col gap-4">{children}</div>
-      </CardContent>
-    </Card>
+        <div className="flex flex-1 flex-col gap-3.5">{children}</div>
+      </div>
+    </section>
   );
 }
 

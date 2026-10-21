@@ -1,26 +1,21 @@
-import { navigate } from '@/lib/router';
 // 服务器详情页：实例列表（卡片简化为信息 + 启动/停止，点击进入实例详情）
 // 服务器级操作（安装/重装 Agent、编辑、Token、删除）已移至 #/server/<id>/settings
+//
+// 视觉：与实例总览同一张 InstanceCard（见 components/layout/instance-card.tsx），
+// 区别只是页脚放启停按钮、失败/下载中时多一块附加区。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, CloudDownload, Play, Plus, RotateCw, Settings, Square } from 'lucide-react';
+import { CloudDownload, Play, Plus, RotateCw, Settings, Square } from 'lucide-react';
 import { CreateInstanceDialog } from '@/components/dialogs';
 import { MaskedText } from '@/components/masked-text';
-import { AgentBadge, InstanceStatusBadge, LatencyBadge } from '@/components/status-badge';
+import { InstanceCard } from '@/components/layout/instance-card';
+import { PageBody, PageHeader } from '@/components/layout/page-header';
+import { AgentStatusPill } from '@/components/layout/status';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import {
-  api,
-  errText,
-  fmtMB,
-  fmtUptime,
-  CORE_LABEL,
-  type Instance,
-  type PlayersSnapshot,
-  type ServerSummary,
-} from '@/lib/api';
+import { api, errText, osLabel, type Instance, type PlayersSnapshot, type ServerSummary } from '@/lib/api';
 import { $ } from '@/lib/i18n';
+import { navigate } from '@/lib/router';
 import { subscribeServer } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 
@@ -192,176 +187,135 @@ export function ServerDetailPage({
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 pb-24 pt-7">
-      {/* 头部：只保留身份信息与设置入口 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={() => (navigate('/'))}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <h2 className="text-xl font-semibold">{server.name}</h2>
-        <AgentBadge online={server.online} installing={server.installing} />
-        {server.latency != null && <LatencyBadge latency={server.latency} />}
-        <MaskedText value={server.host} className="text-xs text-muted-foreground" />
-        <Button variant="outline" size="sm" className="ml-auto" onClick={onOpenSettings}>
-          <Settings className="h-3.5 w-3.5" /> {$('server.detail.settings')}
-        </Button>
-      </div>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <PageHeader
+        back={() => navigate('/')}
+        title={server.name}
+        subtitle={
+          <span className="inline-flex items-center gap-1.5">
+            <AgentStatusPill online={server.online} installing={server.installing} />
+            <MaskedText value={server.host} className="font-mono" />
+            {server.info && <span className="hidden sm:inline">· {osLabel(server.info.os)}</span>}
+          </span>
+        }
+        actions={
+          <>
+            <Button variant="ghost" size="sm" onClick={onOpenSettings}>
+              <Settings className="size-3.5" /> {$('server.detail.settings')}
+            </Button>
+            <Button
+              size="sm"
+              disabled={!server.online}
+              onClick={() => (server.online ? setCreateOpen(true) : error($('server.detail.error.agentOfflineCreate')))}
+            >
+              <Plus className="size-3.5" /> {$('server.detail.create')}
+            </Button>
+          </>
+        }
+      />
 
-      {/* 实例 */}
-      <div className="mt-6">
-        <div className="flex items-center">
-          <h3 className="text-[15px] font-semibold">{$('server.detail.instances')}</h3>
-          <Button
-            className="ml-auto"
-            size="sm"
-            disabled={!server.online}
-            onClick={() => (server.online ? setCreateOpen(true) : error($('server.detail.error.agentOfflineCreate')))}
-          >
-            <Plus className="h-4 w-4" /> {$('server.detail.create')}
-          </Button>
-        </div>
-
+      <PageBody>
         {!server.online ? (
-          <div className="mt-4 rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
+          <div className="rounded-xl border border-dashed py-12 text-center text-[12.5px] text-muted-foreground">
             {$('server.detail.agentOffline')}
             <br />
-            <span className="text-xs">{$('server.detail.agentOffline.hint')}</span>
+            <span className="text-[11px]">{$('server.detail.agentOffline.hint')}</span>
           </div>
         ) : instances.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
+          <div className="rounded-xl border border-dashed py-12 text-center text-[12.5px] text-muted-foreground">
             {$('server.detail.empty')}
             <br />
-            <span className="text-xs">{$('server.detail.empty.hint')}</span>
+            <span className="text-[11px]">{$('server.detail.empty.hint')}</span>
           </div>
         ) : (
-          <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
             {instances.map((inst) => {
-              const p = players[inst.name];
-              const onlineCount = p ? p.online : null;
+              const p = players[inst.name] ?? null;
+              const runningOrStarting = inst.status === 'running' || inst.status === 'starting';
               return (
-                <Card
+                <InstanceCard
                   key={inst.name}
-                  className="cursor-pointer transition-colors hover:border-muted-foreground/40"
-                  onClick={() => onOpenInstance(inst.name)}
-                >
-                  <CardContent className="grid gap-3">
-                    <div className="flex items-center gap-2.5">
-                      <b className="text-[15px]">{inst.name}</b>
-                      <span className="ml-auto">
-                        <InstanceStatusBadge status={inst.status} />
-                      </span>
-                    </div>
-                    {inst.note && <p className="-mt-1.5 text-xs text-muted-foreground">{inst.note}</p>}
-                    {/* 信息区：4 列网格（标签列按内容自适应，不换行、不浪费宽度） */}
-                    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1.5 text-xs">
-                      <CellLabel>{$('server.detail.field.core')}</CellLabel>
-                      <CellValue>{CORE_LABEL[inst.source ?? 'vanilla'] ?? inst.source ?? '—'}</CellValue>
-                      <CellLabel>{$('server.detail.field.version')}</CellLabel>
-                      <CellValue>{inst.version}</CellValue>
-
-                      <CellLabel>{$('server.detail.field.memory')}</CellLabel>
-                      <CellValue>{fmtMB(inst.memoryMB)}</CellValue>
-                      <CellLabel>{$('server.detail.field.players')}</CellLabel>
-                      <CellValue
-                        tone={onlineCount ? 'good' : undefined}
-                      >{`${inst.status === 'running' ? (onlineCount ?? '—') : '—'}/${p?.max ?? inst.maxPlayers}`}</CellValue>
-
-                      <CellLabel>{$('server.detail.field.uptime')}</CellLabel>
-                      <CellValue className="col-span-3">
-                        {inst.status === 'starting'
-                          ? $('server.detail.starting')
-                          : inst.status === 'running'
-                            ? fmtUptime(inst.startedAt)
-                            : '—'}
-                      </CellValue>
-
-                      <CellLabel>IP</CellLabel>
-                      <CellValue className="col-span-3">{`${server.host}:${inst.port}`}</CellValue>
-                      {inst.address && (
-                        <>
-                          <CellLabel>{$('server.detail.field.domain')}</CellLabel>
-                          <CellValue className="col-span-3" tone="primary">{inst.address}</CellValue>
-                        </>
-                      )}
-                    </div>
-                    {inst.status === 'downloading' && (
+                  server={server}
+                  inst={inst}
+                  players={p}
+                  onOpen={() => onOpenInstance(inst.name)}
+                  actions={
+                    runningOrStarting ? (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        disabled={busyName === inst.name}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          op(inst.name, 'stop');
+                        }}
+                      >
+                        <Square className="size-3" /> {$('server.detail.stop')}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={busyName === inst.name || inst.status !== 'stopped'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          op(inst.name, 'start');
+                        }}
+                      >
+                        <Play className="size-3" /> {$('server.detail.start')}
+                      </Button>
+                    )
+                  }
+                  extra={
+                    inst.status === 'downloading' ? (
                       <div className="grid gap-1">
-                        <span className="text-xs text-muted-foreground">
+                        <span className="text-[10.5px] text-muted-foreground">
                           {$('server.detail.downloading', progress[inst.name] ?? 0)}
                         </span>
-                        <Progress value={progress[inst.name] ?? 0} className="h-1.5" showValue />
+                        <Progress value={progress[inst.name] ?? 0} className="h-1" />
                       </div>
-                    )}
-                    {inst.status === 'failed' && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="min-w-0 flex-1 text-xs text-destructive">
+                    ) : inst.status === 'failed' ? (
+                      <div className="grid gap-2">
+                        <p className="text-[10.5px] text-destructive">
                           {inst.error || $('server.detail.error.installFailed')}
                         </p>
-                        {inst.source !== 'upload' && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {inst.source !== 'upload' && (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={busyName === inst.name}
+                              title={$('server.detail.panelInstall.tooltip')}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                panelInstall(inst.name);
+                              }}
+                            >
+                              <CloudDownload className="size-3" /> {$('server.detail.panelInstall')}
+                            </Button>
+                          )}
                           <Button
-                            size="sm"
+                            size="xs"
                             variant="outline"
                             disabled={busyName === inst.name}
-                            title={$('server.detail.panelInstall.tooltip')}
                             onClick={(e) => {
                               e.stopPropagation();
-                              panelInstall(inst.name);
+                              retryInstall(inst.name);
                             }}
                           >
-                            <CloudDownload className="h-3.5 w-3.5" /> {$('server.detail.panelInstall')}
+                            <RotateCw className="size-3" /> {$('server.detail.retryInstall')}
                           </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busyName === inst.name}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            retryInstall(inst.name);
-                          }}
-                        >
-                          <RotateCw className="h-3.5 w-3.5" /> {$('server.detail.retryInstall')}
-                        </Button>
+                        </div>
                       </div>
-                    )}
-
-                    {/* 右下角：启停按钮（红=停止 / 绿=启动；启动中也能停止） */}
-                    <div className="flex justify-end">
-                      {inst.status === 'running' || inst.status === 'starting' ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-destructive/60 px-4 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          disabled={busyName === inst.name}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            op(inst.name, 'stop');
-                          }}
-                        >
-                          <Square className="h-3.5 w-3.5" /> {$('server.detail.stop')}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-emerald-600/50 px-4 text-emerald-700 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-400"
-                          disabled={busyName === inst.name || inst.status !== 'stopped'}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            op(inst.name, 'start');
-                          }}
-                        >
-                          <Play className="h-3.5 w-3.5" /> {$('server.detail.start')}
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
+                    ) : undefined
+                  }
+                />
               );
             })}
           </div>
         )}
-      </div>
+      </PageBody>
 
       <CreateInstanceDialog
         server={server}
@@ -373,35 +327,5 @@ export function ServerDetailPage({
         }}
       />
     </div>
-  );
-}
-
-
-/** 实例卡片信息区的标签/值（配合 4 列网格使用） */
-function CellLabel({ children }: { children: React.ReactNode }) {
-  return <span className="whitespace-nowrap text-muted-foreground">{children}</span>;
-}
-
-function CellValue({
-  children,
-  tone,
-  className = '',
-}: {
-  children: React.ReactNode;
-  tone?: 'good' | 'primary';
-  className?: string;
-}) {
-  return (
-    <span
-      className={`min-w-0 break-words font-mono ${
-        tone === 'good'
-          ? 'font-medium text-emerald-600 dark:text-emerald-400'
-          : tone === 'primary'
-            ? 'text-primary'
-            : 'text-foreground'
-      } ${className}`}
-    >
-      {children}
-    </span>
   );
 }

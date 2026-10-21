@@ -2,9 +2,10 @@ import { navigate } from '@/lib/router';
 // 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置 / 版本与更新
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Download, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, RotateCcw, Rocket, Sparkles } from 'lucide-react';
+import { AlertTriangle, Bell, ChevronDown, ChevronRight, ChevronUp, Download, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, RotateCcw, Rocket, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/motion/theme-toggle';
 import { Markdown } from '@/components/markdown';
+import { PageBody, PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -170,34 +171,34 @@ export function PanelSettingsPage({
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-5 pb-24 pt-8">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <h2 className="text-xl font-semibold">{$('panelSettings.title')}</h2>
-        <div className="ml-auto">
-          <ThemeToggle variant="circle-blur" />
-        </div>
-      </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">{$('panelSettings.subtitle')}</p>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <PageHeader
+        back={onBack}
+        title={$('panelSettings.title')}
+        subtitle={$('panelSettings.subtitle')}
+        actions={<ThemeToggle variant="circle-blur" />}
+      />
 
-      {/* 同排卡片等高（grid 默认 stretch）；内容密度不同的卡片靠留白对齐，避免「矮一截」 */}
-      <div className="mt-6 grid grid-cols-12 gap-5">
-        <AuthCard data={data} onAuthChanged={onAuthChanged} reload={load} accent="security" className="col-span-12 md:col-span-6" />
-        <DomainCard data={data} reload={load} accent="network" className="col-span-12 md:col-span-6" />
-        {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
-        <DdnsCard accent="network" className="col-span-12" />
-        <FrpCard accent="network" className="col-span-12" />
-        <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
-        <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
-        <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
-        <LanguageCard accent="language" className="col-span-12" />
-        {/* 策略卡紧随版本卡：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
-        <VersionCard data={data} reload={load} accent="update" className="col-span-12" />
-        <UpdatePolicyCard data={data} reload={load} accent="info" className="col-span-12" />
-        <AboutEntryCard accent="info" className="col-span-12" />
-      </div>
+      <PageBody>
+        <div className="mx-auto w-full max-w-[1400px]">
+          {/* 同排卡片等高（grid 默认 stretch）；内容密度不同的卡片靠留白对齐，避免「矮一截」 */}
+          <div className="grid grid-cols-12 gap-4">
+            <AuthCard data={data} onAuthChanged={onAuthChanged} reload={load} accent="security" className="col-span-12 md:col-span-6" />
+            <DomainCard data={data} reload={load} accent="network" className="col-span-12 md:col-span-6" />
+            {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
+            <DdnsCard accent="network" className="col-span-12" />
+            <FrpCard accent="network" className="col-span-12" />
+            <SmtpCard data={data} reload={load} accent="mail" className="col-span-12 md:col-span-6" />
+            <NotifyCard data={data} reload={load} accent="notify" className="col-span-12 md:col-span-6" />
+            <AiCard data={data} reload={load} accent="ai" className="col-span-12" />
+            <LanguageCard accent="language" className="col-span-12" />
+            {/* 策略卡紧随版本卡：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
+            <VersionCard data={data} reload={load} accent="update" className="col-span-12" />
+            <UpdatePolicyCard data={data} reload={load} accent="info" className="col-span-12" />
+            <AboutEntryCard accent="info" className="col-span-12" />
+          </div>
+        </div>
+      </PageBody>
     </div>
   );
 }
