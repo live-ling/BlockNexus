@@ -71,7 +71,7 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 - **校验与边界**：更新包 SHA256 只认 GitHub 的 `SHA256SUMS.txt`（下载可走自建镜像，但镜像不在信任链上），**拿不到校验值就拒绝更新**；解压与写入按白名单（`panel/`、`web/dist/`、`agent/agent.js`、`scripts/` 等），`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/` 一律拒绝；面板对外且未开登录保护时禁止更新。
 - **失败处理**：更新器是独立进程（面板必须先退出，它才动手），顺序为「等端口释放 → 备份将被替换的文件 → 替换 → 拉起 → 健康检查」；任何一步失败都回滚程序 + 数据快照并拉起旧版本。日志与结果在 `data/update/`（设置页显示上次结果，可一键回滚）。
 
-> 维护者发版：`portable` / `shell` / `app` 三个 zip 加 `update.json`、`SHA256SUMS.txt` 缺一不可（后两者是判定与校验依据，漏传会被当成"元数据缺失"）。命令与参数见 [AGENTS.md](../AGENTS.md)。
+> 维护者发版：`portable` / `shell` / `app` 三个 zip 加 `update.json`、`SHA256SUMS.txt` 缺一不可（后两者是判定与校验依据，漏传会被当成"元数据缺失"）。命令与参数见 `scripts/build-release.ps1`。
 
 ### 本机服务器（host 填 127.0.0.1 / localhost）
 

@@ -669,7 +669,7 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
 - job `backend`（`ubuntu-latest`，Node **20**）：`npm install --ignore-scripts` → shell 循环 `node --check` 覆盖 `panel/*.js agent/*.js scripts/*.js`（`ci.yml:9-25`）。**只做语法检查**：不跑 `test:agent`、不跑 `build.js --check`、不跑任何测试。
 - job `frontend`（`ubuntu-latest`，Node **20**）：`npm ci` + `npm run build`（= `tsc -b && vite build`）（`ci.yml:27-40`）。这是唯一的类型检查入口。
 - **无矩阵**（无 `strategy.matrix`）、无缓存配置、无 artifact 上传、无 lint 步骤、无 release job、无 secrets 使用。
-- 发布是**纯手工**：`gh release create vX.Y.Z` + 手写 Release body（`AGENTS.md` 发版流程）。
+- 发布是**纯手工**：`gh release create vX.Y.Z` + 手写 Release body（维护者内部发版流程）。
 
 ### 9.6 明确不存在（ABSENT）
 

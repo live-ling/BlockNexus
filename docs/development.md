@@ -2,7 +2,7 @@
 
 面向要改这个仓库的人：内部实现、目录结构、前端与 Agent 的构建、测试、版本号约定、外壳 exe 的重新生成。
 
-安装与日常使用看 [README](../README.md)；发版流程与协作约定看 [AGENTS.md](../AGENTS.md)。
+安装与日常使用看 [README](../README.md)；发版流程见 `scripts/build-release.ps1`（维护者内部约定不随仓库发布）。
 
 ---
 

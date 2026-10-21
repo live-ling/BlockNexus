@@ -156,7 +156,7 @@
 - **可失败、可自愈、可降级**：`available` 标志 + 失败即关闭存储并每 5 分钟尝试重开（`:330-360`）；不可用时控制器转 503。
 - 保留期配置做**单调性钳制**（分钟 ≤ 刻钟 ≤ 小时，越界回落并 warn，`MonitorHistoryConfiguration.java:18-50`）。
 
-**BlockNexus 的落地路径**：OPanel 用 H2（嵌入式 Java 数据库）。Node 侧的等价选择是 **SQLite（`node:sqlite` 或 better-sqlite3）或纯 JSONL + 定期压实**——但注意 BlockNexus 的 Agent 是**零依赖单文件**（`AGENTS.md` 明确这是部署链路的前提），所以：
+**BlockNexus 的落地路径**：OPanel 用 H2（嵌入式 Java 数据库）。Node 侧的等价选择是 **SQLite（`node:sqlite` 或 better-sqlite3）或纯 JSONL + 定期压实**——但注意 BlockNexus 的 Agent 是**零依赖单文件**（部署链路的前提），所以：
 
 - 如果指标采集留在 Agent 侧，**不能引第三方依赖**，应选「内存聚合桶 + 定期覆写一个小的 JSON/二进制聚合文件」，保留期选短一些（如分钟级 6 小时 + 小时级 30 天）。
 - 如果放面板侧（面板已有 `express` 等依赖，且 `data/` 目录已存在），可以上 SQLite，实现可以更接近 OPanel。

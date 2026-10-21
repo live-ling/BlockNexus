@@ -438,7 +438,7 @@ const AUTO_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 自动更新策略：**只有发布方显式声明 autoSafe 且非破坏性才算数**。
- * 背景：AGENTS.md 明确 v1.0.0 之前不纠结 semver 严格性，因此绝不能按「minor 就安全」猜。
+ * 背景：v1.0.0 之前不纠结 semver 严格性（维护者约定），因此绝不能按「minor 就安全」猜。
  */
 function shouldAutoApply({ meta, plan, ctx } = {}) {
   const m = meta || {};
