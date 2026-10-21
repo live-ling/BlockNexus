@@ -1,17 +1,46 @@
-import { navigate } from '@/lib/router';
 // 服务器列表页
+//
+// 视觉：`/proto` 第三版（卡片网格 + 右侧筛选抽屉）。卡片里的资源条只画真有的数据：
+// Agent 资源快照（stats）没回来时，只显示系统信息，不拿假 CPU 占位。
+//
+// 交互保留原有能力：拖动排序（顺序持久化到面板）、点卡片进服务器详情、右上角快速添加。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { GripVertical, Rocket, Server } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GripVertical, Plus, RotateCw, Server as ServerIcon, Settings } from 'lucide-react';
+import { cn } from 'cn';
 import { QuickAddDialog } from '@/components/quick-add-dialog';
-import { ServerLinkBadge } from '@/components/status-badge';
-import { TiltCard } from '@/components/motion/tilt-card';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { CardField } from '@/components/card-field';
-import { api, errText, fmtDiskGB, fmtMB, fmtUptime, osLabel, timeago, type Me, type ServerSummary } from '@/lib/api';
-import { $ } from '@/lib/i18n';
 import { MaskedText } from '@/components/masked-text';
+import { Button } from '@/components/ui/button';
+import { FilterDrawer } from '@/components/layout/filter-drawer';
+import { PageBody, PageHeader } from '@/components/layout/page-header';
+import {
+  Bar,
+  EmptyState,
+  FilterChoices,
+  FilterField,
+  KV,
+  SearchInput,
+  Select,
+  Surface,
+  usageTone,
+} from '@/components/layout/primitives';
+import { AgentStatusPill } from '@/components/layout/status';
+import { navigate } from '@/lib/router';
+import {
+  api,
+  errText,
+  fmtDiskGB,
+  fmtMB,
+  fmtUptime,
+  osLabel,
+  timeago,
+  type Me,
+  type ServerSummary,
+} from '@/lib/api';
+import { $ } from '@/lib/i18n';
+
+type OnlineFilter = 'all' | 'online' | 'offline';
+type SortKey = 'manual' | 'latency' | 'memory';
 
 export function ServersPage({
   me,
@@ -30,7 +59,7 @@ export function ServersPage({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [order, setOrder] = useState<string[] | null>(null);
-  const list = order
+  const base = order
     ? (order.map((id) => servers.find((s) => s.id === id)).filter(Boolean) as ServerSummary[])
     : servers;
   // 服务器列表在别处变化时（新增/删除）重置本地预排，避免残影
@@ -49,17 +78,47 @@ export function ServersPage({
     return () => window.clearInterval(t);
   }, []);
 
+  // 筛选（纯客户端）：排序里的「手动」= 面板保存的顺序，不做任何额外排序
+  const [q, setQ] = useState('');
+  const [online, setOnline] = useState<OnlineFilter>('all');
+  const [sort, setSort] = useState<SortKey>('manual');
+  const resetFilters = () => {
+    setQ('');
+    setOnline('all');
+    setSort('manual');
+  };
+
+  const list = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const out = base.filter((s) =>
+      online === 'all' ? true : online === 'online' ? s.online && !s.installing : !s.online,
+    );
+    const matched = needle
+      ? out.filter((s) =>
+          [s.name, s.host, s.info?.hostname ?? '', s.info?.os ?? ''].join(' ').toLowerCase().includes(needle),
+        )
+      : out;
+    if (sort === 'latency') {
+      return [...matched].sort((a, b) => (a.latency ?? Number.MAX_SAFE_INTEGER) - (b.latency ?? Number.MAX_SAFE_INTEGER));
+    }
+    if (sort === 'memory') {
+      const used = (s: ServerSummary) => s.stats?.memUsedMB ?? 0;
+      return [...matched].sort((a, b) => used(b) - used(a));
+    }
+    return matched;
+  }, [base, q, online, sort]);
+
   const move = useCallback(
     (fromId: string, toId: string) => {
       if (fromId === toId) return;
-      const ids = list.map((s) => s.id);
+      const ids = base.map((s) => s.id);
       const from = ids.indexOf(fromId);
       const to = ids.indexOf(toId);
       if (from < 0 || to < 0) return;
       ids.splice(to, 0, ids.splice(from, 1)[0]);
       setOrder(ids);
     },
-    [list],
+    [base],
   );
 
   const commit = useCallback(async () => {
@@ -73,29 +132,52 @@ export function ServersPage({
     }
   }, [order, onReorder, servers]);
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-5 pb-28 pt-7">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{$('servers.title')}</h2>
-        {/* 唯一入口：快速添加会把「装 Agent → 建实例 → 开服」一次做完，
-            需要精细控制的部分都在弹窗的「高级选项」里（原先的「添加服务器」已合并进来）。 */}
-        <Button className="ml-auto" onClick={() => setQuickOpen(true)}>
-          <Rocket className="h-4 w-4" /> {$('servers.quick')}
-        </Button>
-      </div>
+  const onlineCount = servers.filter((s) => s.online).length;
 
-      {servers.length === 0 ? (
-        <div className="mt-5 rounded-xl border border-dashed py-16 text-center text-sm text-muted-foreground">
-          {$('servers.empty.title')}
-          <br />
-          <span className="text-xs">{$('servers.empty.hint')}</span>
-        </div>
-      ) : (
-        <div className="mt-5 grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-          {list.map((s) => (
-            <TiltCard key={s.id} max={10} className="rounded-xl">
-              <Card
-                draggable
+  return (
+    <div className="flex h-screen flex-col overflow-hidden">
+      <PageHeader
+        title={$('servers.title')}
+        subtitle={servers.length > 0 ? $('ui.servers.subtitle', servers.length, onlineCount) : undefined}
+        actions={
+          <>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              title={$('ui.action.refresh')}
+              onClick={() => forceTick((n) => n + 1)}
+            >
+              <RotateCw />
+            </Button>
+            <Button size="sm" onClick={() => setQuickOpen(true)}>
+              <Plus className="size-3.5" />
+              {$('servers.quick')}
+            </Button>
+          </>
+        }
+      />
+
+      <PageBody>
+        {servers.length === 0 ? (
+          <EmptyState title={$('servers.empty.title')} hint={$('servers.empty.hint')} />
+        ) : list.length === 0 ? (
+          <EmptyState
+            title={$('ui.servers.noMatch')}
+            hint={$('ui.servers.noMatchHint')}
+            action={
+              <Button size="sm" variant="outline" onClick={resetFilters}>
+                {$('ui.filter.reset')}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-3">
+            {list.map((s) => (
+              <ServerCard
+                key={s.id}
+                server={s}
+                dragging={draggingId === s.id}
+                over={overId === s.id}
                 onDragStart={(e) => {
                   setDraggingId(s.id);
                   e.dataTransfer.effectAllowed = 'move';
@@ -119,98 +201,52 @@ export function ServersPage({
                   if (draggingId) move(draggingId, s.id);
                   setOverId(null);
                 }}
-                className={`group h-full cursor-pointer border bg-card transition-colors hover:border-muted-foreground/40 ${
-                  draggingId === s.id ? 'opacity-50' : ''
-                } ${overId === s.id ? 'border-primary ring-1 ring-primary' : 'border-border'}`}
-                onClick={() => (draggingId ? undefined : navigate(`/server/${s.id}`))}
-              >
-                <CardContent className="grid gap-3.5 p-5">
-                  {/* 标题区：eyebrow + 图标 + 名称 + 徽章（beUI TiltCard demo 风格） */}
-                  <div className="flex items-start gap-3">
-                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-border bg-muted/60 text-primary">
-                      <Server className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                        Server
-                      </div>
-                      <h3 className="truncate text-base font-semibold text-foreground">{s.name}</h3>
-                    </div>
-                    <span className="shrink-0 self-start">
-                      <ServerLinkBadge online={s.online} installing={s.installing} latency={s.latency} />
-                    </span>
-                    <span
-                      className="shrink-0 cursor-grab self-start text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
-                      title={$('servers.drag.tooltip')}
-                      aria-hidden
-                    >
-                      <GripVertical className="h-4 w-4" />
-                    </span>
-                  </div>
+                onOpen={() => (draggingId ? undefined : navigate(`/server/${s.id}`))}
+              />
+            ))}
+          </div>
+        )}
+      </PageBody>
 
-                  {/* 地址（默认脱敏，点击显示；不触发卡片跳转） */}
-                  <div className="flex items-baseline gap-1.5 text-xs">
-                    <span className="w-[2.6em] shrink-0 text-muted-foreground">IP</span>
-                    <MaskedText value={s.host} className="text-muted-foreground" />
-                  </div>
+      <FilterDrawer>
+        <div className="grid gap-4">
+          <FilterField label={$('ui.filter.search')}>
+            <SearchInput placeholder={$('ui.search.servers')} value={q} onChange={setQ} />
+          </FilterField>
 
-                  {/* 系统信息：两列网格 + 定宽标签对齐；内存/磁盘占用来自面板后台拉取的资源快照 */}
-                  {s.info ? (
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                      <CardField label={$('servers.field.hostname')} value={s.info.hostname} className="col-span-2" />
-                      <CardField
-                        label={$('servers.field.system')}
-                        value={`${osLabel(s.info.os)} · ${s.info.arch}`}
-                        className="col-span-2"
-                      />
-                      <CardField
-                        label={$('servers.field.memory')}
-                        value={
-                          s.stats
-                            ? `${fmtMB(s.stats.memUsedMB)} / ${fmtMB(s.stats.memTotalMB)}`
-                            : fmtMB(s.info.memTotalMB)
-                        }
-                        className="col-span-2"
-                      />
-                      <CardField
-                        label={$('servers.field.disk')}
-                        value={
-                          s.stats?.disk
-                            ? fmtDiskGB(s.stats.disk.totalGB - s.stats.disk.freeGB, s.stats.disk.totalGB)
-                            : '—'
-                        }
-                        className="col-span-2"
-                      />
-                      <CardField
-                        label="Java"
-                        value={s.info.java.installed ? String(s.info.java.major) : $('servers.java.notInstalled')}
-                        tone={s.info.java.installed ? undefined : 'warn'}
-                      />
-                      <CardField label="Node" value={s.info.node.replace('v', '')} />
-                      <CardField
-                        label={$('servers.field.online')}
-                        value={
-                          s.online && s.onlineSince
-                            ? $('servers.uptime', fmtUptime(s.onlineSince))
-                            : s.lastSeen
-                              ? $('servers.lastSeen', timeago(s.lastSeen))
-                              : $('servers.neverOnline')
-                        }
-                        tone={s.online ? 'good' : undefined}
-                        className="col-span-2"
-                      />
-                    </div>
-                  ) : (
-                    <div className="text-xs text-muted-foreground">
-                      {s.installing ? $('servers.agent.installing') : $('servers.agent.offline')}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TiltCard>
-          ))}
+          <FilterField label={$('ui.filter.status')}>
+            <FilterChoices
+              value={online}
+              onChange={setOnline}
+              columns={3}
+              options={[
+                { value: 'all', label: $('ui.filter.all') },
+                { value: 'online', label: $('ui.filter.online') },
+                { value: 'offline', label: $('ui.filter.offline') },
+              ]}
+            />
+          </FilterField>
+
+          <FilterField label={$('ui.filter.sort')}>
+            <Select
+              value={sort}
+              onChange={(v) => setSort(v as SortKey)}
+              className="w-full"
+              options={[
+                { value: 'manual', label: $('ui.sort.manual') },
+                { value: 'latency', label: $('ui.sort.latency') },
+                { value: 'memory', label: $('ui.sort.memory') },
+              ]}
+            />
+          </FilterField>
+
+          <div className="border-t pt-3">
+            <Button size="sm" variant="outline" className="w-full" onClick={resetFilters}>
+              {$('ui.filter.reset')}
+            </Button>
+          </div>
         </div>
-      )}
+      </FilterDrawer>
 
       <QuickAddDialog
         open={quickOpen}
@@ -219,5 +255,139 @@ export function ServersPage({
         onCreated={(s) => onAdd(s)}
       />
     </div>
+  );
+}
+
+/** 资源一行：标签 + 细条 + 数值 */
+function Resource({ label, value, pct }: { label: string; value: string; pct: number }) {
+  return (
+    <div className="flex items-center gap-2 text-[10.5px]">
+      <span className="w-8 shrink-0 tracking-wide text-muted-foreground">{label}</span>
+      <Bar value={pct} tone={usageTone(pct)} className="min-w-0 flex-1" />
+      <span className="w-16 shrink-0 text-right font-mono tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function ServerCard({
+  server: s,
+  dragging,
+  over,
+  onOpen,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+}: {
+  server: ServerSummary;
+  dragging: boolean;
+  over: boolean;
+  onOpen: () => void;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+}) {
+  const memPct = s.stats?.memTotalMB
+    ? Math.round((s.stats.memUsedMB / s.stats.memTotalMB) * 100)
+    : 0;
+  const diskPct = s.stats?.disk ? Math.round(((s.stats.disk.totalGB - s.stats.disk.freeGB) / Math.max(1, s.stats.disk.totalGB)) * 100) : 0;
+
+  return (
+    <Surface
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onClick={onOpen}
+      className={cn(
+        'group grid cursor-pointer content-start gap-3 transition-colors hover:border-muted-foreground/40',
+        dragging && 'opacity-50',
+        over && 'border-primary ring-1 ring-primary',
+      )}
+    >
+      <div className="flex min-w-0 items-start gap-2">
+        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground">
+          <ServerIcon className="size-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1">
+            <b className="truncate text-[13px] font-medium">{s.name}</b>
+            <span
+              className="shrink-0 cursor-grab text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
+              title={$('servers.drag.tooltip')}
+              aria-hidden
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GripVertical className="size-3.5" />
+            </span>
+          </div>
+          <p className="truncate font-mono text-[10.5px] text-muted-foreground">
+            <MaskedText value={s.host} />
+            {s.info ? ` · ${osLabel(s.info.os)}` : ''}
+          </p>
+        </div>
+        <AgentStatusPill online={s.online} installing={s.installing} />
+      </div>
+
+      {s.stats ? (
+        <div className="grid gap-1.5">
+          <Resource
+            label="MEM"
+            value={`${fmtMB(s.stats.memUsedMB)}/${fmtMB(s.stats.memTotalMB)}`}
+            pct={memPct}
+          />
+          {s.stats.disk && (
+            <Resource
+              label="DISK"
+              value={fmtDiskGB(s.stats.disk.totalGB - s.stats.disk.freeGB, s.stats.disk.totalGB)}
+              pct={diskPct}
+            />
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px]">
+          <KV label={$('servers.field.hostname')} mono>
+            {s.info?.hostname ?? '—'}
+          </KV>
+          <KV label="Java" mono>
+            {s.info ? (s.info.java.installed ? s.info.java.major : $('servers.java.notInstalled')) : '—'}
+          </KV>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="font-mono">{s.latency == null ? '—' : `${s.latency}ms`}</span>
+        <span className="text-muted-foreground/40">·</span>
+        <span className="truncate font-mono">
+          {s.info ? `Java ${s.info.java.installed ? s.info.java.major : '—'}` : $('servers.agent.offline')}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          <span className="truncate">
+            {s.online && s.onlineSince
+              ? $('servers.uptime', fmtUptime(s.onlineSince))
+              : s.lastSeen
+                ? $('servers.lastSeen', timeago(s.lastSeen))
+                : $('servers.neverOnline')}
+          </span>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            title={$('ui.action.settings')}
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/server/${s.id}/settings`);
+            }}
+          >
+            <Settings />
+          </Button>
+        </span>
+      </div>
+    </Surface>
   );
 }
