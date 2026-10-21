@@ -1,24 +1,39 @@
 // 实例总览：默认落地页。所有服务器的所有游戏实例按服务器分组展示。
 //
-// 为什么不放启停按钮：保持只读，避免在「所有实例平铺」的大视野里误操作——
-// 控制仍在实例详情页（每实例一组完整按钮）与服务器详情页（按服务器再分组时更稳）。
+// 视觉：`/proto` 第三版（卡片网格 + 右侧筛选抽屉，见 docs/frontend-redesign-design.md）。
+// 交互仍是老的：不在此处启停实例（避免在「所有实例平铺」的大视野里误操作），
+// 点卡片进实例详情页。
 //
 // 数据：复用 GET /servers/:id/instances 与 /servers/:id/players。
 // 离线/安装中的服务器不发出请求（它们一定会失败），分组小标题上挂 Agent 状态徽章。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Rocket, Server } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Copy, Plus, RotateCw, Server } from 'lucide-react';
 import { QuickAddDialog } from '@/components/quick-add-dialog';
-import { AgentBadge, InstanceStatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { FilterDrawer } from '@/components/layout/filter-drawer';
+import { PageBody, PageHeader } from '@/components/layout/page-header';
+import {
+  Bar,
+  EmptyState,
+  FilterChoices,
+  FilterField,
+  KV,
+  SearchInput,
+  Select,
+  Surface,
+  usageTone,
+} from '@/components/layout/primitives';
+import { AgentStatusPill, InstanceStatusPill } from '@/components/layout/status';
 import { navigate } from '@/lib/router';
+import { copyText } from '@/lib/clipboard';
 import {
   api,
   CORE_LABEL,
   errText,
   fmtMB,
   fmtUptime,
+  instanceIconUrl,
   type Instance,
   type Me,
   type PlayersSnapshot,
@@ -35,10 +50,21 @@ import {
   type ServerInstanceData,
 } from '@/lib/instances';
 
+
 // 同时发起的拉数请求上限。超过就排队——每台服务器 2 个接口（instances + players），
 // 100 台 = 200 个并发请求会瞬间打满面板事件循环和 AgentHub 的 WS 帧队列。
 // 6 已经能覆盖绝大多数单机代理面板；触达上限只是轻微的等待延迟，不会让 UI 卡住。
 const FETCH_CONCURRENCY = 6;
+
+type StatusFilter = 'all' | 'running' | 'stopped' | 'failed';
+type SortKey = 'name' | 'status' | 'players' | 'memory';
+
+/** 搜索索引：实例名/备注/地址/核心/版本 + 服务器名/主机（与原型一致，一处拼装） */
+function searchText(server: ServerSummary, inst: Instance): string {
+  return [inst.name, inst.note, inst.address, inst.source, inst.version, server.name, server.host]
+    .join(' ')
+    .toLowerCase();
+}
 
 export function InstancesPage({
   me,
@@ -49,9 +75,9 @@ export function InstancesPage({
   servers: ServerSummary[];
   onAdd: (s: ServerSummary) => void;
 }) {
-  const [quickOpen, setQuickOpen] = useState(false);
   // 每台服务器的拉数结果。key 是 serverId；找不到就当 null（还没拉过 / 拉失败）。
   const [data, setData] = useState<Record<string, ServerInstanceData>>({});
+  const [quickOpen, setQuickOpen] = useState(false);
   // 顺序：与 servers prop 完全对齐；不引入第二份排序，否则拖动排序会和总览对不上。
   const groups = buildInstanceGroups(servers, data);
   const summary = summarizeGroups(groups);
@@ -61,6 +87,19 @@ export function InstancesPage({
     const t = window.setInterval(() => forceTick((n) => n + 1), 30000);
     return () => window.clearInterval(t);
   }, []);
+
+  // 筛选（纯客户端）：原型里这些都在右侧抽屉里，不占常驻宽度
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState<StatusFilter>('all');
+  const [serverId, setServerId] = useState('all');
+  const [sort, setSort] = useState<SortKey>('name');
+  const filtering = !!q.trim() || status !== 'all' || serverId !== 'all';
+  const resetFilters = () => {
+    setQ('');
+    setStatus('all');
+    setServerId('all');
+    setSort('name');
+  };
 
   // 拉单台：成功写 instances + players，失败写 error 但不抛——
   // 单台失败不该让整个总览挂掉；卡片小标题里的徽章 + 错误文案足以告知用户。
@@ -217,52 +256,139 @@ export function InstancesPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-5 pb-28 pt-7">
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-lg font-semibold">{$('instances.title')}</h2>
-        {servers.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {$('instances.summary', summary.total, summary.running)}
-            {summary.unreachable > 0 && (
-              <span className="ml-1.5 text-amber-600 dark:text-amber-400">
-                {$('instances.unreachable', summary.unreachable)}
-              </span>
-            )}
-          </p>
-        )}
-        <Button className="ml-auto" onClick={() => setQuickOpen(true)}>
-          <Rocket className="h-4 w-4" /> {$('servers.quick')}
-        </Button>
-      </div>
+  // 手动刷新：清掉本地清单再重拉（离线/安装中的仍不发请求）
+  const refresh = () => {
+    setData({});
+    void fetchAll(serversRef.current.filter((s) => s.online && !s.installing));
+  };
 
-      {servers.length === 0 ? (
-        <div className="mt-5 rounded-xl border border-dashed py-16 text-center text-sm text-muted-foreground">
-          {$('instances.empty.noServers')}
-          <br />
-          <span className="text-xs">{$('instances.empty.noServersHint')}</span>
+  // 筛选 + 排序（客户端）。不可达分组只在完全没有筛选条件时保留，
+  // 否则「筛运行中」会连带列出根本没连上的服务器。
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const out: InstanceGroup[] = [];
+    for (const g of groups) {
+      if (serverId !== 'all' && g.server.id !== serverId) continue;
+      if (!g.instances) {
+        if (!filtering) out.push(g);
+        continue;
+      }
+      const list = g.instances
+        .filter((i) => status === 'all' || i.status === status)
+        .filter((i) => !needle || searchText(g.server, i).includes(needle));
+      if (!list.length) continue;
+      out.push({ ...g, instances: sortInstances(list, g.players, sort) });
+    }
+    return out;
+    // groups 每轮 setData 都是新数组，依赖它本身没问题：这里只做纯计算
+  }, [groups, q, status, serverId, sort, filtering]);
+
+  const openInstance = (serverIdTo: string, name: string) =>
+    navigate(`/server/${serverIdTo}/instance/${encodeURIComponent(name)}`);
+
+  const statusOptions: { value: StatusFilter; label: string }[] = [
+    { value: 'all', label: $('ui.filter.all') },
+    { value: 'running', label: $('ui.filter.running') },
+    { value: 'stopped', label: $('ui.filter.stopped') },
+    { value: 'failed', label: $('ui.filter.failed') },
+  ];
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden">
+      <PageHeader
+        title={$('instances.title')}
+        subtitle={
+          servers.length > 0 ? (
+            <>
+              {$('instances.summary', summary.total, summary.running)}
+              {summary.unreachable > 0 && <span className="ml-1.5">{$('instances.unreachable', summary.unreachable)}</span>}
+            </>
+          ) : undefined
+        }
+        actions={
+          <>
+            <Button size="icon-sm" variant="ghost" title={$('ui.action.refresh')} onClick={refresh}>
+              <RotateCw />
+            </Button>
+            <Button size="sm" onClick={() => setQuickOpen(true)}>
+              <Plus className="size-3.5" />
+              {$('servers.quick')}
+            </Button>
+          </>
+        }
+      />
+
+      <PageBody>
+        {servers.length === 0 ? (
+          <EmptyState title={$('instances.empty.noServers')} hint={$('instances.empty.noServersHint')} />
+        ) : summary.total === 0 && summary.unreachable === servers.length ? (
+          // 全部离线：只展示「等待重连」的空态，不让离线分组的小标题铺满整页
+          <EmptyState title={$('instances.empty.allOffline')} hint={$('instances.empty.allOfflineHint')} />
+        ) : summary.total === 0 ? (
+          // 都在线但都还没建实例
+          <EmptyState title={$('instances.empty.noInstances')} hint={$('instances.empty.noInstancesHint')} />
+        ) : visible.length === 0 ? (
+          <EmptyState
+            title={$('ui.empty.noMatch')}
+            hint={$('ui.empty.noMatchHint')}
+            action={
+              <Button size="sm" variant="outline" onClick={resetFilters}>
+                {$('ui.filter.reset')}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="grid gap-5">
+            {visible.map((g) => (
+              <ServerGroup key={g.server.id} group={g} onOpen={openInstance} />
+            ))}
+          </div>
+        )}
+      </PageBody>
+
+      <FilterDrawer>
+        <div className="grid gap-4">
+          <FilterField label={$('ui.filter.search')}>
+            <SearchInput placeholder={$('ui.search.instances')} value={q} onChange={setQ} />
+          </FilterField>
+
+          <FilterField label={$('ui.filter.status')}>
+            <FilterChoices value={status} options={statusOptions} onChange={setStatus} />
+          </FilterField>
+
+          <FilterField label={$('ui.col.server')}>
+            <Select
+              value={serverId}
+              onChange={setServerId}
+              className="w-full"
+              options={[
+                { value: 'all', label: $('ui.filter.allServers') },
+                ...servers.map((s) => ({ value: s.id, label: s.name })),
+              ]}
+            />
+          </FilterField>
+
+          <FilterField label={$('ui.filter.sort')}>
+            <Select
+              value={sort}
+              onChange={(v) => setSort(v as SortKey)}
+              className="w-full"
+              options={[
+                { value: 'name', label: $('ui.sort.name') },
+                { value: 'status', label: $('ui.sort.status') },
+                { value: 'players', label: $('ui.sort.players') },
+                { value: 'memory', label: $('ui.sort.memory') },
+              ]}
+            />
+          </FilterField>
+
+          <div className="border-t pt-3">
+            <Button size="sm" variant="outline" className="w-full" onClick={resetFilters}>
+              {$('ui.filter.reset')}
+            </Button>
+          </div>
         </div>
-      ) : summary.total === 0 && summary.unreachable === servers.length ? (
-        // 全部离线：只展示「等待重连」的空态，不让离线分组的小标题铺满整页
-        <div className="mt-5 rounded-xl border border-dashed py-16 text-center text-sm text-muted-foreground">
-          {$('instances.empty.allOffline')}
-          <br />
-          <span className="text-xs">{$('instances.empty.allOfflineHint')}</span>
-        </div>
-      ) : summary.total === 0 ? (
-        // 都在线但都还没建实例
-        <div className="mt-5 rounded-xl border border-dashed py-16 text-center text-sm text-muted-foreground">
-          {$('instances.empty.noInstances')}
-          <br />
-          <span className="text-xs">{$('instances.empty.noInstancesHint')}</span>
-        </div>
-      ) : (
-        <div className="mt-5 grid gap-5">
-          {groups.map((g) => (
-            <ServerGroup key={g.server.id} group={g} />
-          ))}
-        </div>
-      )}
+      </FilterDrawer>
 
       <QuickAddDialog
         open={quickOpen}
@@ -274,38 +400,68 @@ export function InstancesPage({
   );
 }
 
-function ServerGroup({ group }: { group: InstanceGroup }) {
+/** 排序是纯客户端行为：不改变 groups 的顺序（服务器分组顺序仍由服务器列表决定） */
+function sortInstances(
+  list: Instance[],
+  players: PlayersSnapshot,
+  sort: SortKey,
+): Instance[] {
+  const arr = [...list];
+  if (sort === 'players') {
+    return arr.sort((a, b) => (playersOf(players, b.name)?.online ?? -1) - (playersOf(players, a.name)?.online ?? -1));
+  }
+  if (sort === 'memory') return arr.sort((a, b) => b.memoryMB - a.memoryMB);
+  if (sort === 'status') return arr.sort((a, b) => a.status.localeCompare(b.status));
+  return arr.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function ServerGroup({
+  group,
+  onOpen,
+}: {
+  group: InstanceGroup;
+  onOpen: (serverId: string, name: string) => void;
+}) {
   const { server, instances, players, error } = group;
-  // 不可达：实例清单未知，整个分组用提示卡代替
-  if (!instances) {
-    return (
-      <section>
-        <GroupHeader server={server} instanceCount={null} />
-        <div className="mt-2 rounded-xl border border-dashed bg-muted/30 px-4 py-6 text-center text-xs text-muted-foreground">
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Server className="h-3.5 w-3.5 text-muted-foreground" />
+        <button
+          type="button"
+          onClick={() => navigate(`/server/${server.id}`)}
+          className="text-[13px] font-semibold hover:underline"
+          title={server.host}
+        >
+          {server.name}
+        </button>
+        <AgentStatusPill online={server.online} installing={server.installing} />
+        {instances !== null && (
+          <span className="text-[11px] text-muted-foreground">{$('instances.group.count', instances.length)}</span>
+        )}
+      </div>
+
+      {!instances ? (
+        <Surface className="py-6 text-center text-[11.5px] text-muted-foreground">
           {error
             ? $('instances.error.load', error)
             : server.installing
               ? $('servers.agent.installing')
               : $('instances.offlineNote')}
-        </div>
-      </section>
-    );
-  }
-  return (
-    <section>
-      <GroupHeader server={server} instanceCount={instances.length} />
-      {instances.length === 0 ? (
-        <div className="mt-2 rounded-xl border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
+        </Surface>
+      ) : instances.length === 0 ? (
+        <Surface className="py-6 text-center text-[11.5px] text-muted-foreground">
           {$('instances.empty.noInstances')}
-        </div>
+        </Surface>
       ) : (
-        <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
           {instances.map((inst) => (
             <InstanceCard
               key={instanceKey(server.id, inst.name)}
               server={server}
               inst={inst}
               players={playersOf(players, inst.name)}
+              onOpen={() => onOpen(server.id, inst.name)}
             />
           ))}
         </div>
@@ -314,101 +470,99 @@ function ServerGroup({ group }: { group: InstanceGroup }) {
   );
 }
 
-function GroupHeader({
-  server,
-  instanceCount,
-}: {
-  server: ServerSummary;
-  /** null = 该组不可达（不显示数量，避免「0 个实例」歧义） */
-  instanceCount: number | null;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Server className="h-3.5 w-3.5 text-muted-foreground" />
-      <button
-        type="button"
-        onClick={() => navigate(`/server/${server.id}`)}
-        className="text-sm font-semibold hover:underline"
-        title={server.host}
-      >
-        {server.name}
-      </button>
-      <AgentBadge online={server.online} installing={server.installing} />
-      {instanceCount !== null && (
-        <span className="text-xs text-muted-foreground">
-          {$('instances.group.count', instanceCount)}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** 实例卡片：只读版——仿 server-detail 的 4 列信息网格，去掉启停按钮（控制仍在详情页） */
+/** 实例卡片：只读版——点整卡进详情页，不在列表里启停 */
 function InstanceCard({
   server,
   inst,
   players,
+  onOpen,
 }: {
   server: ServerSummary;
   inst: Instance;
   players: { online: number | null; max: number; list?: string[] | null; running: boolean; unreachable?: boolean } | null;
+  onOpen: () => void;
 }) {
   const online = players?.online;
+  const memPct = Math.round((inst.memoryMB / 1024 / Math.max(1, server.info?.memTotalMB ?? 0)) * 100);
+  const address = inst.address || `${server.host}:${inst.port}`;
+
   return (
-    <Card
-      className="group cursor-pointer border bg-card transition-colors hover:border-muted-foreground/40"
-      onClick={() => navigate(`/server/${server.id}/instance/${encodeURIComponent(inst.name)}`)}
+    <Surface
+      className="group grid cursor-pointer content-start gap-2.5 transition-colors hover:border-muted-foreground/40"
+      onClick={onOpen}
     >
-      <CardContent className="grid gap-2.5 p-4">
-        <div className="flex items-center gap-2">
-          <b className="truncate text-sm">{inst.name}</b>
-          <span className="ml-auto">
-            <InstanceStatusBadge status={inst.status} />
-          </span>
+      <div className="flex min-w-0 items-start gap-2">
+        <span className="relative grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border border-border/70 bg-muted/40 text-muted-foreground">
+          <Server className="size-3.5" />
+          <img
+            src={instanceIconUrl(server.id, inst.name)}
+            alt=""
+            className="absolute inset-0 size-full object-cover"
+            onError={(e) => {
+              // 没有自定义图标时后端返回 404：退成服务器图标占位，不留破图
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <b className="block truncate text-[13px] font-medium">{inst.name}</b>
+          <p className="truncate text-[11px] text-muted-foreground">{inst.note || server.name}</p>
         </div>
-        {inst.note && <p className="-mt-1 line-clamp-1 text-[11px] text-muted-foreground">{inst.note}</p>}
-        <div className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 text-xs">
-          <span className="text-muted-foreground">{$('server.detail.field.core')}</span>
-          <span className="truncate font-mono">{CORE_LABEL[inst.source ?? 'vanilla'] ?? inst.source ?? '—'}</span>
+        <InstanceStatusPill status={inst.status} />
+      </div>
 
-          <span className="text-muted-foreground">{$('server.detail.field.version')}</span>
-          <span className="truncate font-mono">{inst.version}</span>
-
-          <span className="text-muted-foreground">{$('server.detail.field.memory')}</span>
-          <span className="font-mono">{fmtMB(inst.memoryMB)}</span>
-
-          <span className="text-muted-foreground">{$('server.detail.field.players')}</span>
-          <span
-            className={
-              online
-                ? 'font-mono font-medium text-emerald-600 dark:text-emerald-400'
-                : 'font-mono text-muted-foreground'
-            }
-          >
-            {inst.status === 'running' ? (online ?? '—') : '—'}/{players?.max ?? inst.maxPlayers}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px]">
+        <KV label={$('server.detail.field.core')} mono>
+          {CORE_LABEL[inst.source ?? 'vanilla'] ?? inst.source ?? '—'} {inst.version}
+        </KV>
+        <KV label={$('ui.col.server')}>{server.name}</KV>
+        <KV label={$('ui.col.players')} mono>
+          {inst.status === 'running' ? (online ?? '—') : '—'}/{players?.max ?? inst.maxPlayers}
+        </KV>
+        <KV label={$('ui.col.uptime')} mono>
+          {inst.status === 'starting'
+            ? $('server.detail.starting')
+            : inst.status === 'running'
+              ? fmtUptime(inst.startedAt)
+              : '—'}
+        </KV>
+        <KV label={$('ui.col.memory')}>
+          <span className="inline-flex items-center gap-1.5">
+            <Bar value={memPct} tone={usageTone(memPct)} />
+            <span className="font-mono">{fmtMB(inst.memoryMB)}</span>
           </span>
+        </KV>
+        <KV label={$('ui.col.port')} mono>
+          {inst.port}
+        </KV>
+      </div>
 
-          <span className="text-muted-foreground">{$('server.detail.field.uptime')}</span>
-          <span className="font-mono">
-            {inst.status === 'starting'
-              ? $('server.detail.starting')
-              : inst.status === 'running'
-                ? fmtUptime(inst.startedAt)
-                : '—'}
-          </span>
-
-          <span className="text-muted-foreground">IP</span>
-          <span className="truncate font-mono">
-            {server.host}:{inst.port}
-          </span>
-          {inst.address && (
-            <>
-              <span className="text-muted-foreground">{$('server.detail.field.domain')}</span>
-              <span className="truncate font-mono text-primary">{inst.address}</span>
-            </>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+      <div className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
+        <span className="truncate font-mono">{address}</span>
+        <button
+          type="button"
+          title={$('ui.action.copy')}
+          aria-label={$('ui.action.copy')}
+          onClick={(e) => {
+            e.stopPropagation();
+            void copyText(address);
+          }}
+          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+        >
+          <Copy className="size-3" />
+        </button>
+        <Button
+          size="xs"
+          variant="ghost"
+          className="ml-auto shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+        >
+          {$('ui.action.open')}
+        </Button>
+      </div>
+    </Surface>
   );
 }
