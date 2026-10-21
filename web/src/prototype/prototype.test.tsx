@@ -16,10 +16,16 @@ import { PrototypeApp } from './index';
 describe('/proto 原型', () => {
   const html = renderToStaticMarkup(createElement(PrototypeApp));
 
-  it('渲染出外壳与默认屏（实例总览）', () => {
+  it('渲染出外壳与默认屏（实例卡片）', () => {
     expect(html).toContain('BlockNexus');
-    expect(html).toContain('Agent 0.5.4');
     expect(html).toContain('survival');
+    expect(html).toContain('主服 · 长期档');
+  });
+
+  it('筛选默认隐藏，只在右边缘留一个抽屉入口', () => {
+    expect(html).toContain('筛选');
+    // 抽屉关着的时候，里面才有搜索框、状态筛选这些控件；页面里不该出现第二条搜索框
+    expect(html.match(/placeholder="搜索实例、服务器或地址"/g) ?? []).toHaveLength(0);
   });
 
   it('没有任何未定义的文案键（缺键会原样渲染成 proto.xxx）', () => {

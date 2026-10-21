@@ -6,10 +6,9 @@
 // 而状态信息本来就是常驻的少量文本，放在页头右侧更省纵向空间。
 
 import { createContext, useContext, type ReactNode } from 'react';
-import { ArrowLeft, Boxes, Loader2, Server, Settings } from 'lucide-react';
+import { ArrowLeft, Boxes, Server, Settings } from 'lucide-react';
 import { $ } from '@/lib/i18n';
 import { ExpandableActionBar, type ExpandableActionBarItem } from '@/components/motion/expandable-action-bar';
-import { Dot } from './proto-ui';
 
 export type ProtoScreen =
   | 'instances'
@@ -89,7 +88,7 @@ export function ProtoShell({
   );
 }
 
-/** 页面唯一标题栏：返回 / 标题 / 副标题 / 页面操作 / 常驻状态簇 */
+/** 页面唯一标题栏：返回 / 标题 / 副标题 / 页面操作（右侧不再挂连接状态与版本） */
 export function PageHeader({
   title,
   subtitle,
@@ -101,6 +100,7 @@ export function PageHeader({
   back?: () => void;
   actions?: ReactNode;
 }) {
+  const { screen, onScreen } = useContext(NavContext);
   return (
     <header className="flex h-13 shrink-0 items-center gap-2 border-b px-5">
       {back && (
@@ -119,33 +119,11 @@ export function PageHeader({
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-3">
         {actions}
-        <span className="h-4 w-px bg-border" />
-        <HeaderStatus />
+        {actions && <span className="h-4 w-px bg-border" />}
+        {/* 原型专用切换器；真实应用页头右侧只有页面自己的操作 */}
+        <ProtoScreenSelect screen={screen} onScreen={onScreen} />
       </div>
     </header>
-  );
-}
-
-/** 常驻状态：只放「任何时候都该看得见」的四件事，宽度按内容，不铺满 */
-function HeaderStatus() {
-  const { screen, onScreen } = useContext(NavContext);
-  return (
-    <span className="flex items-center gap-3 text-[11px] text-muted-foreground">
-      <span className="flex items-center gap-1.5">
-        <Dot tone="ok" />
-        {$('proto.shell.sse')}
-      </span>
-      <span className="flex items-center gap-1.5">
-        <Dot tone="ok" />
-        {$('proto.shell.online', 2, 3)}
-      </span>
-      <span className="flex items-center gap-1.5">
-        <Loader2 className="size-3 animate-spin" />
-        {$('proto.shell.task', 62)}
-      </span>
-      <span className="text-amber-700 dark:text-amber-400">{$('proto.shell.update', '0.6.0')}</span>
-      <ProtoScreenSelect screen={screen} onScreen={onScreen} />
-    </span>
   );
 }
 
