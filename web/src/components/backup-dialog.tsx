@@ -23,16 +23,19 @@ interface BackupInfo {
   mtime: number;
 }
 
-export function BackupDialog({
+/**
+ * 备份面板（内联视图）：对话框与实例页「维护」页签共用同一份实现。
+ * 创建/恢复是异步任务，完成后靠 SSE 的 backup.updated 刷新列表。
+ */
+export function BackupPanel({
   server,
   instance,
-  open,
-  onOpenChange,
+  active,
 }: {
   server: ServerSummary;
   instance: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
+  /** 是否可见：不可见时不拉列表（对话框关闭 / 页签切走） */
+  active: boolean;
 }) {
   const { success, error } = useToastHelpers();
   const [backups, setBackups] = useState<BackupInfo[] | null>(null);
@@ -49,7 +52,7 @@ export function BackupDialog({
   }, [base]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     load();
     // 创建/恢复完成事件 → 刷新列表与解除 pending
     return subscribeSSE((e) => {
@@ -66,19 +69,11 @@ export function BackupDialog({
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, server.id, instance, load]);
+  }, [active, server.id, instance, load]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{$('backup.title', instance)}</DialogTitle>
-          <DialogDescription>
-            {$('backup.description')}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="max-h-[45vh] min-h-40 overflow-y-auto rounded-lg border">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="min-h-40 flex-1 overflow-y-auto rounded-lg border">
           {backups === null ? (
             <div className="p-4 text-xs text-muted-foreground">{$('common.loading')}</div>
           ) : backups.length === 0 ? (
@@ -179,6 +174,32 @@ export function BackupDialog({
             load();
           }}
         />
+    </div>
+  );
+}
+
+/** 对话框形态：外壳 + 标题，内容与「维护」页签共用 BackupPanel */
+export function BackupDialog({
+  server,
+  instance,
+  open,
+  onOpenChange,
+}: {
+  server: ServerSummary;
+  instance: string;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{$('backup.title', instance)}</DialogTitle>
+          <DialogDescription>{$('backup.description')}</DialogDescription>
+        </DialogHeader>
+        <div className="flex h-[45vh] min-h-0 flex-col">
+          <BackupPanel server={server} instance={instance} active={open} />
+        </div>
       </DialogContent>
     </Dialog>
   );
