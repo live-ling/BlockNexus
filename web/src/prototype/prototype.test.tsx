@@ -6,6 +6,7 @@ import { PrototypeApp } from './index';
 import { ServersScreen } from './screens/servers';
 import { ServerSettingsScreen } from './screens/server-settings';
 import { PanelSettingsScreen } from './screens/panel-settings';
+import { InstanceScreen } from './screens/instance';
 
 /**
  * `/proto` 布局原型的冒烟测试（本仓库测试环境是 node，没有 jsdom，所以走静态渲染）。
@@ -59,5 +60,16 @@ describe('/proto 原型', () => {
     expect(markup).toContain('重置密码');
     expect(markup).toContain('确认密码');
     expect(markup).toContain('至少 8 位');
+  });
+
+  it('实例工作台：5 个 Tab（终端并入 Dock、自动化+备份合并为维护）', () => {
+    const markup = renderToStaticMarkup(createElement(InstanceScreen, { onScreen: () => {} }));
+    for (const label of ['概览', '玩家', '文件', '配置', '维护']) {
+      expect(markup).toMatch(new RegExp(`>\\s*${label}\\s*<\\/button>`));
+    }
+    expect(markup).not.toMatch(/>\s*终端\s*<\/button>/);
+    expect(markup).not.toMatch(/>\s*自动化\s*<\/button>/);
+    // 概览第一屏先回答「现在有没有事」
+    expect(markup).toContain('查看日志');
   });
 });

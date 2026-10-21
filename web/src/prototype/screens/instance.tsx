@@ -1,5 +1,11 @@
-// 原型屏 3：实例工作台。Tab 切换 + 右栏玩家 + 底部全宽终端 Dock + 控制面板模态。
-// 重点验证两件事：终端是否真的占满整页宽度；控制面板 1160×760 是否不再局促。
+// 原型屏 3：实例工作台（2026-10-21 第五版）。
+//
+// 这一版按讨论做了 P0：
+//   ① Tab 7 → 5：删「终端」（Dock 就是终端），「自动化 + 备份」合并成「维护」；
+//   ② 指标条 5 → 4：最近备份移出，进「最近事件」与「维护」；
+//   ③ 概览改三段：状态摘要（含错误数）→ 最近事件 | 快捷操作 + MOTD；
+//   ④ 主操作随状态翻转：运行中＝停止（主）+ 重启，停止＝启动（主）；
+//   ⑤ 右栏玩家取消，玩家统一进「玩家」Tab，布局不再随 Tab 跳动。
 
 import { useState } from 'react';
 import {
@@ -12,6 +18,7 @@ import {
   FileText,
   FolderTree,
   HardDrive,
+  Play,
   Plus,
   RotateCw,
   Search,
@@ -29,10 +36,10 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { MOCK_BACKUPS, MOCK_EVENTS, MOCK_INSTANCES, MOCK_LOG, MOCK_PLAYERS } from '../mock';
-import { Bar, Dot, Field, FormGrid, INPUT_CLASS, KV, Panel, Pill } from '../proto-ui';
+import { Bar, Dot, Field, FormGrid, INPUT_CLASS, Panel, Pill } from '../proto-ui';
 import { PageHeader, type ProtoScreen } from '../shell';
 
-type Tab = 'overview' | 'terminal' | 'players' | 'files' | 'config' | 'automation' | 'backups';
+type Tab = 'overview' | 'players' | 'files' | 'config' | 'maintenance';
 type CpNav = 'basic' | 'network' | 'players' | 'automation' | 'backups';
 
 const INSTANCE = MOCK_INSTANCES[0];
@@ -40,21 +47,18 @@ const INSTANCE = MOCK_INSTANCES[0];
 export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => void }) {
   const [tab, setTab] = useState<Tab>('overview');
   const [dockOpen, setDockOpen] = useState(false);
-  const [railOpen, setRailOpen] = useState(true);
   const [cpOpen, setCpOpen] = useState(false);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: $('proto.tab.overview') },
-    { id: 'terminal', label: $('proto.tab.terminal') },
     { id: 'players', label: $('proto.tab.players') },
     { id: 'files', label: $('proto.tab.files') },
     { id: 'config', label: $('proto.tab.config') },
-    { id: 'automation', label: $('proto.tab.automation') },
-    { id: 'backups', label: $('proto.tab.backups') },
+    { id: 'maintenance', label: $('proto.tab.maintenance') },
   ];
 
-  // 右栏只在需要「边看日志边看人」的视图里出现；文件/配置等视图让出宽度
-  const showRail = railOpen && (tab === 'overview' || tab === 'terminal');
+  // 主操作随状态翻转：运行中＝停止（主）+ 重启；非运行＝启动（主）
+  const running = INSTANCE.status === 'running';
 
   return (
     <>
@@ -80,15 +84,24 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
         }
         actions={
           <>
-            <Button size="sm" variant="outline">
-              <Square className="size-3.5" />
-              {$('proto.action.stop')}
-            </Button>
-            <Button size="sm" variant="outline">
-              <RotateCw className="size-3.5" />
-              {$('proto.action.restart')}
-            </Button>
-            <Button size="sm" onClick={() => setCpOpen(true)}>
+            {running ? (
+              <>
+                <Button size="sm">
+                  <Square className="size-3.5" />
+                  {$('proto.action.stop')}
+                </Button>
+                <Button size="sm" variant="outline">
+                  <RotateCw className="size-3.5" />
+                  {$('proto.action.restart')}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm">
+                <Play className="size-3.5" />
+                {$('proto.action.start')}
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setCpOpen(true)}>
               <SlidersHorizontal className="size-3.5" />
               {$('proto.action.controlPanel')}
             </Button>
@@ -117,28 +130,14 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
             {t.label}
           </button>
         ))}
-        {tab === 'overview' && (
-          <button
-            type="button"
-            onClick={() => setRailOpen((v) => !v)}
-            className="ml-auto h-8 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-          >
-            {railOpen ? $('proto.instance.playersCollapse') : $('proto.instance.players', 4, 20)}
-          </button>
-        )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-auto">
-          {tab === 'overview' && <OverviewTab onOpenTerminal={() => setDockOpen(true)} />}
-          {tab === 'terminal' && <TerminalTab />}
-          {tab === 'players' && <PlayersTab />}
-          {tab === 'files' && <FilesTab />}
-          {tab === 'config' && <ConfigTab />}
-          {tab === 'automation' && <AutomationTab />}
-          {tab === 'backups' && <BackupsTab />}
-        </div>
-        {showRail && <PlayerRail />}
+      <div className="min-h-0 flex-1 overflow-auto">
+        {tab === 'overview' && <OverviewTab onOpenTerminal={() => setDockOpen(true)} />}
+        {tab === 'players' && <PlayersTab />}
+        {tab === 'files' && <FilesTab />}
+        {tab === 'config' && <ConfigTab />}
+        {tab === 'maintenance' && <MaintenanceTab />}
       </div>
 
       <TerminalDock open={dockOpen} onToggle={() => setDockOpen((v) => !v)} />
@@ -157,7 +156,6 @@ function MetricStrip() {
         <Metric label={$('proto.metric.memory')} value="6.0 / 8G" bar={75} hint={$('proto.metric.memHint')} />
         <Metric label={$('proto.metric.uptime')} value="3h12m" hint={$('proto.metric.uptimeHint')} />
         <Metric label={$('proto.metric.cpu')} value="42%" bar={42} hint={$('proto.metric.cpuHint')} />
-        <Metric label={$('proto.metric.backup')} value="12:00" hint={$('proto.metric.backupHint')} />
       </div>
       <div className="ml-auto flex items-center gap-1.5 px-4">
         <span className="font-mono text-[11px] text-muted-foreground">{INSTANCE.address}</span>
@@ -205,6 +203,32 @@ function Metric({
   );
 }
 
+/** 状态摘要：正常时一行带过，异常时置顶并给「查看日志」——概览先回答「现在有没有事」 */
+function StatusSummary({ onOpenLog }: { onOpenLog: () => void }) {
+  const failed = INSTANCE.status === 'failed';
+  return (
+    <div
+      className={cn(
+        'flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-[11.5px]',
+        failed ? 'border-destructive/40 bg-destructive/5' : 'bg-card',
+      )}
+    >
+      <Dot tone={failed ? 'bad' : 'ok'} />
+      <span className="shrink-0 font-medium">
+        {failed ? $('proto.instance.failedTitle') : $('proto.instance.players', MOCK_PLAYERS.length, 20)}
+      </span>
+      <span className="truncate text-muted-foreground">
+        {failed
+          ? $('proto.instance.failedReason')
+          : `${$('proto.metric.uptime')} 3h12m · ${$('proto.instance.recentErrors', 3)}`}
+      </span>
+      <Button size="xs" variant="outline" className="ml-auto shrink-0" onClick={onOpenLog}>
+        {$('proto.action.viewLog')}
+      </Button>
+    </div>
+  );
+}
+
 function OverviewTab({ onOpenTerminal }: { onOpenTerminal: () => void }) {
   const quick = [
     { icon: Archive, label: $('proto.quick.backup') },
@@ -216,31 +240,14 @@ function OverviewTab({ onOpenTerminal }: { onOpenTerminal: () => void }) {
   ];
 
   return (
-    <div className="grid grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] gap-2 p-2">
-      <div className="grid min-w-0 content-start gap-2">
-        <Panel title={$('proto.instance.runtime')}>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-            <KV label={$('proto.field.core')}>Fabric 1.20.4</KV>
-            <KV label={$('proto.field.memoryLimit')} mono>
-              8192M / host 6.2G
-            </KV>
-            <KV label={$('proto.field.port')} mono>
-              25565
-            </KV>
-            <KV label={$('proto.field.domain')} mono>
-              mc.example.com
-            </KV>
-            <KV label={$('proto.field.publicPort')} mono>
-              30001 (frp)
-            </KV>
-            <KV label={$('proto.field.note')}>主服 · 长期档</KV>
-          </div>
-        </Panel>
+    <div className="grid content-start gap-2 p-2">
+      <StatusSummary onOpenLog={onOpenTerminal} />
 
-        <Panel title={$('proto.instance.events')} flush className="min-h-0">
+      <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-2">
+        <Panel title={$('proto.instance.events')} flush>
           <div className="divide-y divide-border/60">
             {MOCK_EVENTS.map((e) => (
-              <div key={e.time + e.text} className="flex h-6 items-center gap-2 px-3 text-[11.5px]">
+              <div key={e.time + e.text} className="flex h-7 items-center gap-2 px-3 text-[11.5px]">
                 <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{e.time}</span>
                 <Dot tone={e.level === 'error' ? 'bad' : e.level === 'warn' ? 'warn' : 'idle'} />
                 <span className={cn('truncate', e.level === 'error' && 'text-destructive')}>{e.text}</span>
@@ -248,40 +255,40 @@ function OverviewTab({ onOpenTerminal }: { onOpenTerminal: () => void }) {
             ))}
           </div>
         </Panel>
-      </div>
 
-      <div className="grid min-w-0 content-start gap-2">
-        <Panel title={$('proto.instance.quick')}>
-          <div className="grid grid-cols-3 gap-1.5">
-            {quick.map((q) => (
-              <button
-                key={q.label}
-                type="button"
-                onClick={q.onClick}
-                className="flex h-[52px] flex-col items-center justify-center gap-1 rounded-md border bg-background text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
-              >
-                <q.icon className="size-3.5" />
-                <span className="max-w-full truncate px-1">{q.label}</span>
-              </button>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title={$('proto.instance.motd')}>
-          <div className="grid gap-1.5">
-            <p className="rounded-md border bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-relaxed">
-              §a生存服 §7| §f1.20.4 §7| §e欢迎回来
-            </p>
-            <div className="flex gap-1.5">
-              <Button size="xs" variant="outline">
-                {$('proto.quick.config')}
-              </Button>
-              <Button size="xs" variant="ghost">
-                {$('proto.action.copy')}
-              </Button>
+        <div className="grid min-w-0 content-start gap-2">
+          <Panel title={$('proto.instance.quick')}>
+            <div className="grid grid-cols-3 gap-1.5">
+              {quick.map((q) => (
+                <button
+                  key={q.label}
+                  type="button"
+                  onClick={q.onClick}
+                  className="flex h-[52px] flex-col items-center justify-center gap-1 rounded-md border bg-background text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
+                >
+                  <q.icon className="size-3.5" />
+                  <span className="max-w-full truncate px-1">{q.label}</span>
+                </button>
+              ))}
             </div>
-          </div>
-        </Panel>
+          </Panel>
+
+          <Panel title={$('proto.instance.motd')}>
+            <div className="grid gap-1.5">
+              <p className="rounded-md border bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-relaxed">
+                §a生存服 §7| §f1.20.4 §7| §e欢迎回来
+              </p>
+              <div className="flex gap-1.5">
+                <Button size="xs" variant="outline">
+                  {$('proto.quick.config')}
+                </Button>
+                <Button size="xs" variant="ghost">
+                  {$('proto.action.copy')}
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        </div>
       </div>
     </div>
   );
@@ -306,35 +313,26 @@ function LogLines({ lines }: { lines: string[] }) {
   );
 }
 
-function TerminalTab() {
-  return (
-    <div className="flex h-full min-h-0 flex-col p-2">
-      <Panel
-        flush
-        className="min-h-0 flex-1"
-        title={$('proto.dock.title')}
-        actions={
-          <>
-            <Button size="icon-xs" variant="ghost" title={$('proto.dock.search')}>
-              <Search />
-            </Button>
-            <Button size="icon-xs" variant="ghost" title={$('proto.dock.clear')}>
-              <Trash2 />
-            </Button>
-          </>
-        }
-        bodyClassName="min-h-0"
-      >
-        <LogLines lines={MOCK_LOG} />
-      </Panel>
-    </div>
-  );
-}
-
 function PlayersTab() {
   return (
     <div className="p-2">
-      <Panel flush title={$('proto.tab.players')} hint={`${MOCK_PLAYERS.length}/20`}>
+      <Panel
+        flush
+        title={$('proto.tab.players')}
+        hint={`${MOCK_PLAYERS.length}/20`}
+        actions={
+          <>
+            <Button size="xs" variant="outline">
+              <Users className="size-3" />
+              {$('proto.instance.stats')}
+            </Button>
+            <Button size="xs" variant="outline">
+              <ShieldAlert className="size-3" />
+              {$('proto.instance.bans')}
+            </Button>
+          </>
+        }
+      >
         <div className="grid h-8 grid-cols-[minmax(140px,1fr)_90px_minmax(0,1fr)] items-center gap-3 border-b px-4 text-[11px] text-muted-foreground">
           <span>{$('proto.col.players')}</span>
           <span className="text-right">{$('proto.metric.uptime')}</span>
@@ -495,9 +493,10 @@ spawn:
   );
 }
 
-function AutomationTab() {
+/** 维护：自动化与备份合到一起（原来两个 Tab 高度重叠，尤其「定时备份」两边都有） */
+function MaintenanceTab() {
   return (
-    <div className="grid gap-2 p-2">
+    <div className="grid content-start gap-2 p-2">
       <Panel flush title={$('proto.tab.automation')}>
         <div className="flex h-10 items-center gap-3 border-b border-border/50 px-3 text-[12px]">
           <Timer className="size-3.5 text-muted-foreground" />
@@ -532,13 +531,7 @@ function AutomationTab() {
           </span>
         </div>
       </Panel>
-    </div>
-  );
-}
 
-function BackupsTab() {
-  return (
-    <div className="p-2">
       <Panel
         flush
         title={$('proto.tab.backups')}
@@ -579,45 +572,6 @@ function BackupsTab() {
         ))}
       </Panel>
     </div>
-  );
-}
-
-function PlayerRail() {
-  return (
-    <aside className="flex w-60 shrink-0 flex-col border-l">
-      <header className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <span className="text-[12px] font-semibold">{$('proto.instance.players', MOCK_PLAYERS.length, 20)}</span>
-        <Pill tone="ok">
-          <Dot tone="ok" />
-          live
-        </Pill>
-      </header>
-      <div className="min-h-0 flex-1 overflow-auto p-1.5">
-        {MOCK_PLAYERS.map((p) => (
-          <button
-            key={p.name}
-            type="button"
-            className="group flex h-7 w-full items-center gap-2 rounded px-1.5 text-left text-[11.5px] hover:bg-muted/60"
-          >
-            <span className="grid size-5 shrink-0 place-items-center rounded bg-muted font-mono text-[9px] text-muted-foreground">
-              {p.name.slice(0, 2)}
-            </span>
-            <span className="truncate">{p.name}</span>
-            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">{p.minutes}</span>
-          </button>
-        ))}
-      </div>
-      <footer className="flex shrink-0 gap-1 border-t p-1.5">
-        <Button size="xs" variant="outline" className="flex-1">
-          <Users className="size-3" />
-          {$('proto.instance.stats')}
-        </Button>
-        <Button size="xs" variant="outline" className="flex-1">
-          <ShieldAlert className="size-3" />
-          {$('proto.instance.bans')}
-        </Button>
-      </footer>
-    </aside>
   );
 }
 
