@@ -83,3 +83,6 @@
   访问 `http://127.0.0.1:<端口>/proto` 查看，状态栏 `PROTO` 下拉切换屏幕；
 - 下一步仍是 **F1 原语抽取 + 三个弹层试点**，然后按 F2 列表页推进；两个症状（控制面板、终端 Dock）
   的最终形态已在原型里，落地随 F5。
+- ⚠ 外壳高度链的坑：`<main>` 必须 `min-h-0 overflow-hidden`，否则 column flex 的自动最小高度会取内容高度，
+  子页面的 `overflow-auto` 拿不到约束（`scrollHeight === clientHeight`），滚动与锚点跳转全失效。
+  原型支持 `?screen=` 直达某屏；布局回归可用无头 Edge + CDP 量尺寸（见设计稿 §7）。
