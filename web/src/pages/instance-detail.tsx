@@ -16,9 +16,7 @@ import {
   Archive,
   ArrowLeft,
   Ban,
-  CalendarClock,
   ChevronRight,
-  CloudDownload,
   Copy,
   Eraser,
   FolderOpen,
@@ -27,7 +25,6 @@ import {
   LogOut,
   Map as MapIcon,
   MessageSquare,
-  MoreHorizontal,
   MoreVertical,
   Pencil,
   Play,
@@ -38,11 +35,9 @@ import {
   Settings2,
   ShieldCheck,
   ShieldOff,
-  SlidersHorizontal,
   Sparkles,
   Square,
   Terminal,
-  Trash2,
   Users,
   Wrench,
   type LucideIcon,
@@ -63,6 +58,7 @@ import { PlayerStatsDialog } from '@/components/player-stats-dialog';
 import { PropertiesDialog } from '@/components/properties-dialog';
 import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
+import { InstanceControlPanel } from '@/components/instance-control-panel';
 import { InstanceStatusBadge, LatencyBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -161,6 +157,8 @@ export function InstanceDetailPage({
   const [dockOpen, setDockOpen] = useState(false);
   const [dockTall, setDockTall] = useState(false);
   const lastErrCountRef = useRef(0);
+  // 实例控制面板：设置/自动化/备份/危险操作的唯一入口
+  const [panelOpen, setPanelOpen] = useState(false);
   // 玩家统计（在线时长）与聊天记录页签
   const [statsOpen, setStatsOpen] = useState(false);
   const [playerStats, setPlayerStats] = useState<PlayersStats | null>(null);
@@ -371,6 +369,13 @@ export function InstanceDetailPage({
     [serverId, instanceName, success, error],
   );
 
+  /** 控制面板里点具体项：先关面板，再打开原来的对话框（避免两个 Dialog 抢焦点） */
+  const openFromPanel = useCallback((fn: () => void) => {
+    setPanelOpen(false);
+    // 留出对话框关闭动画/焦点归还的时间，避免两个 Dialog 抢焦点
+    window.setTimeout(fn, 160);
+  }, []);
+
   /** 域名连通检测（Agent 侧解析 + TCP 探测）；序号防在途请求把已清空/过期的结果写回 */
   const checkSeq = useRef(0);
   const runDomainCheck = useCallback(() => {
@@ -462,6 +467,10 @@ export function InstanceDetailPage({
 
   // 安装失败：删除时跳过备份（目录里只有半成品，备份无意义且可能卡住）
   const isFailed = instance.status === 'failed';
+  // 控制面板里的「已启用」指示
+  const watchdogOn = !!instance.watchdog?.autoRestart || (instance.watchdog?.schedules ?? []).some((s) => s.enabled);
+  const backupOn =
+    !!instance.backupSchedule?.enabled && (instance.backupSchedule?.schedules ?? []).some((s) => s.enabled);
 
   // ---------- 状态总览条：全部取自既有接口，不编造数值 ----------
   // 在线人数只认运行态：停止后即便列表里还残留着上一次的快照，也不能显示成「在线」
@@ -553,60 +562,15 @@ export function InstanceDetailPage({
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            {/* 更多：设置与低频操作入口 */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-[34px] w-[34px] rounded-lg"
-                  aria-label={$('instanceDetail.more')}
-                  title={$('instanceDetail.more')}
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem onClick={() => setBackupScheduleOpen(true)}>
-                  <CalendarClock className="h-3.5 w-3.5" /> {$('instanceDetail.backupSchedule')}
-                </DropdownMenuItem>
-                {hasConfigDirs && (
-                  <DropdownMenuItem onClick={() => setPlugCfgOpen(true)}>
-                    <SlidersHorizontal className="h-3.5 w-3.5" /> {$('instanceDetail.pluginConfig')}
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem onClick={() => setWatchdogOpen(true)}>
-                  <RotateCw className="h-3.5 w-3.5" /> {$('instanceDetail.watchdog')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setEditOpen(true)}>
-                  <Pencil className="h-3.5 w-3.5" /> {$('instanceDetail.edit')}
-                </DropdownMenuItem>
-                {isFailed && (
-                  <>
-                    <DropdownMenuSeparator />
-                    {instance.source !== 'upload' && (
-                      <DropdownMenuItem
-                        disabled={busy}
-                        title={$('instanceDetail.panelInstall.tooltip')}
-                        onClick={panelInstall}
-                      >
-                        <CloudDownload className="h-3.5 w-3.5" /> {$('instanceDetail.panelInstall')}
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={() => setReinstallOpen(true)}>
-                      <RotateCw className="h-3.5 w-3.5" /> {$('instanceDetail.reinstall')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> {$('instanceDetail.delete')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {/* 控制面板：设置/自动化/备份/危险操作的唯一入口 */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-[34px] px-3 text-xs"
+              onClick={() => setPanelOpen(true)}
+            >
+              <Settings2 className="h-3.5 w-3.5" /> {$('instanceDetail.panel.open')}
+            </Button>
 
             {/* 重启：非运行态禁用（无 hover 反馈），位置恒定 */}
             <Button
@@ -1271,6 +1235,31 @@ export function InstanceDetailPage({
         </div>
       </div>
 
+      <InstanceControlPanel
+        open={panelOpen}
+        onOpenChange={setPanelOpen}
+        server={server}
+        instance={instance}
+        active={active}
+        busy={busy}
+        frpInfo={frpInfo}
+        hasConfigDirs={hasConfigDirs}
+        watchdogOn={watchdogOn}
+        backupOn={backupOn}
+        onCopy={handleCopy}
+        onEdit={() => openFromPanel(() => setEditOpen(true))}
+        onProps={() => openFromPanel(() => setPropsOpen(true))}
+        onPluginConfig={() => openFromPanel(() => setPlugCfgOpen(true))}
+        onFrp={() => openFromPanel(() => setFrpOpen(true))}
+        onWatchdog={() => openFromPanel(() => setWatchdogOpen(true))}
+        onBackupSchedule={() => openFromPanel(() => setBackupScheduleOpen(true))}
+        onBackup={() => openFromPanel(() => setBackupOpen(true))}
+        onStats={() => openFromPanel(() => setStatsOpen(true))}
+        onBans={() => openFromPanel(() => setBansOpen(true))}
+        onReinstall={() => openFromPanel(() => setReinstallOpen(true))}
+        onPanelInstall={() => openFromPanel(() => void panelInstall())}
+        onDelete={() => openFromPanel(() => setDeleteOpen(true))}
+      />
       <PlayerStatsDialog
         serverId={serverId}
         instance={instanceName}
