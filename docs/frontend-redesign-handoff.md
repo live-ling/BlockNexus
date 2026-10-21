@@ -173,11 +173,14 @@ npm --prefix web test          # vitest，当前 193 passed
 | `web/src/components/layout/filter-drawer.tsx` | 右侧贴边竖标签 + 320px 抽屉 |
 | `web/src/components/layout/status.tsx` | InstanceStatusPill / AgentStatusPill（静态 18px 胶囊，替代动效徽章） |
 | `web/src/components/layout/instance-card.tsx` | 实例卡片（总览与服务器详情共用，actions/extra 两个插槽） |
+| `web/src/components/layout/settings-layout.tsx` | 设置页骨架：sticky 左目录 + 单滚动容器 + 分区（`heading:false` 用于「一张卡即一分区」） |
 
 仍然待办：
 
-1. **设置页还没做「左目录 + 右侧全量分区」结构**：现在只换了页头与卡片外观，
-   分区仍是纵向卡片流（见 §2 的「设置页」决策）。
+1. ~~设置页「左目录 + 右侧全量分区」结构~~ **已完成**（`components/layout/settings-layout.tsx`）：
+   面板设置按「访问 / 网络 / 通知 / AI / 版本与更新 / 外观 / 关于」分区，
+   服务器设置按「连接信息 / Agent / Java / 系统信息 / 删除服务器」分区；
+   卡片内部的保存逻辑没动，仍是每卡各存各的（统一成页头一个保存按钮是下一步的事）。
 2. **登录页只做了轻调**（标题 15px、输入 36px、卡片 20rem），背景图与毛玻璃保留。
 3. `about.tsx` 已跟随（PageHeader + 灰底白卡），只是信息展示，没有交互改动。
 4. 原型里的 5 Tab（概览/玩家/文件/配置/维护）仍未落到真实详情页——

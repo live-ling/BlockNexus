@@ -695,6 +695,13 @@ export const en = {
   // ---------- 面板设置 ----------
   'panelSettings.title': 'Panel settings',
   'panelSettings.subtitle': 'Credentials · public domain · SMTP and notifications',
+  'panelSettings.section.access': 'Access',
+  'panelSettings.section.network': 'Network',
+  'panelSettings.section.notify': 'Notifications',
+  'panelSettings.section.ai': 'AI',
+  'panelSettings.section.update': 'Version & updates',
+  'panelSettings.section.appearance': 'Appearance',
+  'panelSettings.section.about': 'About',
   'panelSettings.error.load': 'Failed to load settings',
   'panelSettings.about.title': 'About BlockNexus',
   'panelSettings.about.desc': 'Version, third-party services and open-source dependencies, disclaimer',
