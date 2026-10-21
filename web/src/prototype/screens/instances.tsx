@@ -185,7 +185,7 @@ function Row({ label, children, mono }: { label: ReactNode; children: ReactNode;
   );
 }
 
-/** 卡片右上角：实例图标；实例没有自定义图标时用服务器图标占位 */
+/** 卡片左上角：实例图标；实例没有自定义图标时用服务器图标占位 */
 function InstanceIcon({ icon }: { icon?: string }) {
   return (
     <span className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted/40 text-muted-foreground">
@@ -212,6 +212,7 @@ function InstanceCard({
       className="group grid cursor-pointer content-start gap-2.5 rounded-lg border bg-card p-3.5 text-left transition-colors hover:border-muted-foreground/40"
     >
       <div className="flex min-w-0 items-start gap-2">
+        <InstanceIcon icon={inst.icon} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <b className="truncate text-[13px] font-medium">{inst.name}</b>
@@ -219,7 +220,6 @@ function InstanceCard({
           </div>
           <p className="truncate text-[11px] text-muted-foreground">{inst.note ?? server?.name ?? '—'}</p>
         </div>
-        <InstanceIcon icon={inst.icon} />
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px]">
