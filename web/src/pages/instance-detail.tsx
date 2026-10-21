@@ -1180,6 +1180,8 @@ export function InstanceDetailPage({
           </section>
 
           {/* ---------- 右栏：玩家（self-stretch 让卡片底部与终端对齐） ---------- */}
+          {/* 玩家栏只在运行/启动时占位：停止时右栏空着纯浪费，统计/封禁可从控制面板进 */}
+          {active && (
           <aside className="flex w-[248px] shrink-0 flex-col gap-3 self-stretch">
             <section className="flex min-h-0 flex-1 flex-col rounded-xl border bg-card p-3">
               <div className="flex items-center gap-2">
@@ -1303,6 +1305,7 @@ export function InstanceDetailPage({
               </div>
             </section>
           </aside>
+          )}
         </div>
       </div>
 
