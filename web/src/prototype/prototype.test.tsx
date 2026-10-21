@@ -62,13 +62,17 @@ describe('/proto 原型', () => {
     expect(markup).toContain('至少 8 位');
   });
 
-  it('实例工作台：5 个 Tab（终端并入 Dock、自动化+备份合并为维护）', () => {
+  it('实例工作台：亮色控制台 + 5 个 Tab（终端并入 Dock、自动化+备份合并为维护）', () => {
     const markup = renderToStaticMarkup(createElement(InstanceScreen, { onScreen: () => {} }));
     for (const label of ['概览', '玩家', '文件', '配置', '维护']) {
       expect(markup).toMatch(new RegExp(`>\\s*${label}\\s*<\\/button>`));
     }
     expect(markup).not.toMatch(/>\s*终端\s*<\/button>/);
     expect(markup).not.toMatch(/>\s*自动化\s*<\/button>/);
+    // 驾驶舱四指标、状态卡与单一主操作
+    for (const label of ['当前 TPS', '运行状态与环境', '服务器 MOTD 预览', '停止服务']) {
+      expect(markup).toContain(label);
+    }
     // 概览第一屏先回答「现在有没有事」
     expect(markup).toContain('查看日志');
     // 实例切换入口

@@ -216,12 +216,43 @@ export const MOCK_PLAYERS = [
   { name: 'Notch', minutes: '45m' },
 ];
 
-export const MOCK_EVENTS = [
-  { time: '12:04', level: 'info' as const, text: '备份完成 survival-2026-10-21-1200.tar.gz' },
-  { time: '11:58', level: 'warn' as const, text: "Can't keep up! Is the server overloaded?" },
-  { time: '11:42', level: 'info' as const, text: 'Alex 加入游戏' },
-  { time: '11:30', level: 'info' as const, text: '定时任务「每日备份」已触发' },
-  { time: '10:55', level: 'error' as const, text: 'java.lang.OutOfMemoryError: Java heap space' },
+export type ProtoEventLevel = 'info' | 'warn' | 'error';
+
+export type ProtoEvent = {
+  time: string;
+  level: ProtoEventLevel;
+  /** 中文（zh 界面） */
+  text: string;
+  /** 英文（en 界面）；日志正文属于内容而不是 UI 文案，所以按语言各存一份 */
+  textEn: string;
+};
+
+export const MOCK_EVENTS: ProtoEvent[] = [
+  {
+    time: '12:04',
+    level: 'info',
+    text: '备份完成 survival-2026-10-21-1200.tar.gz',
+    textEn: 'Backup completed survival-2026-10-21-1200.tar.gz',
+  },
+  {
+    time: '11:58',
+    level: 'warn',
+    text: "Can't keep up! Is the server overloaded?",
+    textEn: "Can't keep up! Is the server overloaded?",
+  },
+  { time: '11:42', level: 'info', text: 'Alex 加入游戏', textEn: 'Alex joined the game' },
+  {
+    time: '11:30',
+    level: 'info',
+    text: '定时任务「每日备份」已触发',
+    textEn: 'Scheduled task “Daily backup” triggered',
+  },
+  {
+    time: '10:55',
+    level: 'error',
+    text: 'java.lang.OutOfMemoryError: Java heap space',
+    textEn: 'java.lang.OutOfMemoryError: Java heap space',
+  },
 ];
 
 export const MOCK_LOG = [
