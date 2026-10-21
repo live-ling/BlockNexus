@@ -1321,7 +1321,6 @@ export function InstanceDetailPage({
         onEdit={() => openFromPanel(() => setEditOpen(true))}
         onProps={() => openFromPanel(() => setPropsOpen(true))}
         onPluginConfig={() => openFromPanel(() => setPlugCfgOpen(true))}
-        onFrp={() => openFromPanel(() => setFrpOpen(true))}
         onWatchdog={() => openFromPanel(() => setWatchdogOpen(true))}
         onBackupSchedule={() => openFromPanel(() => setBackupScheduleOpen(true))}
         onBackup={() => openFromPanel(() => setBackupOpen(true))}
@@ -1330,6 +1329,8 @@ export function InstanceDetailPage({
         onReinstall={() => openFromPanel(() => setReinstallOpen(true))}
         onPanelInstall={() => openFromPanel(() => void panelInstall())}
         onDelete={() => openFromPanel(() => setDeleteOpen(true))}
+        onSaved={loadInstance}
+        onFrpChanged={setFrpInfo}
       />
       <PlayerStatsDialog
         serverId={serverId}

@@ -9,10 +9,11 @@ import { useEffect, useState } from 'react';
 import { Ban, CalendarClock, CloudDownload, Copy, FileCog, Pencil, Puzzle, Settings2, ShieldAlert, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { InstanceStatusBadge } from '@/components/status-badge';
 import { $ } from '@/lib/i18n';
-import type { Instance, InstanceFrpInfo, ServerSummary } from '@/lib/api';
-import { fmtMB } from '@/lib/api';
+import { api, errText, saveInstanceFrp, type Instance, type InstanceFrpInfo, type ServerSummary } from '@/lib/api';
+import { useToastHelpers } from '@/lib/toast';
 
 type PanelTab = 'basic' | 'network' | 'players' | 'automation' | 'backup' | 'danger';
 
@@ -31,7 +32,6 @@ export function InstanceControlPanel({
   onEdit,
   onProps,
   onPluginConfig,
-  onFrp,
   onWatchdog,
   onBackupSchedule,
   onBackup,
@@ -40,6 +40,8 @@ export function InstanceControlPanel({
   onReinstall,
   onPanelInstall,
   onDelete,
+  onSaved,
+  onFrpChanged,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -55,7 +57,6 @@ export function InstanceControlPanel({
   onEdit: () => void;
   onProps: () => void;
   onPluginConfig: () => void;
-  onFrp: () => void;
   onWatchdog: () => void;
   onBackupSchedule: () => void;
   onBackup: () => void;
@@ -64,13 +65,86 @@ export function InstanceControlPanel({
   onReinstall: () => void;
   onPanelInstall: () => void;
   onDelete: () => void;
+  onSaved: () => void;
+  onFrpChanged: (info: InstanceFrpInfo) => void;
 }) {
+  const { success, error } = useToastHelpers();
   const [tab, setTab] = useState<PanelTab>('basic');
+  const [mem, setMem] = useState(String(instance.memoryMB));
+  const [note, setNote] = useState(instance.note || '');
+  const [address, setAddress] = useState(instance.address || '');
+  const [frpPort, setFrpPort] = useState(String(frpInfo?.remotePort || instance.port));
+  const [saving, setSaving] = useState(false);
+  const [frpBusy, setFrpBusy] = useState(false);
+
   useEffect(() => {
     if (!open) setTab('basic');
   }, [open]);
 
-  const address = instance.address || `${server.host}:${instance.port}`;
+  // 打开面板或元信息变化时，把表单对齐到最新值（避免保存后仍显示旧值）
+  useEffect(() => {
+    setMem(String(instance.memoryMB));
+    setNote(instance.note || '');
+    setAddress(instance.address || '');
+  }, [instance.memoryMB, instance.note, instance.address, open]);
+  useEffect(() => {
+    setFrpPort(String(frpInfo?.remotePort || instance.port));
+  }, [frpInfo?.remotePort, instance.port, open]);
+
+  const baseUrl = `/servers/${server.id}/instances/${encodeURIComponent(instance.name)}`;
+
+  const saveBasic = async () => {
+    const memoryMB = Number(mem);
+    if (!Number.isFinite(memoryMB) || memoryMB < 256) {
+      error($('instanceDetail.panel.saveFailed'), $('instanceDetail.panel.memoryInvalid'));
+      return;
+    }
+    setSaving(true);
+    try {
+      await api(baseUrl, { method: 'PUT', body: { memoryMB, note, address } });
+      success($('instanceDetail.panel.saved'));
+      onSaved();
+    } catch (e) {
+      error($('instanceDetail.panel.saveFailed'), errText(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveAddress = async () => {
+    setSaving(true);
+    try {
+      await api(baseUrl, { method: 'PUT', body: { address } });
+      success($('instanceDetail.panel.saved'));
+      onSaved();
+    } catch (e) {
+      error($('instanceDetail.panel.saveFailed'), errText(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveFrpPort = async (enabled: boolean) => {
+    setFrpBusy(true);
+    try {
+      const r = await saveInstanceFrp(server.id, instance.name, {
+        enabled,
+        remotePort: enabled ? Number(frpPort) : undefined,
+      });
+      if (r.error) {
+        error($('instanceDetail.frp.title'), r.error);
+      } else {
+        success(enabled ? $('instanceDetail.panel.saved') : $('instanceDetail.frp.unboundToast'));
+      }
+      onFrpChanged(r);
+    } catch (e) {
+      error($('instanceDetail.frp.title'), errText(e));
+    } finally {
+      setFrpBusy(false);
+    }
+  };
+
+  const connectAddress = instance.address || `${server.host}:${instance.port}`;
 
   const tabs: { key: PanelTab; label: string; icon: typeof Settings2 }[] = [
     { key: 'basic', label: $('instanceDetail.panel.tab.basic'), icon: Settings2 },
@@ -92,10 +166,10 @@ export function InstanceControlPanel({
           <DialogDescription className="flex items-center gap-2 text-[11px]">
             <span className="truncate font-mono">{instance.name}</span>
             <span>·</span>
-            <span className="truncate font-mono">{address}</span>
+            <span className="truncate font-mono">{connectAddress}</span>
             <button
               type="button"
-              onClick={() => onCopy(address)}
+              onClick={() => onCopy(connectAddress)}
               title={$('instanceDetail.copied.tooltip')}
               aria-label={$('instanceDetail.copied.tooltip')}
               className="grid h-4 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
@@ -129,17 +203,32 @@ export function InstanceControlPanel({
           <div className="min-w-0 flex-1 p-4">
             {tab === 'basic' && (
               <div className="grid gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">{$('instanceDetail.field.memoryLimit')}</span>
+                    <Input
+                      value={mem}
+                      onChange={(e) => setMem(e.target.value.replace(/[^\d]/g, ''))}
+                      inputMode="numeric"
+                      className="font-mono"
+                      disabled={saving}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">{$('instanceDetail.field.note')}</span>
+                    <Input value={note} onChange={(e) => setNote(e.target.value)} disabled={saving} maxLength={200} />
+                  </label>
+                </div>
                 <InfoRow label={$('instanceDetail.field.core')} value={instance.version} />
-                <InfoRow label={$('instanceDetail.field.memoryLimit')} value={fmtMB(instance.memoryMB)} />
                 <InfoRow label={$('instanceDetail.field.port')} value={String(instance.port)} />
                 <InfoRow
                   label={$('instanceDetail.field.onlineMode')}
                   value={instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')}
                 />
                 <InfoRow label={$('instanceDetail.motd.label')} value={instance.motd || $('instanceDetail.value.unset')} />
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={onEdit}>
-                    <Pencil className="h-3.5 w-3.5" /> {$('instanceDetail.edit')}
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <Button size="sm" disabled={saving} onClick={saveBasic}>
+                    {$('common.save')}
                   </Button>
                   <Button size="sm" variant="outline" onClick={onProps}>
                     <Settings2 className="h-3.5 w-3.5" /> {$('instanceDetail.serverProperties')}
@@ -149,21 +238,66 @@ export function InstanceControlPanel({
                       <Wrench className="h-3.5 w-3.5" /> {$('instanceDetail.pluginConfig')}
                     </Button>
                   )}
+                  <Button size="sm" variant="ghost" onClick={onEdit}>
+                    <Pencil className="h-3.5 w-3.5" /> {$('instanceDetail.edit')}
+                  </Button>
                 </div>
               </div>
             )}
 
             {tab === 'network' && (
               <div className="grid gap-3">
-                <InfoRow label={$('instanceDetail.field.address')} value={address} mono />
+                <label className="grid gap-1 text-xs">
+                  <span className="text-muted-foreground">{$('instanceDetail.field.address')}</span>
+                  <Input
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="mc.example.com"
+                    className="font-mono"
+                    disabled={saving}
+                  />
+                  <span className="text-[11px] leading-relaxed text-muted-foreground">
+                    {$('instanceDetail.panel.domainHint')}
+                  </span>
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={saving || address === (instance.address || '')}
+                    onClick={saveAddress}
+                  >
+                    {$('common.save')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onCopy(connectAddress)}
+                  >
+                    <Copy className="h-3.5 w-3.5" /> {$('instanceDetail.copied.tooltip')}
+                  </Button>
+                </div>
+
                 <InfoRow label={$('instanceDetail.frp.localPort')} value={String(instance.port)} />
+                <label className="grid gap-1 text-xs">
+                  <span className="text-muted-foreground">{$('instanceDetail.frp.remotePort')}</span>
+                  <Input
+                    value={frpPort}
+                    onChange={(e) => setFrpPort(e.target.value.replace(/[^\d]/g, ''))}
+                    inputMode="numeric"
+                    className="font-mono"
+                    disabled={frpBusy || (!!frpInfo && !frpInfo.supported)}
+                  />
+                </label>
                 <InfoRow
                   label={$('instanceDetail.frp.title')}
                   value={
                     frpInfo?.bound
                       ? frpInfo.publicAddress
                       : frpInfo && !frpInfo.supported
-                        ? $('instanceDetail.frp.unsupported')
+                        ? frpInfo.reason === 'sakura'
+                          ? $('instanceDetail.frp.sakura')
+                          : $('instanceDetail.frp.notLocal')
                         : $('instanceDetail.frp.unbound')
                   }
                   mono={!!frpInfo?.bound}
@@ -175,12 +309,20 @@ export function InstanceControlPanel({
                     mono
                   />
                 )}
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" disabled={!!frpInfo && !frpInfo.supported} onClick={onFrp}>
-                    <Terminal className="h-3.5 w-3.5" />
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={frpBusy || !frpInfo?.supported}
+                    onClick={() => saveFrpPort(true)}
+                  >
                     {frpInfo?.bound ? $('instanceDetail.frp.manage') : $('instanceDetail.frp.enable')}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={onEdit}>
+                  {frpInfo?.bound && (
+                    <Button size="sm" variant="outline" disabled={frpBusy} onClick={() => saveFrpPort(false)}>
+                      {$('instanceDetail.frp.unbind')}
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={onEdit}>
                     <Pencil className="h-3.5 w-3.5" /> {$('instanceDetail.edit')}
                   </Button>
                 </div>
