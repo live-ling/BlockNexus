@@ -453,6 +453,7 @@ export const en = {
   'instanceDetail.dock.collapse': 'Collapse',
   'instanceDetail.dock.full': 'Full',
   'instanceDetail.dock.half': 'Half',
+  'instanceDetail.dock.dragHint': 'Drag to resize',
   'instanceDetail.overview.events': 'Recent events',
   'instanceDetail.overview.noEvents': 'Nothing noteworthy yet (errors, joins/leaves, backups and startup will show up here)',
   'instanceDetail.overview.actions': 'Quick actions',

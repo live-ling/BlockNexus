@@ -140,6 +140,8 @@ export function InstanceDetailPage({
   // 终端日志关键字（页签栏右侧搜索框；只影响显示，不动缓冲区）
   const [logQuery, setLogQuery] = useState('');
   const consoleRef = useRef<ConsolePanelHandle>(null);
+  // 中区容器：终端拖拽高度用它算上限，避免把整块内容顶出视口
+  const centerRef = useRef<HTMLElement | null>(null);
   // 玩家快捷管理：待确认的操作（踢出/封禁/封禁 IP 统一走模态框，原因可选）
   const [playerAction, setPlayerAction] = useState<{ name: string; kind: 'kick' | 'ban' | 'ban-ip' } | null>(null);
   // 域名连通检测状态
@@ -154,8 +156,17 @@ export function InstanceDetailPage({
   const [tailLines, setTailLines] = useState<string[]>([]);
   const [overviewCmd, setOverviewCmd] = useState('');
   // 底部终端面板：收起时只占一行，可展开为半屏/全屏
+  // 底部终端面板：高度可拖拽，并记住上次高度（localStorage，按浏览器保存）
   const [dockOpen, setDockOpen] = useState(false);
-  const [dockTall, setDockTall] = useState(false);
+  const [dockHeight, setDockHeight] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('bn:instance-dock-height'));
+      if (Number.isFinite(saved) && saved >= 140) return Math.min(saved, Math.round(window.innerHeight * 0.85));
+    } catch {}
+    return Math.round(window.innerHeight * 0.32);
+  });
+  const dockDragRef = useRef<{ startY: number; startH: number } | null>(null);
+  // 错误自动展开的基准：只对「新增」错误自动弹，避免一直打断
   const lastErrCountRef = useRef(0);
   // 实例控制面板：设置/自动化/备份/危险操作的唯一入口
   const [panelOpen, setPanelOpen] = useState(false);
@@ -267,6 +278,42 @@ export function InstanceDetailPage({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // 记住终端高度（拖动或预设切换后写回；下次打开同一浏览器沿用）
+  useEffect(() => {
+    try {
+      localStorage.setItem('bn:instance-dock-height', String(dockHeight));
+    } catch {}
+  }, [dockHeight]);
+
+  const startDockDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    dockDragRef.current = { startY: e.clientY, startH: dockHeight };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  /** 终端最大高度：不超过中区容器高度减 90px（页签 + 一行内容），也不超过 85vh */
+  const dockMaxHeight = () =>
+    Math.min(
+      Math.round(window.innerHeight * 0.85),
+      Math.max(140, (centerRef.current?.clientHeight || window.innerHeight) - 90),
+    );
+  const moveDockDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dockDragRef.current;
+    if (!d) return;
+    const next = Math.min(
+      Math.max(d.startH + (d.startY - e.clientY), 140),
+      dockMaxHeight(),
+    );
+    setDockHeight(next);
+  };
+  const endDockDrag = () => {
+    dockDragRef.current = null;
+  };
+
+  // 展开时把记住的高度夹回当前窗口能容纳的范围（换显示器/改窗口大小后仍合理）
+  useEffect(() => {
+    if (dockOpen) setDockHeight((h) => Math.min(h, dockMaxHeight()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockOpen]);
 
   // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
   useEffect(() => {
@@ -893,7 +940,10 @@ export function InstanceDetailPage({
           </aside>
 
           {/* ---------- 中区：概览（默认）/ AI / Spark / 地图 / 聊天；终端固定在底部 ---------- */}
-          <section className="flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-xl bg-card">
+          <section
+            ref={centerRef}
+            className="flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-xl bg-card"
+          >
             <div className="flex h-[46px] shrink-0 items-center gap-1 border-b bg-card px-2.5">
               {tabs.map((t) => (
                 <ViewTab
@@ -1040,6 +1090,18 @@ export function InstanceDetailPage({
 
             {/* ---------- 底部终端：收起一行 / 展开半屏或全屏；出现新 ERROR 自动展开 ---------- */}
             <div className="mt-auto flex shrink-0 flex-col border-t border-zinc-800 bg-[#0B0B0F]">
+              {dockOpen && (
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  title={$('instanceDetail.dock.dragHint')}
+                  onPointerDown={startDockDrag}
+                  onPointerMove={moveDockDrag}
+                  onPointerUp={endDockDrag}
+                  onPointerCancel={endDockDrag}
+                  className="h-1 shrink-0 cursor-row-resize bg-zinc-800/70 transition-colors hover:bg-zinc-600"
+                />
+              )}
               <div className="flex h-9 items-center gap-2 px-3 text-[11px] text-zinc-400">
                 <Terminal className="h-3.5 w-3.5 shrink-0" />
                 <span className="shrink-0">{$('instanceDetail.dock.title')}</span>
@@ -1078,10 +1140,19 @@ export function InstanceDetailPage({
                 {dockOpen && (
                   <button
                     type="button"
-                    onClick={() => setDockTall((v) => !v)}
+                    onClick={() => {
+                      const max = dockMaxHeight();
+                      setDockHeight((h) =>
+                        h < max * 0.75
+                          ? Math.min(Math.round(window.innerHeight * 0.7), max)
+                          : Math.min(Math.round(window.innerHeight * 0.35), max),
+                      );
+                    }}
                     className="shrink-0 rounded px-1.5 py-[2px] text-[10.5px] text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
                   >
-                    {dockTall ? $('instanceDetail.dock.half') : $('instanceDetail.dock.full')}
+                    {dockHeight >= window.innerHeight * 0.5
+                      ? $('instanceDetail.dock.half')
+                      : $('instanceDetail.dock.full')}
                   </button>
                 )}
                 <button
@@ -1093,7 +1164,7 @@ export function InstanceDetailPage({
                 </button>
               </div>
               {dockOpen && (
-                <div className={`${dockTall ? 'h-[60vh]' : 'h-[32vh]'} min-h-[160px]`}>
+                <div className="min-h-[140px] shrink-0" style={{ height: dockHeight }}>
                   <ConsolePanel
                     ref={consoleRef}
                     server={server}

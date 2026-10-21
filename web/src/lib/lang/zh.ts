@@ -460,6 +460,7 @@ export const zh = {
   'instanceDetail.dock.collapse': '收起',
   'instanceDetail.dock.full': '全屏',
   'instanceDetail.dock.half': '半屏',
+  'instanceDetail.dock.dragHint': '拖动调整高度',
   'instanceDetail.overview.events': '最近事件',
   'instanceDetail.overview.noEvents': '暂无值得关注的事件（错误、上下线、备份、启动完成会出现在这里）',
   'instanceDetail.overview.actions': '快捷操作',
