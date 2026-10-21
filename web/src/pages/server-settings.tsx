@@ -18,7 +18,6 @@ import { navigate } from '@/lib/router';
 import { useCallback, useEffect, useRef, useSyncExternalStore, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowRight,
   Bot,
   ChevronRight,
@@ -39,9 +38,9 @@ import {
   Trash,
   Trash2,
 } from 'lucide-react';
-import { AgentBadge } from '@/components/status-badge';
+import { PageBody, PageHeader } from '@/components/layout/page-header';
+import { AgentStatusPill } from '@/components/layout/status';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 
 import {
   DropdownMenu,
@@ -303,34 +302,38 @@ export function ServerSettingsPage({
   const outbound = (server.agent.mode || 'outbound') === 'outbound';
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 pb-24 pt-7">
-      {/* 页头 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <h2 className="text-xl font-semibold">{$('serverSettings.title')}</h2>
-        <AgentBadge online={server.online} installing={server.installing} />
-        {server.latency != null && (
-          <span
-            className={`font-mono text-xs ${
-              tone === 'good'
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : tone === 'fair'
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : 'text-destructive'
-            }`}
-          >
-            {$('badge.latency', server.latency === 0 ? '<1' : server.latency)}
+    <div className="flex h-screen flex-col overflow-hidden">
+      <PageHeader
+        back={onBack}
+        title={$('serverSettings.title')}
+        subtitle={
+          <span className="inline-flex min-w-0 items-center gap-2">
+            {/* 服务器名的归属在页面标题上；这里只说「连得怎么样、多久没见了」 */}
+            <AgentStatusPill online={server.online} installing={server.installing} />
+            {server.latency != null && (
+              <span
+                className={`font-mono ${
+                  tone === 'good'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : tone === 'fair'
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-destructive'
+                }`}
+              >
+                {$('badge.latency', server.latency === 0 ? '<1' : server.latency)}
+              </span>
+            )}
+            <span className="truncate">
+              {$('serverSettings.lastSeen', server.name, timeago(server.lastSeen))}
+            </span>
           </span>
-        )}
-      </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">
-        {$('serverSettings.lastSeen', server.name, timeago(server.lastSeen))}
-      </p>
+        }
+      />
 
-      {/* 连接信息 */}
-      <SettingsCard
+      <PageBody>
+        <div className="mx-auto w-full max-w-3xl">
+          {/* 连接信息 */}
+          <SettingsCard
         icon={<Network className="h-3.5 w-3.5" />}
         title={$('serverSettings.connection.title')}
         actions={
@@ -673,25 +676,23 @@ export function ServerSettingsPage({
       </SettingsCard>
 
       {/* 危险操作 */}
-      <Card className="mt-4 border-destructive/40">
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium">{$('serverSettings.danger.title')}</div>
-            <p className="text-[11px] text-muted-foreground">
-              {$('serverSettings.danger.desc')}
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="h-3.5 w-3.5" /> {$('common.delete')}
-          </Button>
-        </CardContent>
-      </Card>
+      <section className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-card p-4 shadow-xs">
+        <AlertTriangle className="size-4 shrink-0 text-destructive" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold">{$('serverSettings.danger.title')}</div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {$('serverSettings.danger.desc')}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => setDeleteOpen(true)}
+        >
+          <Trash2 className="size-3.5" /> {$('common.delete')}
+        </Button>
+      </section>
 
       <EditServerDialog server={server} open={editOpen} onOpenChange={setEditOpen} onSaved={load} />
       <TokenDialog server={server} open={tokenOpen} onOpenChange={setTokenOpen} />
@@ -725,6 +726,8 @@ export function ServerSettingsPage({
           onDeleted();
         }}
       />
+        </div>
+      </PageBody>
     </div>
   );
 }
@@ -1200,16 +1203,16 @@ function SettingsCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="mt-4">
-      <CardContent className="grid gap-3">
+    <section className="mt-3 rounded-xl border border-border/70 bg-card shadow-xs">
+      <div className="flex flex-col gap-3 p-4">
         <div className="flex items-start gap-2.5">
           {icon && (
             <span
               className={cn(
-                'grid h-[26px] w-[26px] shrink-0 place-items-center rounded-md',
+                'grid size-7 shrink-0 place-items-center rounded-lg [&_svg]:size-4',
                 // 运行中才用绿底，其余一律灰底（颜色本身也是一种状态）
                 iconTone === 'ok'
-                  ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                   : 'bg-muted text-muted-foreground',
               )}
             >
@@ -1218,19 +1221,19 @@ function SettingsCard({
           )}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <b className="text-sm font-semibold">{title}</b>
+              <b className="text-[13px] font-semibold">{title}</b>
               {(badge || actions) && (
                 <div className="ml-auto flex shrink-0 items-center gap-2">{badge ?? actions}</div>
               )}
             </div>
             {description && (
-              <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{description}</p>
+              <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{description}</p>
             )}
           </div>
         </div>
         {children}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
