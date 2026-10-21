@@ -13,7 +13,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
-  AlertTriangle,
   Archive,
   ArrowLeft,
   Ban,
@@ -110,7 +109,7 @@ import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
 
 /** 主区视图：终端 / AI 日志分析 / spark 性能 / 地图 / 聊天记录 */
-type MainView = 'console' | 'ai' | 'spark' | 'map' | 'chat';
+type MainView = 'overview' | 'console' | 'ai' | 'spark' | 'map' | 'chat';
 
 export function InstanceDetailPage({
   serverId,
@@ -155,11 +154,14 @@ export function InstanceDetailPage({
   // frp 端口映射（仅本机实例；远程实例的 frpc 不在面板这台机器上）
   const [frpOpen, setFrpOpen] = useState(false);
   const [frpInfo, setFrpInfo] = useState<InstanceFrpInfo | null>(null);
+  // 概览页签：从控制台尾部抓最近事件（错误/加入/离开/备份），以及快捷命令
+  const [overviewLines, setOverviewLines] = useState<string[]>([]);
+  const [overviewCmd, setOverviewCmd] = useState('');
   // 玩家统计（在线时长）与聊天记录页签
   const [statsOpen, setStatsOpen] = useState(false);
   const [playerStats, setPlayerStats] = useState<PlayersStats | null>(null);
-  // 主区视图
-  const [mainView, setMainView] = useState<MainView>('console');
+  // 主区视图：默认「概览」——日常看状态/事件/快捷操作；终端一键切回
+  const [mainView, setMainView] = useState<MainView>('overview');
   const [, forceTick] = useState(0);
 
   const loadServer = useCallback(() => {
@@ -224,6 +226,27 @@ export function InstanceDetailPage({
       alive = false;
     };
   }, [server?.isLocal, serverId, instanceName, frpOpen]);
+
+  // 概览页签：每 5 秒拉一次控制台尾部，提取「最近事件」（错误/上下线/备份完成）
+  useEffect(() => {
+    if (mainView !== 'overview') return;
+    let alive = true;
+    const load = () => {
+      api<{ lines?: string[] }>(
+        `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/console?tail=200`,
+      )
+        .then((r) => {
+          if (alive) setOverviewLines(Array.isArray(r.lines) ? r.lines : []);
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [mainView, serverId, instanceName]);
 
   // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
   useEffect(() => {
@@ -417,13 +440,6 @@ export function InstanceDetailPage({
 
   // 安装失败：删除时跳过备份（目录里只有半成品，备份无意义且可能卡住）
   const isFailed = instance.status === 'failed';
-  // 自动重启是否已启用（在「更多管理」里显示小绿点）
-  const watchdogOn = !!instance.watchdog?.autoRestart || (instance.watchdog?.schedules ?? []).some((s) => s.enabled);
-  // 定时备份是否已启用（同样用小绿点指示）
-  const backupOn =
-    !!instance.backupSchedule?.enabled && (instance.backupSchedule?.schedules ?? []).some((s) => s.enabled);
-  // 「更多管理」里的项数随「插件配置」入口显隐变化
-  const moreCount = 3 + (hasConfigDirs ? 1 : 0);
 
   // ---------- 状态总览条：全部取自既有接口，不编造数值 ----------
   // 在线人数只认运行态：停止后即便列表里还残留着上一次的快照，也不能显示成「在线」
@@ -431,15 +447,24 @@ export function InstanceDetailPage({
   const playersMax = players?.max ?? instance.maxPlayers;
   const hostTotalMB = server.stats?.memTotalMB ?? null;
   const hostUsedMB = server.stats?.memUsedMB ?? null;
-  // 玩家平均单次在线时长 = 累计时长之和 / 会话次数（Agent 侧累计，含当前会话）
+  // 玩家会话时刻：Agent 时间 + 本地已过时间（免受两端时钟差影响）
   const nowMs = playerStats ? playerStats.now + (Date.now() - statsAt) : Date.now();
-  const statList = playerStats?.players ?? [];
-  const sessionCount = statList.reduce((sum, p) => sum + p.sessions, 0);
-  const totalMsSum = statList.reduce((sum, p) => sum + totalWithSession(p, nowMs), 0);
-  const avgSessionMs = sessionCount > 0 ? totalMsSum / sessionCount : null;
   const uptimeText = running && instance.startedAt ? fmtUptime(instance.startedAt) : null;
   // 连接地址：没配域名就用主机地址，两者都是玩家真能用的地址（不显示空值）
   const connectAddress = instance.address || `${server.host}:${instance.port}`;
+
+  // 概览的「最近事件」：从控制台尾部挑出值得看的行（错误、上下线、备份、启动完成）
+  const overviewEvents = overviewLines
+    .filter((l) => /ERROR|Exception|Caused by|joined the game|left the game|Done \(|备份|Backup/i.test(l))
+    .slice(-8)
+    .reverse();
+
+  const sendOverviewCmd = async () => {
+    const cmd = overviewCmd.trim();
+    if (!cmd) return;
+    const ok = await sendPlayerCmd(cmd, $('instanceDetail.overview.cmdSent'));
+    if (ok) setOverviewCmd('');
+  };
   const onlineReason = !active
     ? $('instanceDetail.metric.idle')
     : starting
@@ -453,8 +478,9 @@ export function InstanceDetailPage({
   // 核心：Paper 1.21.4（构建号/完整版本有就带上）
   const coreText = `${CORE_LABEL[instance.source ?? 'vanilla'] ?? instance.source ?? '—'} ${instance.build || instance.version}`;
 
-  // 依赖运行时的页签在停止时收敛为 终端 / 地图 / 聊天
+  // 依赖运行时的页签在停止时收敛为 概览 / 终端 / 地图 / 聊天
   const tabs: { key: MainView; icon: LucideIcon; label: string }[] = [
+    { key: 'overview', icon: Info, label: $('instanceDetail.tab.overview') },
     { key: 'console', icon: Terminal, label: $('instanceDetail.tab.console') },
     ...(active
       ? [{ key: 'ai' as MainView, icon: Sparkles, label: $('instanceDetail.tab.ai') }]
@@ -503,7 +529,7 @@ export function InstanceDetailPage({
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            {/* 更多：与左栏「更多管理」同一批入口，顺手可及 */}
+            {/* 更多：设置与低频操作入口 */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -517,7 +543,6 @@ export function InstanceDetailPage({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
-                {/* 启用状态的绿点只出现在左栏「更多管理」卡里，这里不再重复 */}
                 <DropdownMenuItem onClick={() => setBackupScheduleOpen(true)}>
                   <CalendarClock className="h-3.5 w-3.5" /> {$('instanceDetail.backupSchedule')}
                 </DropdownMenuItem>
@@ -599,8 +624,72 @@ export function InstanceDetailPage({
       </header>
 
       <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col px-4 pt-4">
-        {/* ---------- 状态总览条：5 张等高指标卡（h-[84px] 写死，改大小只动 MetricCard） ---------- */}
-        <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {/* ---------- 地址条：玩家最常复制的信息，常驻一行（比塞进指标卡更省空间） ---------- */}
+        <div className="mb-3 flex h-10 shrink-0 items-center gap-2 rounded-xl border bg-card px-3">
+          <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="shrink-0 text-[11px] text-muted-foreground">{$('instanceDetail.field.address')}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium" title={connectAddress}>
+            {connectAddress}
+          </span>
+          <button
+            type="button"
+            onClick={() => handleCopy(connectAddress)}
+            title={$('instanceDetail.copied.tooltip')}
+            aria-label={$('instanceDetail.copied.tooltip')}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+          {frpInfo?.bound && (
+            <span
+              className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-[1px] text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+              title={frpInfo.publicAddress}
+            >
+              frp
+            </span>
+          )}
+          <div className="ml-1 flex min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+            {!instance.address ? (
+              <span className="truncate">{$('instanceDetail.domain.none')}</span>
+            ) : !active ? (
+              <span className="truncate">{$('instanceDetail.domain.notRunning')}</span>
+            ) : domainCheck?.state === 'checking' ? (
+              <span className="truncate">{$('instanceDetail.domain.checking')}</span>
+            ) : domainCheck?.result?.error ? (
+              <span className="max-w-[220px] truncate text-destructive" title={domainCheck.result.error}>
+                {domainCheck.result.error}
+              </span>
+            ) : domainCheck?.result ? (
+              <>
+                <Dot />
+                <span
+                  className="max-w-[220px] truncate font-mono text-emerald-600 dark:text-emerald-400"
+                  title={`${domainCheck.result.ip}:${domainCheck.result.port}`}
+                >
+                  {domainCheck.result.ip}:{domainCheck.result.port}
+                  {domainCheck.result.latencyMs != null ? ` · TCP ${domainCheck.result.latencyMs}ms` : ''}
+                  {domainCheck.result.srv ? ' · SRV' : ''}
+                </span>
+              </>
+            ) : (
+              <span className="truncate">{$('instanceDetail.domain.unchecked')}</span>
+            )}
+            {instance.address && active && (
+              <button
+                type="button"
+                onClick={runDomainCheck}
+                title={$('instanceDetail.domain.check')}
+                aria-label={$('instanceDetail.domain.recheck')}
+                className="grid h-4 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
+              >
+                <Globe className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ---------- 状态总览条：3 张等高指标卡（玩家 / 内存 / 运行时长） ---------- */}
+        <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
           {/* 在线玩家 */}
           <MetricCard label={$('instanceDetail.field.players')}>
             {playersOnline != null ? (
@@ -675,81 +764,6 @@ export function InstanceDetailPage({
               </MetricHelper>
             )}
           </MetricCard>
-
-          {/* 玩家平均在线时长：替换设计稿里的 CPU 卡（实例级 CPU 无数据源，服务器级 stats 也不含 CPU） */}
-          <MetricCard label={$('instanceDetail.metric.avgSession')}>
-            {avgSessionMs != null ? (
-              <>
-                <MetricValue value={fmtDuration(avgSessionMs)} />
-                <MetricHelper>
-                  <span className="min-w-0 truncate">
-                    {$('instanceDetail.metric.avgSession.hint', statList.length, sessionCount)}
-                  </span>
-                </MetricHelper>
-              </>
-            ) : (
-              <>
-                <MetricValue value="—" />
-                <MetricHelper>
-                  <span className="min-w-0 truncate">{$('instanceDetail.value.nodata')}</span>
-                </MetricHelper>
-              </>
-            )}
-          </MetricCard>
-
-          {/* 连接地址 */}
-          <MetricCard label={$('instanceDetail.field.address')}>
-            <div className="flex h-[26px] shrink-0 items-center gap-1.5 overflow-hidden">
-              <span className="min-w-0 flex-1 truncate font-mono text-[17px] font-semibold leading-none" title={connectAddress}>
-                {connectAddress}
-              </span>
-              <button
-                type="button"
-                onClick={() => handleCopy(connectAddress)}
-                title={$('instanceDetail.copied.tooltip')}
-                aria-label={$('instanceDetail.copied.tooltip')}
-                className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <MetricHelper>
-              {!instance.address ? (
-                <span className="min-w-0 truncate">{$('instanceDetail.domain.none')}</span>
-              ) : !active ? (
-                <span className="min-w-0 truncate">{$('instanceDetail.domain.notRunning')}</span>
-              ) : domainCheck?.state === 'checking' ? (
-                <span className="min-w-0 truncate">{$('instanceDetail.domain.checking')}</span>
-              ) : domainCheck?.result?.error ? (
-                <span className="min-w-0 truncate text-destructive" title={domainCheck.result.error}>
-                  {domainCheck.result.error}
-                </span>
-              ) : domainCheck?.result ? (
-                <>
-                  <Dot />
-                  <span
-                    className="min-w-0 truncate font-mono text-emerald-600 dark:text-emerald-400"
-                    title={`${domainCheck.result.ip}:${domainCheck.result.port}`}
-                  >
-                    {domainCheck.result.ip}:{domainCheck.result.port}
-                    {domainCheck.result.latencyMs != null ? ` · TCP ${domainCheck.result.latencyMs}ms` : ''}
-                    {domainCheck.result.srv ? ' · SRV' : ''}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={runDomainCheck}
-                    title={$('instanceDetail.domain.check')}
-                    aria-label={$('instanceDetail.domain.recheck')}
-                    className="ml-auto grid h-4 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
-                  >
-                    <Globe className="h-3 w-3" />
-                  </button>
-                </>
-              ) : (
-                <span className="min-w-0 truncate">{$('instanceDetail.domain.unchecked')}</span>
-              )}
-            </MetricHelper>
-          </MetricCard>
         </div>
 
         {/* ---------- 三栏：页面本身不滚（见文件头约束），三栏在剩余高度里排布 ----------
@@ -784,6 +798,44 @@ export function InstanceDetailPage({
                 <DetailRow label={$('instanceDetail.field.core')} value={coreText} />
                 <DetailRow label={$('instanceDetail.field.memoryLimit')} value={fmtMB(instance.memoryMB)} />
                 <DetailRow label={$('instanceDetail.field.port')} value={String(instance.port)} />
+
+                {/* frp：并进「概览」一行，避免左栏再堆一张卡；点「设置」开对话框 */}
+                {server.isLocal && (
+                  <div className="flex items-center gap-1.5">
+                    <RadioTower className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="shrink-0 text-[11px] text-muted-foreground">frp</span>
+                    <span
+                      className="ml-auto min-w-0 truncate font-mono text-[11px]"
+                      title={frpInfo?.publicAddress || ''}
+                    >
+                      {frpInfo?.bound
+                        ? frpInfo.publicAddress
+                        : frpInfo && !frpInfo.supported
+                          ? $('instanceDetail.frp.unsupported')
+                          : $('instanceDetail.frp.unbound')}
+                    </span>
+                    {frpInfo?.bound && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(frpInfo.publicAddress)}
+                        title={$('instanceDetail.copied.tooltip')}
+                        aria-label={$('instanceDetail.copied.tooltip')}
+                        className="grid h-4 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-5 shrink-0 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+                      disabled={!!frpInfo && !frpInfo.supported}
+                      onClick={() => setFrpOpen(true)}
+                    >
+                      {$('instanceDetail.frp.set')}
+                    </Button>
+                  </div>
+                )}
 
                 {/* MOTD 放在参数行之后：先配置后描述的阅读顺序 */}
                 <div className="rounded-lg bg-muted p-2.5">
@@ -828,66 +880,7 @@ export function InstanceDetailPage({
               </div>
             </section>
 
-            {/* frp 穿透：本机实例才有（frpc 跑在面板这台机器上）。
-                单独一卡而不是塞进参数行——端口映射是「对外」能力，值得一个显眼入口 */}
-            {server.isLocal && (
-              <section className="rounded-xl border bg-card p-3.5">
-                <div className="flex items-center gap-1.5">
-                  <RadioTower className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <b className="text-[13px] font-semibold">{$('instanceDetail.frp.title')}</b>
-                  <span
-                    className={`ml-auto rounded-full px-2 py-[1px] text-[10.5px] ${
-                      frpInfo?.bound
-                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                        : 'bg-muted text-muted-foreground'
-                    }`}
-                  >
-                    {frpInfo?.bound ? $('instanceDetail.frp.bound') : $('instanceDetail.frp.unbound')}
-                  </span>
-                </div>
-
-                {frpInfo?.bound ? (
-                  <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-2">
-                    <span
-                      className="min-w-0 flex-1 truncate font-mono text-[12px]"
-                      title={frpInfo.publicAddress}
-                    >
-                      {frpInfo.publicAddress}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(frpInfo.publicAddress)}
-                      title={$('instanceDetail.copied.tooltip')}
-                      aria-label={$('instanceDetail.copied.tooltip')}
-                      className="grid h-5 w-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
-                    >
-                      <Copy className="h-3 w-3" />
-                    </button>
-                  </div>
-                ) : (
-                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                    {frpInfo && !frpInfo.supported
-                      ? frpInfo.reason === 'sakura'
-                        ? $('instanceDetail.frp.sakura')
-                        : $('instanceDetail.frp.notLocal')
-                      : $('instanceDetail.frp.unboundHint')}
-                  </p>
-                )}
-
-                <Button
-                  size="sm"
-                  variant={frpInfo?.bound ? 'outline' : 'default'}
-                  className="mt-2 h-7 w-full text-[11px]"
-                  disabled={!!frpInfo && !frpInfo.supported}
-                  onClick={() => setFrpOpen(true)}
-                >
-                  {frpInfo?.bound ? $('instanceDetail.frp.manage') : $('instanceDetail.frp.enable')}
-                </Button>
-              </section>
-            )}
-
-            {/* ② 常用工具：2×2，高度统一（整卡 ~194px → ~156px：格子 h-16→h-12，图标/文字同步收一档；
-                卡片内边距保持 p-3.5 与同列的有边框卡一致，否则标题左边线会和上下卡错开 2px） */}
+            {/* 常用工具：2×2 */}
             <section className="rounded-xl border bg-card p-3.5">
               <div className="flex items-center gap-1.5">
                 <Wrench className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -909,73 +902,17 @@ export function InstanceDetailPage({
               </div>
             </section>
 
-            {/* ③ 更多管理：四项收进这里，绿点也只在这里出现 */}
-            <section className="rounded-lg bg-muted p-3">
-              <div className="flex items-center gap-1.5">
-                <MoreHorizontal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <b className="text-[13px] font-semibold">{$('instanceDetail.more')}</b>
-                <span
-                  className="ml-auto rounded-full bg-background px-2 py-[1px] text-[10.5px] text-muted-foreground"
-                  title={$('instanceDetail.more.items')}
-                >
-                  {$('instanceDetail.more.count', moreCount)}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] leading-4">
-                <MoreChip
-                  label={$('instanceDetail.backupSchedule')}
-                  on={backupOn}
-                  onClick={() => setBackupScheduleOpen(true)}
-                />
-                <span className="text-muted-foreground/50">·</span>
-                {hasConfigDirs && (
-                  <>
-                    <MoreChip
-                      label={$('instanceDetail.pluginConfig')}
-                      onClick={() => setPlugCfgOpen(true)}
-                    />
-                    <span className="text-muted-foreground/50">·</span>
-                  </>
-                )}
-                <MoreChip
-                  label={$('instanceDetail.watchdog')}
-                  on={watchdogOn}
-                  onClick={() => setWatchdogOpen(true)}
-                />
-                <span className="text-muted-foreground/50">·</span>
-                <MoreChip label={$('instanceDetail.edit')} onClick={() => setEditOpen(true)} />
-              </div>
-            </section>
-
-            {/* ④ 危险操作：独立红卡，与日常操作物理隔离 */}
-            <section className="rounded-xl border border-red-200 bg-red-50 p-3.5 dark:border-red-900 dark:bg-red-950/30">
-              <div className="flex items-center gap-1.5">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-700 dark:text-red-400" />
-                <b className="text-[13px] font-semibold text-red-700 dark:text-red-400">
-                  {$('instanceDetail.delete')}
-                </b>
-              </div>
-              <p className="mt-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-400">
-                {$('instanceDetail.delete.cardDesc')}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2.5 w-full border-red-300 bg-card text-red-600 hover:bg-red-100 hover:text-red-600 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/50 dark:hover:text-red-400"
-                onClick={() => setDeleteOpen(true)}
-              >
-                <Trash2 className="h-3.5 w-3.5" /> {$('instanceDetail.delete.action')}
-              </Button>
-            </section>
           </aside>
 
-          {/* ---------- 中区：终端（主角） ---------- */}
+          {/* ---------- 中区：概览（默认）/ 终端（主角） ---------- */}
           <section
             className={`flex min-w-[380px] flex-1 flex-col overflow-hidden rounded-xl ${
-              // 深色只属于终端：AI/地图/聊天面板自带浅色配色，塞进黑底里会变成黑框白卡。
-              // 终端页签撑满整行（整行高度由 h-screen 链定死，不是内容推出来的，所以
-              // 日志区 flex-1 在这里是安全的）。其余面板自带固定高度，保持内容高即可。
-              mainView === 'console' ? 'self-stretch bg-[#0B0B0F]' : 'self-start bg-card'
+              // 深色只属于终端：概览/AI/地图/聊天是浅色卡片
+              mainView === 'console'
+                ? 'self-stretch bg-[#0B0B0F]'
+                : mainView === 'overview'
+                  ? 'self-stretch bg-card'
+                  : 'self-start bg-card'
             }`}
           >
             {/* 页签栏：搜索框与清空只作用于终端。
@@ -1021,6 +958,96 @@ export function InstanceDetailPage({
                   </Button>
                 </div>
               )}
+            </div>
+            {/* 概览：日常状态与快捷操作；终端仍是一等公民，点「打开终端」即切 */}
+            <div
+              className={
+                mainView === 'overview'
+                  ? 'flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3'
+                  : 'hidden'
+              }
+            >
+              {isFailed && instance.error && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] leading-4 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400">
+                  {instance.error}
+                </div>
+              )}
+              <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
+                <section className="flex min-h-[180px] min-w-0 flex-1 flex-col rounded-xl border bg-card p-3">
+                  <div className="flex items-center gap-1.5">
+                    <Activity className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <b className="text-[13px] font-semibold">{$('instanceDetail.overview.events')}</b>
+                  </div>
+                  {overviewEvents.length ? (
+                    <ul className="mt-2 flex-1 space-y-1 overflow-y-auto font-mono text-[11px] leading-4 text-muted-foreground">
+                      {overviewEvents.map((line, i) => (
+                        <li
+                          key={i}
+                          className={`truncate ${
+                            /ERROR|Exception|Caused by/.test(line) ? 'text-destructive' : ''
+                          }`}
+                          title={line}
+                        >
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      {$('instanceDetail.overview.noEvents')}
+                    </p>
+                  )}
+                </section>
+
+                <section className="flex w-full shrink-0 flex-col rounded-xl border bg-card p-3 lg:w-[300px]">
+                  <div className="flex items-center gap-1.5">
+                    <Wrench className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <b className="text-[13px] font-semibold">{$('instanceDetail.overview.actions')}</b>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Button
+                      size="sm"
+                      variant={active ? 'outline' : 'default'}
+                      disabled={busy || (!active && instance.status !== 'stopped')}
+                      onClick={() => void op(active ? 'stop' : 'start')}
+                    >
+                      {active ? $('instanceDetail.op.stop') : $('instanceDetail.op.start')}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setBackupOpen(true)}>
+                      {$('instanceDetail.overview.backupNow')}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setBackupScheduleOpen(true)}>
+                      {$('instanceDetail.overview.schedule')}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setMainView('console')}>
+                      {$('instanceDetail.overview.openConsole')}
+                    </Button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-1.5">
+                    <Input
+                      value={overviewCmd}
+                      onChange={(e) => setOverviewCmd(e.target.value)}
+                      placeholder={$('instanceDetail.overview.cmdPlaceholder')}
+                      disabled={!active}
+                      className="h-8 font-mono text-xs"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                          e.preventDefault();
+                          void sendOverviewCmd();
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      className="h-8 shrink-0"
+                      disabled={!active || !overviewCmd.trim()}
+                      onClick={() => void sendOverviewCmd()}
+                    >
+                      {$('instanceDetail.overview.send')}
+                    </Button>
+                  </div>
+                </section>
+              </div>
             </div>
             {/* 各面板都常驻挂载，只切换可见性：
                 条件渲染会在切走时卸载组件，AI 的对话记录与进行中的流会一起丢失，
@@ -1423,20 +1450,6 @@ function ToolTile({ icon: Icon, label, onClick }: { icon: LucideIcon; label: str
     >
       <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="w-full truncate text-center text-[11px] leading-none">{label}</span>
-    </button>
-  );
-}
-
-/** 更多管理里的一项（可点开对应对话框；启用中的功能带绿点） */
-function MoreChip({ label, on, onClick }: { label: string; on?: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center gap-1 rounded text-muted-foreground transition-colors hover:text-foreground"
-    >
-      {label}
-      {on && <Dot />}
     </button>
   );
 }
