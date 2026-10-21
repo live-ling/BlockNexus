@@ -29,6 +29,8 @@ export type ProtoInstance = {
   note?: string;
   /** 实例自定义图标（data URL 或图片地址）；没有时卡片用服务器图标占位 */
   icon?: string;
+  /** 最近一次成功的备份（人读的时间描述）；没有备份记录时为空 */
+  lastBackup?: string;
   status: ProtoStatus;
   core: string;
   version: string;
@@ -119,6 +121,7 @@ export const MOCK_INSTANCES: ProtoInstance[] = [
     memoryMaxMB: 8192,
     uptime: '3h12m',
     port: 25565,
+    lastBackup: '今天 12:00',
     address: 'mc.example.com:25565',
   },
   {
@@ -133,6 +136,7 @@ export const MOCK_INSTANCES: ProtoInstance[] = [
     memoryMaxMB: 4096,
     uptime: null,
     port: 25566,
+    lastBackup: '10-20 18:00',
   },
   {
     serverId: 's1',
@@ -160,6 +164,7 @@ export const MOCK_INSTANCES: ProtoInstance[] = [
     memoryMaxMB: 8192,
     uptime: '1h05m',
     port: 25568,
+    lastBackup: '今天 06:00',
   },
   {
     serverId: 's2',
@@ -187,6 +192,7 @@ export const MOCK_INSTANCES: ProtoInstance[] = [
     memoryMaxMB: 4096,
     uptime: null,
     port: 25570,
+    lastBackup: '10-18 22:00',
   },
   {
     serverId: 's3',

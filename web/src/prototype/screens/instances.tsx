@@ -176,9 +176,19 @@ export function InstancesScreen({ onScreen }: { onScreen: (s: ProtoScreen) => vo
 }
 
 /** 卡片内的一行：左标签、右值；卡片内不再画分割线，靠行距分组 */
-function Row({ label, children, mono }: { label: ReactNode; children: ReactNode; mono?: boolean }) {
+function Row({
+  label,
+  children,
+  mono,
+  className,
+}: {
+  label: ReactNode;
+  children: ReactNode;
+  mono?: boolean;
+  className?: string;
+}) {
   return (
-    <span className="flex min-w-0 items-baseline justify-between gap-2">
+    <span className={cn('flex min-w-0 items-baseline justify-between gap-2', className)}>
       <span className="shrink-0 text-muted-foreground">{label}</span>
       <span className={cn('truncate', mono && 'font-mono')}>{children}</span>
     </span>
@@ -241,6 +251,9 @@ function InstanceCard({
         </Row>
         <Row label={$('proto.field.port')} mono>
           {inst.port}
+        </Row>
+        <Row label={$('proto.metric.backup')} className="col-span-2">
+          {inst.lastBackup ?? '—'}
         </Row>
       </div>
 
