@@ -8,9 +8,12 @@ import { MOCK_SERVERS, type ProtoServer } from '../mock';
 import { Bar, Dot, EmptyState, Pill, SearchInput, Segmented, Select, Toolbar } from '../proto-ui';
 import { PageHeader, type ProtoScreen } from '../shell';
 
-// 窄窗口隐藏「系统」「延迟」两列（同上：少给信息，而不是把列压成窄条）
+// 列宽按内容给，只有名字拉伸。
+// 资源列只放 CPU / MEM 两行（每项 = 标签 + 细条 + 数字，约 110px）；磁盘占用移到服务器详情，
+// 三组挤一行会把这一列撑到 190px 以上，正是「横向组件过宽」的来源。
+// 基准窗口 1000×720：这里只画 6 列；窗口宽过 1120 才补上「系统」「延迟」。
 const COLS =
-  'grid grid-cols-[16px_minmax(140px,1.2fr)_minmax(100px,0.85fr)_minmax(170px,1.3fr)_52px_80px] items-center gap-2 px-3 xl:grid-cols-[16px_minmax(150px,1.2fr)_minmax(104px,0.85fr)_minmax(140px,1fr)_minmax(196px,1.3fr)_60px_52px_80px] xl:gap-3';
+  'grid grid-cols-[16px_minmax(160px,1.4fr)_118px_140px_56px_112px] items-center gap-3 px-4 min-[1120px]:grid-cols-[16px_minmax(170px,1.4fr)_118px_130px_140px_64px_56px_112px]';
 
 type Sort = 'manual' | 'latency' | 'cpu';
 
@@ -46,7 +49,7 @@ export function ServersScreen({ onScreen }: { onScreen: (s: ProtoScreen) => void
       />
 
       <Toolbar>
-        <SearchInput className="w-60" placeholder={$('proto.search.servers')} value={q} onChange={setQ} />
+        <SearchInput className="w-56" placeholder={$('proto.search.servers')} value={q} onChange={setQ} />
         <Segmented<'all' | 'online' | 'offline'>
           value={online}
           onChange={setOnline}
@@ -81,18 +84,18 @@ export function ServersScreen({ onScreen }: { onScreen: (s: ProtoScreen) => void
         </div>
       </Toolbar>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto pb-20">
         {list.length === 0 ? (
           <EmptyState title={$('proto.empty.noServers')} hint={$('proto.empty.noServersHint')} />
         ) : view === 'table' ? (
           <div>
-            <div className={cn(COLS, 'sticky top-0 z-10 h-7 border-b bg-background/95 text-[11px] text-muted-foreground backdrop-blur')}>
+            <div className={cn(COLS, 'sticky top-0 z-10 h-8 border-b bg-background/95 text-[11px] text-muted-foreground backdrop-blur')}>
               <span />
               <span>{$('proto.col.server')}</span>
               <span>{$('proto.col.agent')}</span>
-              <span className="hidden xl:block">{$('proto.col.system')}</span>
+              <span className="hidden min-[1120px]:block">{$('proto.col.system')}</span>
               <span>{$('proto.col.resources')}</span>
-              <span className="hidden text-right xl:block">{$('proto.col.latency')}</span>
+              <span className="hidden text-right min-[1120px]:block">{$('proto.col.latency')}</span>
               <span className="text-right">{$('proto.col.instances')}</span>
               <span className="text-right">{$('proto.col.actions')}</span>
             </div>
@@ -154,7 +157,7 @@ function ServerRow({ server, onOpen }: { server: ProtoServer; onOpen: () => void
   return (
     <div
       onClick={onOpen}
-      className={cn(COLS, 'group h-[34px] cursor-pointer border-b border-border/50 text-[12px] hover:bg-muted/40')}
+      className={cn(COLS, 'group h-10 cursor-pointer border-b border-border/50 text-[12px] hover:bg-muted/40')}
     >
       <span className="flex justify-center text-muted-foreground/50">
         <GripVertical className="size-3.5" />
@@ -168,27 +171,22 @@ function ServerRow({ server, onOpen }: { server: ProtoServer; onOpen: () => void
       <span>
         <AgentPill server={server} />
       </span>
-      <span className="hidden truncate text-[11.5px] text-muted-foreground xl:block">{server.system}</span>
-      <span className="flex items-center gap-3 text-[10.5px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="text-[9.5px] tracking-wide">CPU</span>
-          <Bar value={server.cpu} tone={server.cpu > 85 ? 'bad' : server.cpu > 65 ? 'warn' : 'ok'} className="w-7" />
-          <span className="w-6 text-right font-mono tabular-nums text-foreground">{server.cpu}%</span>
+      <span className="hidden truncate text-[11.5px] text-muted-foreground min-[1120px]:block">{server.system}</span>
+      <span className="grid gap-1 text-[10.5px] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="w-7 shrink-0 text-[9.5px] tracking-wide">CPU</span>
+          <Bar value={server.cpu} tone={server.cpu > 85 ? 'bad' : server.cpu > 65 ? 'warn' : 'ok'} className="w-9" />
+          <span className="w-7 text-right font-mono tabular-nums text-foreground">{server.cpu}%</span>
         </span>
-        <span className="flex items-center gap-1">
-          <span className="text-[9.5px] tracking-wide">MEM</span>
-          <Bar value={memPct} tone={memPct > 85 ? 'bad' : memPct > 65 ? 'warn' : 'ok'} className="w-7" />
+        <span className="flex items-center gap-1.5">
+          <span className="w-7 shrink-0 text-[9.5px] tracking-wide">MEM</span>
+          <Bar value={memPct} tone={memPct > 85 ? 'bad' : memPct > 65 ? 'warn' : 'ok'} className="w-9" />
           <span className="font-mono tabular-nums text-foreground">
             {server.memUsed}/{server.memTotal}G
           </span>
         </span>
-        <span className="flex items-center gap-1">
-          <span className="text-[9.5px] tracking-wide">DISK</span>
-          <Bar value={server.disk} tone={server.disk > 90 ? 'bad' : server.disk > 75 ? 'warn' : 'ok'} className="w-7" />
-          <span className="w-6 text-right font-mono tabular-nums text-foreground">{server.disk}%</span>
-        </span>
       </span>
-      <span className="hidden text-right font-mono text-[11px] tabular-nums text-muted-foreground xl:block">
+      <span className="hidden text-right font-mono text-[11px] tabular-nums text-muted-foreground min-[1120px]:block">
         {server.latency === null ? '—' : `${server.latency}ms`}
       </span>
       <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">{server.instances}</span>

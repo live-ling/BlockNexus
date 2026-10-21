@@ -20,10 +20,10 @@ const STATUS: Record<
   failed: { tone: 'bad', key: 'proto.status.failed' },
 };
 
-// 列模板：窄窗口（<1280）先隐藏「核心」「地址」两列，避免 960×640 的外壳最小尺寸出现横向滚动。
-// 这与设计稿「横屏优先、窄屏做减法」一致——不是把列压窄，而是少给信息。
+// 列模板：列宽按内容给（服务器 120 / 玩家 60 / 内存 124 / 时长 84 / 操作 84），实例名吸收剩余宽度。
+// 基准窗口 1000×720 下是 7 列；宽过 1120 才补「核心」「地址」两列——少给信息而不是把列压成窄条。
 const COLS =
-  'grid grid-cols-[14px_minmax(120px,1.3fr)_minmax(88px,0.8fr)_60px_104px_76px_80px] items-center gap-2 px-3 xl:grid-cols-[14px_minmax(140px,1.3fr)_minmax(96px,0.8fr)_minmax(118px,1fr)_64px_112px_76px_minmax(112px,0.9fr)_84px] xl:gap-3';
+  'grid grid-cols-[14px_minmax(160px,1.6fr)_120px_60px_124px_84px_84px] items-center gap-3 px-4 min-[1120px]:grid-cols-[14px_minmax(180px,1.6fr)_130px_110px_60px_124px_84px_150px_84px]';
 
 type Filter = 'all' | 'running' | 'stopped' | 'failed';
 type Sort = 'name' | 'status' | 'players' | 'memory';
@@ -81,7 +81,7 @@ export function InstancesScreen({ onScreen }: { onScreen: (s: ProtoScreen) => vo
       />
 
       <Toolbar>
-        <SearchInput className="w-64" placeholder={$('proto.search.instances')} value={q} onChange={setQ} />
+        <SearchInput className="w-56" placeholder={$('proto.search.instances')} value={q} onChange={setQ} />
         <Segmented<Filter>
           value={filter}
           onChange={setFilter}
@@ -127,7 +127,7 @@ export function InstancesScreen({ onScreen }: { onScreen: (s: ProtoScreen) => vo
         </div>
       </Toolbar>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto pb-20">
         {groups.length === 0 ? (
           <EmptyState
             title={$('proto.empty.noMatch')}
@@ -151,17 +151,17 @@ export function InstancesScreen({ onScreen }: { onScreen: (s: ProtoScreen) => vo
             <div
               className={cn(
                 COLS,
-                'sticky top-0 z-10 h-7 border-b bg-background/95 text-[11px] text-muted-foreground backdrop-blur',
+                'sticky top-0 z-10 h-8 border-b bg-background/95 text-[11px] text-muted-foreground backdrop-blur',
               )}
             >
               <span />
               <span>{$('proto.col.instance')}</span>
               <span>{$('proto.col.server')}</span>
-              <span className="hidden xl:block">{$('proto.col.core')}</span>
+              <span className="hidden min-[1120px]:block">{$('proto.col.core')}</span>
               <span className="text-right">{$('proto.col.players')}</span>
               <span>{$('proto.col.memory')}</span>
               <span className="text-right">{$('proto.col.uptime')}</span>
-              <span className="hidden xl:block">{$('proto.col.address')}</span>
+              <span className="hidden min-[1120px]:block">{$('proto.col.address')}</span>
               <span className="text-right">{$('proto.col.actions')}</span>
             </div>
 
@@ -181,7 +181,7 @@ export function InstancesScreen({ onScreen }: { onScreen: (s: ProtoScreen) => vo
                         />
                       ))
                     ) : (
-                      <div className="flex h-[30px] items-center gap-2 border-b border-border/50 px-3 pl-9 text-[11.5px] text-muted-foreground">
+                      <div className="flex h-9 items-center gap-2 border-b border-border/50 px-4 pl-10 text-[11.5px] text-muted-foreground">
                         <Dot tone="idle" />
                         {server.installing !== undefined
                           ? $('proto.group.installing', server.installing)
@@ -193,7 +193,7 @@ export function InstancesScreen({ onScreen }: { onScreen: (s: ProtoScreen) => vo
             })}
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-2 p-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-3 p-4 pb-20">
             {groups.flatMap(({ list }) =>
               list.map((inst) => (
                 <InstanceCard
@@ -223,7 +223,7 @@ function GroupRow({
   onToggle: () => void;
 }) {
   return (
-    <div className="flex h-8 items-center gap-2 border-b border-border/60 bg-muted/30 px-3">
+    <div className="flex h-9 items-center gap-2 border-b border-border/60 bg-muted/30 px-4">
       <button
         type="button"
         onClick={onToggle}
@@ -256,7 +256,7 @@ function InstanceRow({
   return (
     <div
       onClick={onOpen}
-      className={cn(COLS, 'group h-[30px] cursor-pointer border-b border-border/50 text-[12px] hover:bg-muted/40')}
+      className={cn(COLS, 'group h-9 cursor-pointer border-b border-border/50 text-[12px] hover:bg-muted/40')}
     >
       <span className="flex justify-center">
         <Dot tone={st.tone} />
@@ -266,7 +266,7 @@ function InstanceRow({
         {inst.note && <span className="truncate text-[10.5px] text-muted-foreground/80">{inst.note}</span>}
       </span>
       <span className="truncate text-[11.5px] text-muted-foreground">{server.name}</span>
-      <span className="hidden truncate font-mono text-[11px] text-muted-foreground xl:block">
+      <span className="hidden truncate font-mono text-[11px] text-muted-foreground min-[1120px]:block">
         {inst.core} {inst.version}
       </span>
       <span
@@ -286,7 +286,7 @@ function InstanceRow({
       <span className="text-right font-mono text-[11px] tabular-nums text-muted-foreground">
         {inst.status === 'starting' ? $('proto.status.starting') : (inst.uptime ?? '—')}
       </span>
-      <span className="hidden min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground xl:flex">
+      <span className="hidden min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground min-[1120px]:flex">
         <span className="truncate">{inst.address ?? `:${inst.port}`}</span>
         <button
           type="button"

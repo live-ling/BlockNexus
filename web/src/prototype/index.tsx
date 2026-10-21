@@ -18,7 +18,7 @@ export function PrototypeApp() {
   if (screen === 'login') return <LoginScreen onScreen={setScreen} />;
 
   return (
-    <ProtoShell screen={screen} onScreen={setScreen}>
+    <ProtoShell screen={screen} onScreen={setScreen} hideNav={screen === 'instance'}>
       {screen === 'instances' && <InstancesScreen onScreen={setScreen} />}
       {screen === 'servers' && <ServersScreen onScreen={setScreen} />}
       {screen === 'server-settings' && <ServerSettingsScreen onScreen={setScreen} />}

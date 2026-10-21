@@ -94,7 +94,7 @@ export function Panel({
   return (
     <section className={cn('flex min-h-0 flex-col rounded-lg border bg-card', className)}>
       {(title || actions) && (
-        <header className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
           {title && <h2 className="text-[12px] font-semibold">{title}</h2>}
           {hint && <span className="truncate text-[11px] text-muted-foreground">{hint}</span>}
           {actions && <div className="ml-auto flex items-center gap-1">{actions}</div>}
@@ -151,13 +151,14 @@ export function Field({
 }
 
 export function FormGrid({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('grid max-w-[860px] grid-cols-2 gap-x-4 gap-y-3', className)}>{children}</div>;
+  // 620：两列各约 300，够放地址/路径，又不会让「内存 8192」这种短值输入框拉到 700 宽
+  return <div className={cn('grid max-w-[620px] grid-cols-2 gap-x-4 gap-y-3.5', className)}>{children}</div>;
 }
 
-/** 列表工具栏：40px，搜索占剩余宽度，筛选/视图靠右 */
+/** 列表工具栏：44px，搜索按内容宽度（不再拉满），筛选/视图靠右 */
 export function Toolbar({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('flex h-10 shrink-0 items-center gap-2 border-b px-3', className)}>{children}</div>
+    <div className={cn('flex h-11 shrink-0 items-center gap-2 border-b px-4', className)}>{children}</div>
   );
 }
 
@@ -174,12 +175,12 @@ export function SearchInput({
 }) {
   return (
     <div className={cn('relative min-w-0', className)}>
-      <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="h-7 w-full rounded-md border border-border bg-background pr-2 pl-7 text-[12px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+        className="h-8 w-full rounded-md border border-border bg-background pr-2 pl-8 text-[12px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
       />
     </div>
   );
@@ -204,7 +205,7 @@ export function Select({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={cn(
-        'h-7 shrink-0 rounded-md border border-border bg-background px-1.5 text-[11.5px] outline-none focus-visible:border-ring',
+        'h-8 shrink-0 rounded-md border border-border bg-background px-2 text-[11.5px] outline-none focus-visible:border-ring',
         className,
       )}
     >
@@ -230,14 +231,14 @@ export function Segmented<T extends string>({
   className?: string;
 }) {
   return (
-    <div className={cn('inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md border bg-muted/40 p-0.5', className)}>
+    <div className={cn('inline-flex h-8 shrink-0 items-center gap-0.5 rounded-md border bg-muted/40 p-0.5', className)}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           onClick={() => onChange(o.value)}
           className={cn(
-            'inline-flex h-6 items-center gap-1 rounded px-2 text-[11.5px] whitespace-nowrap transition-colors',
+            'inline-flex h-7 items-center gap-1 rounded px-2.5 text-[11.5px] whitespace-nowrap transition-colors',
             o.value === value
               ? 'bg-background font-medium text-foreground shadow-xs'
               : 'text-muted-foreground hover:text-foreground',
@@ -272,11 +273,11 @@ export function EmptyState({
   );
 }
 
-/** 表单输入的原型样式：8px 高密度（真实接入用 ui/input + size 变体） */
+/** 表单输入的原型样式：36px 高（与放开的行高一致） */
 export const INPUT_CLASS =
-  'h-8 w-full min-w-0 rounded-md border border-border bg-background px-2 text-[12px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring disabled:opacity-60';
+  'h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-[12.5px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring disabled:opacity-60';
 
-/** 设置页粘性保存条 */
+/** 设置页粘性保存条：按钮与表单同宽（620），不再贴着窗口右边飞出去 */
 export function SaveBar({
   label,
   onDiscard,
@@ -291,23 +292,25 @@ export function SaveBar({
   saveLabel: string;
 }) {
   return (
-    <div className="flex h-12 shrink-0 items-center gap-3 border-t bg-muted/30 px-4">
-      <span className="text-[11.5px] text-amber-700 dark:text-amber-400">{label}</span>
-      <div className="ml-auto flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onDiscard}
-          className="h-7 rounded-md border border-border bg-background px-2.5 text-[12px] hover:bg-muted"
-        >
-          {discardLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onSave}
-          className="h-7 rounded-md bg-primary px-2.5 text-[12px] font-medium text-primary-foreground hover:bg-primary/85"
-        >
-          {saveLabel}
-        </button>
+    <div className="flex h-12 shrink-0 border-t bg-muted/30 px-5">
+      <div className="flex w-full max-w-[620px] items-center gap-3">
+        <span className="text-[11.5px] text-amber-700 dark:text-amber-400">{label}</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onDiscard}
+            className="h-8 rounded-md border border-border bg-background px-2.5 text-[12px] hover:bg-muted"
+          >
+            {discardLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            className="h-8 rounded-md bg-primary px-2.5 text-[12px] font-medium text-primary-foreground hover:bg-primary/85"
+          >
+            {saveLabel}
+          </button>
+        </div>
       </div>
     </div>
   );

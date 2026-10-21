@@ -40,7 +40,7 @@ export function PanelSettingsScreen() {
               type="button"
               onClick={() => setNav(it.id)}
               className={cn(
-                'flex h-8 items-center rounded-md px-2 text-[12px] transition-colors',
+                'flex h-9 items-center rounded-md px-2 text-[12px] transition-colors',
                 nav === it.id
                   ? 'bg-muted font-medium text-foreground'
                   : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
@@ -51,10 +51,10 @@ export function PanelSettingsScreen() {
           ))}
         </nav>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="flex min-w-0 flex-1 flex-col pb-16">
+          <div className="min-h-0 flex-1 overflow-auto p-5">
             {nav === 'access' && (
-              <Panel title={$('proto.ps.access')}>
+              <Panel className="max-w-[620px]" title={$('proto.ps.access')}>
                 <FormGrid>
                   <Field label={$('proto.field.loginEnabled')} hint={$('proto.ps.accessHint')}>
                     <div className="flex h-8 items-center">
@@ -86,7 +86,7 @@ export function PanelSettingsScreen() {
             )}
 
             {nav === 'network' && (
-              <div className="grid max-w-[860px] gap-2">
+              <div className="grid max-w-[620px] gap-2">
                 <Panel title={$('proto.field.panelDomain')}>
                   <FormGrid>
                     <Field label={$('proto.field.panelDomain')} wide hint="https://mc.example.com">
@@ -120,7 +120,7 @@ export function PanelSettingsScreen() {
             )}
 
             {nav === 'notify' && (
-              <div className="grid max-w-[860px] gap-2">
+              <div className="grid max-w-[620px] gap-2">
                 <Panel title={$('proto.ps.notify')}>
                   <FormGrid>
                     <Field label={$('proto.field.smtpHost')}>
@@ -149,7 +149,7 @@ export function PanelSettingsScreen() {
             )}
 
             {nav === 'ai' && (
-              <Panel title={$('proto.ps.ai')}>
+              <Panel className="max-w-[620px]" title={$('proto.ps.ai')}>
                 <FormGrid>
                   <Field label={$('proto.field.aiProvider')}>
                     <Select
@@ -174,7 +174,7 @@ export function PanelSettingsScreen() {
             )}
 
             {nav === 'update' && (
-              <div className="grid max-w-[860px] gap-2">
+              <div className="grid max-w-[620px] gap-2">
                 <Panel
                   title={$('proto.ps.update')}
                   actions={
@@ -211,7 +211,7 @@ export function PanelSettingsScreen() {
             )}
 
             {nav === 'appearance' && (
-              <Panel title={$('proto.ps.appearance')}>
+              <Panel className="max-w-[620px]" title={$('proto.ps.appearance')}>
                 <FormGrid>
                   <Field label={$('proto.field.language')}>
                     <Segmented<'zh' | 'en'>
@@ -252,7 +252,7 @@ export function PanelSettingsScreen() {
             )}
 
             {nav === 'about' && (
-              <Panel title={$('proto.ps.about')}>
+              <Panel className="max-w-[620px]" title={$('proto.ps.about')}>
                 <div className="grid max-w-[560px] gap-1.5">
                   <KV label={$('proto.about.version')} mono>
                     BlockNexus 0.6.0

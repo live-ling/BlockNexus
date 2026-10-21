@@ -1,6 +1,6 @@
 // 原型屏 4：服务器设置。左侧子导航 + 分区表单 + 底部粘性保存条。
 import { useState } from 'react';
-import { Plug, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
+import { Plug, RefreshCw, Trash2 } from 'lucide-react';
 import { cn } from 'cn';
 import { $ } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Field, FormGrid, INPUT_CLASS, KV, Panel, SaveBar, Select } from '../proto-ui';
 import { PageHeader, type ProtoScreen } from '../shell';
 
-type Nav = 'conn' | 'agent' | 'runtime' | 'danger';
+type Nav = 'conn' | 'agent' | 'runtime';
 
 export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) => void }) {
   const [nav, setNav] = useState<Nav>('conn');
@@ -17,7 +17,6 @@ export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) 
     { id: 'conn', label: $('proto.ss.conn') },
     { id: 'agent', label: 'Agent' },
     { id: 'runtime', label: $('proto.ss.runtime') },
-    { id: 'danger', label: $('proto.ss.danger') },
   ];
 
   return (
@@ -36,12 +35,10 @@ export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) 
               type="button"
               onClick={() => setNav(it.id)}
               className={cn(
-                'flex h-8 items-center rounded-md px-2 text-[12px] transition-colors',
+                'flex h-9 items-center rounded-md px-2 text-[12px] transition-colors',
                 nav === it.id
                   ? 'bg-muted font-medium text-foreground'
                   : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                it.id === 'danger' && nav === it.id && 'bg-destructive/10 text-destructive',
-                it.id === 'danger' && nav !== it.id && 'text-destructive/80 hover:text-destructive',
               )}
             >
               {it.label}
@@ -49,10 +46,10 @@ export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) 
           ))}
         </nav>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="flex min-w-0 flex-1 flex-col pb-16">
+          <div className="min-h-0 flex-1 overflow-auto p-5">
             {nav === 'conn' && (
-              <Panel title={$('proto.ss.conn')} hint={$('proto.ss.connHint')}>
+              <Panel className="max-w-[620px]" title={$('proto.ss.conn')} hint={$('proto.ss.connHint')}>
                 <FormGrid>
                   <Field label={$('proto.field.sshHost')}>
                     <input className={INPUT_CLASS} defaultValue="192.168.1.10" />
@@ -89,7 +86,7 @@ export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) 
             )}
 
             {nav === 'agent' && (
-              <div className="grid max-w-[860px] gap-2">
+              <div className="grid max-w-[620px] gap-2">
                 <Panel
                   title="Agent"
                   actions={
@@ -127,7 +124,7 @@ export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) 
             )}
 
             {nav === 'runtime' && (
-              <Panel title={$('proto.ss.runtime')}>
+              <Panel className="max-w-[620px]" title={$('proto.ss.runtime')}>
                 <FormGrid>
                   <Field label={$('proto.field.workDir')} wide hint="/opt/blocknexus/instances">
                     <input className={INPUT_CLASS} defaultValue="/opt/blocknexus/instances" />
@@ -156,20 +153,14 @@ export function ServerSettingsScreen({ onScreen }: { onScreen: (s: ProtoScreen) 
               </Panel>
             )}
 
-            {nav === 'danger' && (
-              <Panel title={$('proto.ss.danger')}>
-                <div className="flex items-start gap-2">
-                  <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-                  <div className="grid gap-2">
-                    <p className="text-[11.5px] text-muted-foreground">{$('proto.danger.hint')}</p>
-                    <Button size="sm" variant="destructive" className="w-fit">
-                      <Trash2 className="size-3.5" />
-                      {$('proto.btn.deleteServer')}
-                    </Button>
-                  </div>
-                </div>
-              </Panel>
-            )}
+            {/* 删除就是删除：不做「危险」页，放在设置页末尾，跟其他行一样的普通排版 */}
+            <div className="mt-5 flex max-w-[620px] items-center gap-3 rounded-lg border p-3.5">
+              <p className="min-w-0 text-[11.5px] text-muted-foreground">{$('proto.server.deleteHint')}</p>
+              <Button size="sm" variant="destructive" className="ml-auto shrink-0">
+                <Trash2 className="size-3.5" />
+                {$('proto.btn.deleteServer')}
+              </Button>
+            </div>
           </div>
 
           <SaveBar

@@ -33,7 +33,7 @@ import { Bar, Dot, Field, FormGrid, INPUT_CLASS, KV, Panel, Pill } from '../prot
 import { PageHeader, type ProtoScreen } from '../shell';
 
 type Tab = 'overview' | 'terminal' | 'players' | 'files' | 'config' | 'automation' | 'backups';
-type CpNav = 'basic' | 'network' | 'players' | 'automation' | 'backups' | 'danger';
+type CpNav = 'basic' | 'network' | 'players' | 'automation' | 'backups';
 
 const INSTANCE = MOCK_INSTANCES[0];
 
@@ -70,12 +70,6 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
               <Dot tone="ok" />
               {$('proto.status.running')}
             </Pill>
-            <span className="hidden items-center gap-1 font-mono text-[11px] text-muted-foreground lg:flex">
-              {INSTANCE.address}
-              <button type="button" title={$('proto.action.copy')} className="hover:text-foreground">
-                <Copy className="size-3" />
-              </button>
-            </span>
           </span>
         }
         subtitle={
@@ -107,14 +101,14 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
 
       <MetricStrip />
 
-      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-2">
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b px-4">
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
             className={cn(
-              'h-7 rounded-md px-2.5 text-[12px] whitespace-nowrap transition-colors',
+              'h-8 rounded-md px-2.5 text-[12px] whitespace-nowrap transition-colors',
               tab === t.id
                 ? 'bg-muted font-medium text-foreground'
                 : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
@@ -127,7 +121,7 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
           <button
             type="button"
             onClick={() => setRailOpen((v) => !v)}
-            className="ml-auto h-7 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            className="ml-auto h-8 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
           >
             {railOpen ? $('proto.instance.playersCollapse') : $('proto.instance.players', 4, 20)}
           </button>
@@ -155,13 +149,26 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
 }
 
 function MetricStrip() {
+  // 指标按内容定宽（118/项），不铺满整行；右侧留给连接地址，宽窗口也不会把数字拉开成孤岛
   return (
-    <div className="flex h-16 shrink-0 items-stretch divide-x border-b">
-      <Metric label={$('proto.metric.players')} value="4 / 20" hint="—" tone="ok" />
-      <Metric label={$('proto.metric.memory')} value="6.0 / 8G" bar={75} hint={$('proto.metric.memHint')} />
-      <Metric label={$('proto.metric.uptime')} value="3h12m" hint={$('proto.metric.uptimeHint')} />
-      <Metric label={$('proto.metric.cpu')} value="42%" bar={42} hint={$('proto.metric.cpuHint')} />
-      <Metric label={$('proto.metric.backup')} value="12:00" hint={$('proto.metric.backupHint')} />
+    <div className="flex h-16 shrink-0 items-stretch border-b">
+      <div className="flex items-stretch divide-x">
+        <Metric label={$('proto.metric.players')} value="4 / 20" hint="—" tone="ok" />
+        <Metric label={$('proto.metric.memory')} value="6.0 / 8G" bar={75} hint={$('proto.metric.memHint')} />
+        <Metric label={$('proto.metric.uptime')} value="3h12m" hint={$('proto.metric.uptimeHint')} />
+        <Metric label={$('proto.metric.cpu')} value="42%" bar={42} hint={$('proto.metric.cpuHint')} />
+        <Metric label={$('proto.metric.backup')} value="12:00" hint={$('proto.metric.backupHint')} />
+      </div>
+      <div className="ml-auto flex items-center gap-1.5 px-4">
+        <span className="font-mono text-[11px] text-muted-foreground">{INSTANCE.address}</span>
+        <button
+          type="button"
+          title={$('proto.action.copy')}
+          className="text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Copy className="size-3" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -180,7 +187,7 @@ function Metric({
   tone?: 'ok';
 }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 px-4">
+    <div className="flex w-[118px] shrink-0 flex-col justify-center gap-0.5 px-4">
       <span className="text-[10.5px] text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center gap-2">
         <span
@@ -328,7 +335,7 @@ function PlayersTab() {
   return (
     <div className="p-2">
       <Panel flush title={$('proto.tab.players')} hint={`${MOCK_PLAYERS.length}/20`}>
-        <div className="grid h-7 grid-cols-[minmax(140px,1fr)_90px_minmax(0,1fr)] items-center gap-3 border-b px-3 text-[11px] text-muted-foreground">
+        <div className="grid h-8 grid-cols-[minmax(140px,1fr)_90px_minmax(0,1fr)] items-center gap-3 border-b px-4 text-[11px] text-muted-foreground">
           <span>{$('proto.col.players')}</span>
           <span className="text-right">{$('proto.metric.uptime')}</span>
           <span className="text-right">{$('proto.col.actions')}</span>
@@ -336,7 +343,7 @@ function PlayersTab() {
         {MOCK_PLAYERS.map((p) => (
           <div
             key={p.name}
-            className="grid h-8 grid-cols-[minmax(140px,1fr)_90px_minmax(0,1fr)] items-center gap-3 border-b border-border/50 px-3 text-[12px]"
+            className="grid h-9 grid-cols-[minmax(140px,1fr)_90px_minmax(0,1fr)] items-center gap-3 border-b border-border/50 px-4 text-[12px]"
           >
             <span className="flex min-w-0 items-center gap-2">
               <span className="grid size-5 place-items-center rounded bg-muted font-mono text-[9px] text-muted-foreground">
@@ -542,7 +549,7 @@ function BackupsTab() {
           </Button>
         }
       >
-        <div className="grid h-7 grid-cols-[minmax(220px,1fr)_80px_100px_70px_110px] items-center gap-3 border-b px-3 text-[11px] text-muted-foreground">
+        <div className="grid h-8 grid-cols-[minmax(220px,1fr)_80px_100px_70px_110px] items-center gap-3 border-b px-4 text-[11px] text-muted-foreground">
           <span>{$('proto.tab.backups')}</span>
           <span className="text-right">{$('proto.col.size')}</span>
           <span className="text-right">{$('proto.col.time')}</span>
@@ -552,7 +559,7 @@ function BackupsTab() {
         {MOCK_BACKUPS.map((b) => (
           <div
             key={b.name}
-            className="grid h-8 grid-cols-[minmax(220px,1fr)_80px_100px_70px_110px] items-center gap-3 border-b border-border/50 px-3 text-[11.5px]"
+            className="grid h-9 grid-cols-[minmax(220px,1fr)_80px_100px_70px_110px] items-center gap-3 border-b border-border/50 px-4 text-[11.5px]"
           >
             <span className="truncate font-mono">{b.name}</span>
             <span className="text-right font-mono text-muted-foreground">{b.size}</span>
@@ -619,7 +626,7 @@ function TerminalDock({ open, onToggle }: { open: boolean; onToggle: () => void 
     <div className="shrink-0 border-t bg-zinc-950 text-zinc-200">
       {open && (
         <>
-          <div className="flex h-8 items-center gap-2 border-b border-zinc-800 px-3 text-[11px] text-zinc-400">
+          <div className="flex h-9 items-center gap-2 border-b border-zinc-800 px-4 text-[11px] text-zinc-400">
             <span>{$('proto.dock.title')}</span>
             <Pill tone="bad">{$('proto.dock.errors', 3)}</Pill>
             <span className="ml-auto flex items-center gap-1">
@@ -656,7 +663,7 @@ function TerminalDock({ open, onToggle }: { open: boolean; onToggle: () => void 
         </>
       )}
 
-      <div className="flex h-8 items-center gap-2 px-3">
+      <div className="flex h-9 items-center gap-2 px-4">
         <button
           type="button"
           onClick={onToggle}
@@ -690,7 +697,6 @@ function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
     { id: 'players', label: $('proto.cp.players'), icon: Users },
     { id: 'automation', label: $('proto.cp.automation'), icon: Timer },
     { id: 'backups', label: $('proto.cp.backups'), icon: Archive },
-    { id: 'danger', label: $('proto.cp.danger'), icon: ShieldAlert },
   ];
 
   return (
@@ -717,12 +723,10 @@ function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                 type="button"
                 onClick={() => setNav(it.id)}
                 className={cn(
-                  'flex h-8 items-center gap-2 rounded-md px-2 text-[12px] transition-colors',
+                  'flex h-9 items-center gap-2 rounded-md px-2 text-[12px] transition-colors',
                   nav === it.id
                     ? 'bg-muted font-medium text-foreground'
                     : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                  it.id === 'danger' && nav === it.id && 'bg-destructive/10 text-destructive',
-                  it.id === 'danger' && nav !== it.id && 'text-destructive/80 hover:text-destructive',
                 )}
               >
                 <it.icon className="size-3.5" />
@@ -764,6 +768,22 @@ function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                   <Button size="xs" variant="ghost">
                     {$('proto.cp.fullEdit')}
                   </Button>
+                </div>
+                {/* 破坏性动作就放在它所属的地方，不另开「危险」页：删除就是删除 */}
+                <div className="grid max-w-[620px] gap-1.5 border-t pt-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button size="xs" variant="outline">
+                      {$('proto.cp.installPanel')}
+                    </Button>
+                    <Button size="xs" variant="outline">
+                      {$('proto.cp.reinstall')}
+                    </Button>
+                    <Button size="xs" variant="destructive">
+                      <Trash2 className="size-3" />
+                      {$('proto.cp.delete')}
+                    </Button>
+                  </div>
+                  <p className="text-[10.5px] text-muted-foreground">{$('proto.cp.dangerHint')}</p>
                 </div>
               </div>
             )}
@@ -830,26 +850,6 @@ function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {nav === 'danger' && (
-              <div className="grid max-w-[640px] gap-2">
-                <p className="text-[11.5px] text-muted-foreground">{$('proto.cp.dangerHint')}</p>
-                {[
-                  { label: $('proto.cp.installPanel'), icon: HardDrive },
-                  { label: $('proto.cp.reinstall'), icon: RotateCw },
-                  { label: $('proto.cp.delete'), icon: Trash2 },
-                ].map((a) => (
-                  <button
-                    key={a.label}
-                    type="button"
-                    className="flex h-9 items-center gap-2 rounded-md border border-destructive/40 px-3 text-[12px] text-destructive hover:bg-destructive/10"
-                  >
-                    <a.icon className="size-3.5" />
-                    {a.label}
-                  </button>
-                ))}
               </div>
             )}
           </div>
