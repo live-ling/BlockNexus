@@ -47,6 +47,9 @@ export function PanelSettingsScreen() {
               </Button>
             </div>
           </Field>
+          <Field label={$('proto.field.passwordConfirm')} hint={$('proto.ps.passwordHint')}>
+            <input className={INPUT_CLASS} defaultValue="••••••••" disabled />
+          </Field>
         </FormGrid>
       ),
     },

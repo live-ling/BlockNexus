@@ -57,5 +57,7 @@ describe('/proto 原型', () => {
     expect(markup).toContain('用户名');
     expect(markup).toContain('admin');
     expect(markup).toContain('重置密码');
+    expect(markup).toContain('确认密码');
+    expect(markup).toContain('至少 8 位');
   });
 });

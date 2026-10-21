@@ -163,16 +163,13 @@ function ServerCard({ server, onOpen }: { server: ProtoServer; onOpen: () => voi
       className="group grid cursor-pointer content-start gap-3 rounded-lg border bg-card p-3.5 text-left transition-colors hover:border-muted-foreground/40"
     >
       <div className="flex min-w-0 items-start gap-2">
-        <Dot tone={server.online ? 'ok' : 'idle'} className="mt-[7px]" />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <b className="truncate text-[13px] font-medium">{server.name}</b>
-            <AgentPill server={server} />
-          </div>
+          <b className="block truncate text-[13px] font-medium">{server.name}</b>
           <p className="truncate font-mono text-[10.5px] text-muted-foreground">
             {server.host} · {server.system}
           </p>
         </div>
+        <AgentPill server={server} />
       </div>
 
       <div className="grid gap-1.5">
