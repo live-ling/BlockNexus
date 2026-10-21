@@ -143,18 +143,13 @@ function AgentPill({ server }: { server: ProtoServer }) {
   );
 }
 
-function Resource({ label, value, pct, tone }: { label: string; value: string; pct: number; tone?: 'ok' }) {
+/** 资源一行：标签 + 细条 + 数值，三行垂直排列（并排时三个进度条都太短，看不出差别） */
+function Resource({ label, value, pct }: { label: string; value: string; pct: number }) {
   return (
-    <div className="grid gap-1">
-      <span className="flex items-baseline gap-1 text-[10px] text-muted-foreground">
-        <span className="tracking-wide">{label}</span>
-        <span className="ml-auto font-mono tabular-nums text-foreground">{value}</span>
-      </span>
-      <Bar
-        value={pct}
-        tone={pct > 90 ? 'bad' : pct > 75 ? 'warn' : (tone ?? 'ok')}
-        className="w-full"
-      />
+    <div className="flex items-center gap-2 text-[10.5px]">
+      <span className="w-8 shrink-0 tracking-wide text-muted-foreground">{label}</span>
+      <Bar value={pct} tone={pct > 90 ? 'bad' : pct > 75 ? 'warn' : 'ok'} className="min-w-0 flex-1" />
+      <span className="w-14 shrink-0 text-right font-mono tabular-nums text-foreground">{value}</span>
     </div>
   );
 }
@@ -180,7 +175,7 @@ function ServerCard({ server, onOpen }: { server: ProtoServer; onOpen: () => voi
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid gap-1.5">
         <Resource label="CPU" value={`${server.cpu}%`} pct={server.cpu} />
         <Resource label="MEM" value={`${server.memUsed}/${server.memTotal}G`} pct={memPct} />
         <Resource label="DISK" value={`${server.disk}%`} pct={server.disk} />

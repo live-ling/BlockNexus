@@ -36,10 +36,13 @@ export function PanelSettingsScreen() {
               ]}
             />
           </Field>
-          <Field label={$('proto.field.password')} wide>
-            <div className="flex gap-1.5">
+          <Field label={$('proto.field.username')}>
+            <input className={INPUT_CLASS} defaultValue="admin" autoComplete="username" />
+          </Field>
+          <Field label={$('proto.field.password')}>
+            <div className="flex min-w-0 gap-1.5">
               <input className={INPUT_CLASS} defaultValue="••••••••" disabled />
-              <Button size="sm" variant="outline">
+              <Button size="sm" variant="outline" className="shrink-0">
                 {$('proto.btn.resetPassword')}
               </Button>
             </div>

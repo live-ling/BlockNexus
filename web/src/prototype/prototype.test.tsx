@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { PrototypeApp } from './index';
 import { ServersScreen } from './screens/servers';
 import { ServerSettingsScreen } from './screens/server-settings';
+import { PanelSettingsScreen } from './screens/panel-settings';
 
 /**
  * `/proto` 布局原型的冒烟测试（本仓库测试环境是 node，没有 jsdom，所以走静态渲染）。
@@ -49,5 +50,12 @@ describe('/proto 原型', () => {
     for (const label of ['连接', '运行时', '删除服务器']) expect(markup).toContain(label);
     expect(markup).toContain('撤销');
     expect(markup).toContain('保存');
+  });
+
+  it('面板设置的访问分区保留用户名与密码', () => {
+    const markup = renderToStaticMarkup(createElement(PanelSettingsScreen));
+    expect(markup).toContain('用户名');
+    expect(markup).toContain('admin');
+    expect(markup).toContain('重置密码');
   });
 });
