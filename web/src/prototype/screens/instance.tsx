@@ -10,6 +10,7 @@
 import { useState } from 'react';
 import {
   Archive,
+  Check,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -33,21 +34,55 @@ import {
 import { cn } from 'cn';
 import { $ } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Dialog, DialogClose, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
-import { MOCK_BACKUPS, MOCK_EVENTS, MOCK_INSTANCES, MOCK_LOG, MOCK_PLAYERS } from '../mock';
-import { Bar, Dot, Field, FormGrid, INPUT_CLASS, Panel, Pill } from '../proto-ui';
+import {
+  MOCK_BACKUPS,
+  MOCK_EVENTS,
+  MOCK_INSTANCES,
+  MOCK_LOG,
+  MOCK_PLAYERS,
+  MOCK_SERVERS,
+  type ProtoInstance,
+  type ProtoStatus,
+} from '../mock';
+import { Bar, Dot, EmptyState, Field, FormGrid, INPUT_CLASS, Panel, Pill } from '../proto-ui';
 import { PageHeader, type ProtoScreen } from '../shell';
 
 type Tab = 'overview' | 'players' | 'files' | 'config' | 'maintenance';
 type CpNav = 'basic' | 'network' | 'players' | 'automation' | 'backups';
 
-const INSTANCE = MOCK_INSTANCES[0];
+/** 状态 → 徽章颜色与文案（切换实例后头部/摘要都要跟着变） */
+const STATUS: Record<
+  ProtoStatus,
+  { tone: 'ok' | 'warn' | 'bad' | 'idle'; key: 'proto.status.running' | 'proto.status.stopped' | 'proto.status.starting' | 'proto.status.failed' }
+> = {
+  running: { tone: 'ok', key: 'proto.status.running' },
+  stopped: { tone: 'idle', key: 'proto.status.stopped' },
+  starting: { tone: 'warn', key: 'proto.status.starting' },
+  failed: { tone: 'bad', key: 'proto.status.failed' },
+};
+
+const DEFAULT_INSTANCE = MOCK_INSTANCES[0];
 
 export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => void }) {
+  const [instName, setInstName] = useState(DEFAULT_INSTANCE.name);
   const [tab, setTab] = useState<Tab>('overview');
   const [dockOpen, setDockOpen] = useState(false);
   const [cpOpen, setCpOpen] = useState(false);
+
+  const inst = MOCK_INSTANCES.find((i) => i.name === instName && i.serverId === DEFAULT_INSTANCE.serverId) ?? DEFAULT_INSTANCE;
+  const server = MOCK_SERVERS.find((s) => s.id === inst.serverId);
+  const siblings = MOCK_INSTANCES.filter((i) => i.serverId === inst.serverId);
+  const st = STATUS[inst.status];
+  const running = inst.status === 'running';
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: $('proto.tab.overview') },
@@ -57,30 +92,52 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
     { id: 'maintenance', label: $('proto.tab.maintenance') },
   ];
 
-  // 主操作随状态翻转：运行中＝停止（主）+ 重启；非运行＝启动（主）
-  const running = INSTANCE.status === 'running';
-
   return (
     <>
       <PageHeader
         back={() => onScreen('instances')}
         title={
           <span className="flex min-w-0 items-center gap-2">
-            <span className="grid size-7 shrink-0 place-items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <Archive className="size-3.5" />
+            <span className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted/40 text-muted-foreground">
+              {inst.icon ? <img src={inst.icon} alt="" className="size-full object-cover" /> : <Archive className="size-3.5" />}
             </span>
-            <h1 className="truncate text-[13px] font-semibold">{INSTANCE.name}</h1>
-            <Pill tone="ok">
-              <Dot tone="ok" />
-              {$('proto.status.running')}
+            <h1 className="truncate text-[13px] font-semibold">{inst.name}</h1>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  title={$('proto.instance.switch')}
+                  className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <ChevronDown className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                  {server?.name ?? '—'}
+                </DropdownMenuLabel>
+                {siblings.map((s) => (
+                  <DropdownMenuItem key={s.name} onSelect={() => setInstName(s.name)}>
+                    <Dot tone={STATUS[s.status].tone} />
+                    <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                    {s.name === inst.name && <Check className="size-3.5" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Pill tone={st.tone}>
+              <Dot tone={st.tone} />
+              {$(st.key)}
             </Pill>
           </span>
         }
         subtitle={
-          <span className="hidden items-center gap-1 lg:flex">
-            <span className="text-muted-foreground/60">/</span>
-            survival-main
-          </span>
+          server && (
+            <span className="hidden items-center gap-1 lg:flex">
+              <span className="text-muted-foreground/60">/</span>
+              {server.name}
+            </span>
+          )
         }
         actions={
           <>
@@ -112,7 +169,7 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
         }
       />
 
-      <MetricStrip />
+      <MetricStrip inst={inst} />
 
       <div className="flex h-10 shrink-0 items-center gap-0.5 border-b px-4">
         {tabs.map((t) => (
@@ -133,8 +190,8 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === 'overview' && <OverviewTab onOpenTerminal={() => setDockOpen(true)} />}
-        {tab === 'players' && <PlayersTab />}
+        {tab === 'overview' && <OverviewTab inst={inst} onOpenTerminal={() => setDockOpen(true)} />}
+        {tab === 'players' && <PlayersTab inst={inst} />}
         {tab === 'files' && <FilesTab />}
         {tab === 'config' && <ConfigTab />}
         {tab === 'maintenance' && <MaintenanceTab />}
@@ -142,23 +199,29 @@ export function InstanceScreen({ onScreen }: { onScreen: (s: ProtoScreen) => voi
 
       <TerminalDock open={dockOpen} onToggle={() => setDockOpen((v) => !v)} />
 
-      <ControlPanel open={cpOpen} onOpenChange={setCpOpen} />
+      <ControlPanel open={cpOpen} onOpenChange={setCpOpen} inst={inst} serverName={server?.name ?? '—'} />
     </>
   );
 }
 
-function MetricStrip() {
+function MetricStrip({ inst }: { inst: ProtoInstance }) {
   // 指标按内容定宽（118/项），不铺满整行；右侧留给连接地址，宽窗口也不会把数字拉开成孤岛
+  const memPct = Math.round((inst.memoryMB / Math.max(1, inst.memoryMaxMB)) * 100);
   return (
     <div className="flex h-16 shrink-0 items-stretch border-b">
       <div className="flex items-stretch divide-x">
-        <Metric label={$('proto.metric.players')} value="4 / 20" hint="—" tone="ok" />
-        <Metric label={$('proto.metric.memory')} value="6.0 / 8G" bar={75} hint={$('proto.metric.memHint')} />
-        <Metric label={$('proto.metric.uptime')} value="3h12m" hint={$('proto.metric.uptimeHint')} />
+        <Metric label={$('proto.metric.players')} value={`${inst.players ?? 0} / ${inst.maxPlayers}`} hint="—" tone="ok" />
+        <Metric
+          label={$('proto.metric.memory')}
+          value={`${(inst.memoryMB / 1024).toFixed(1)} / ${inst.memoryMaxMB / 1024}G`}
+          bar={memPct}
+          hint={$('proto.metric.memHint')}
+        />
+        <Metric label={$('proto.metric.uptime')} value={inst.uptime ?? '—'} hint={$('proto.metric.uptimeHint')} />
         <Metric label={$('proto.metric.cpu')} value="42%" bar={42} hint={$('proto.metric.cpuHint')} />
       </div>
       <div className="ml-auto flex items-center gap-1.5 px-4">
-        <span className="font-mono text-[11px] text-muted-foreground">{INSTANCE.address}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{inst.address ?? `:${inst.port}`}</span>
         <button
           type="button"
           title={$('proto.action.copy')}
@@ -204,8 +267,15 @@ function Metric({
 }
 
 /** 状态摘要：正常时一行带过，异常时置顶并给「查看日志」——概览先回答「现在有没有事」 */
-function StatusSummary({ onOpenLog }: { onOpenLog: () => void }) {
-  const failed = INSTANCE.status === 'failed';
+function StatusSummary({ inst, onOpenLog }: { inst: ProtoInstance; onOpenLog: () => void }) {
+  const failed = inst.status === 'failed';
+  const running = inst.status === 'running';
+  // 停止/启动中不重复「已停止」（头部徽章已经说了），改为显示备注或上次状态
+  const detail = failed
+    ? $('proto.instance.failedReason')
+    : running
+      ? `${$('proto.metric.uptime')} ${inst.uptime ?? '—'} · ${$('proto.instance.recentErrors', 3)}`
+      : (inst.note ?? $(STATUS[inst.status].key));
   return (
     <div
       className={cn(
@@ -215,13 +285,9 @@ function StatusSummary({ onOpenLog }: { onOpenLog: () => void }) {
     >
       <Dot tone={failed ? 'bad' : 'ok'} />
       <span className="shrink-0 font-medium">
-        {failed ? $('proto.instance.failedTitle') : $('proto.instance.players', MOCK_PLAYERS.length, 20)}
+        {failed ? $('proto.instance.failedTitle') : $('proto.instance.players', inst.players ?? 0, inst.maxPlayers)}
       </span>
-      <span className="truncate text-muted-foreground">
-        {failed
-          ? $('proto.instance.failedReason')
-          : `${$('proto.metric.uptime')} 3h12m · ${$('proto.instance.recentErrors', 3)}`}
-      </span>
+      <span className="truncate text-muted-foreground">{detail}</span>
       <Button size="xs" variant="outline" className="ml-auto shrink-0" onClick={onOpenLog}>
         {$('proto.action.viewLog')}
       </Button>
@@ -229,7 +295,7 @@ function StatusSummary({ onOpenLog }: { onOpenLog: () => void }) {
   );
 }
 
-function OverviewTab({ onOpenTerminal }: { onOpenTerminal: () => void }) {
+function OverviewTab({ inst, onOpenTerminal }: { inst: ProtoInstance; onOpenTerminal: () => void }) {
   const quick = [
     { icon: Archive, label: $('proto.quick.backup') },
     { icon: Timer, label: $('proto.quick.tasks') },
@@ -241,7 +307,7 @@ function OverviewTab({ onOpenTerminal }: { onOpenTerminal: () => void }) {
 
   return (
     <div className="grid content-start gap-2 p-2">
-      <StatusSummary onOpenLog={onOpenTerminal} />
+      <StatusSummary inst={inst} onOpenLog={onOpenTerminal} />
 
       <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-2">
         <Panel title={$('proto.instance.events')} flush>
@@ -313,13 +379,15 @@ function LogLines({ lines }: { lines: string[] }) {
   );
 }
 
-function PlayersTab() {
+function PlayersTab({ inst }: { inst: ProtoInstance }) {
+  const online = inst.players ?? 0;
+  const rows = MOCK_PLAYERS.slice(0, Math.min(online, MOCK_PLAYERS.length));
   return (
     <div className="p-2">
       <Panel
         flush
         title={$('proto.tab.players')}
-        hint={`${MOCK_PLAYERS.length}/20`}
+        hint={`${online}/${inst.maxPlayers}`}
         actions={
           <>
             <Button size="xs" variant="outline">
@@ -338,7 +406,10 @@ function PlayersTab() {
           <span className="text-right">{$('proto.metric.uptime')}</span>
           <span className="text-right">{$('proto.col.actions')}</span>
         </div>
-        {MOCK_PLAYERS.map((p) => (
+        {rows.length === 0 ? (
+          <EmptyState title={$('proto.empty.noPlayers')} />
+        ) : (
+          rows.map((p) => (
           <div
             key={p.name}
             className="grid h-9 grid-cols-[minmax(140px,1fr)_90px_minmax(0,1fr)] items-center gap-3 border-b border-border/50 px-4 text-[12px]"
@@ -362,7 +433,8 @@ function PlayersTab() {
               </Button>
             </span>
           </div>
-        ))}
+          ))
+        )}
       </Panel>
     </div>
   );
@@ -643,7 +715,17 @@ function TerminalDock({ open, onToggle }: { open: boolean; onToggle: () => void 
   );
 }
 
-function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+function ControlPanel({
+  open,
+  onOpenChange,
+  inst,
+  serverName,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  inst: ProtoInstance;
+  serverName: string;
+}) {
   const [nav, setNav] = useState<CpNav>('basic');
   const items: { id: CpNav; label: string; icon: typeof Archive }[] = [
     { id: 'basic', label: $('proto.cp.basic'), icon: SlidersHorizontal },
@@ -661,7 +743,9 @@ function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
       >
         <div className="flex items-center gap-2 border-b px-4">
           <DialogTitle className="text-[13px] font-semibold">{$('proto.cp.title')}</DialogTitle>
-          <span className="font-mono text-[11px] text-muted-foreground">survival-main / survival</span>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {serverName} / {inst.name}
+          </span>
           <DialogClose asChild>
             <Button size="icon-sm" variant="ghost" className="ml-auto">
               <X />
@@ -691,40 +775,51 @@ function ControlPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
 
           <div className="min-w-0 flex-1 overflow-auto p-4">
             {nav === 'basic' && (
-              <div className="grid gap-4">
+              <div className="grid gap-5">
                 <FormGrid>
                   <Field label={$('proto.field.memoryLimit')}>
-                    <input className={INPUT_CLASS} defaultValue="8192" />
+                    <input className={INPUT_CLASS} defaultValue={String(inst.memoryMaxMB)} />
                   </Field>
                   <Field label={$('proto.field.port')}>
-                    <input className={INPUT_CLASS} defaultValue="25565" disabled />
+                    <input className={INPUT_CLASS} defaultValue={String(inst.port)} disabled />
                   </Field>
                   <Field label={$('proto.field.note')} wide>
-                    <input className={INPUT_CLASS} defaultValue="主服 · 长期档" />
+                    <input className={INPUT_CLASS} defaultValue={inst.note ?? ''} />
                   </Field>
-                  <Field label={$('proto.field.core')} hint="Fabric 1.20.4 · Java 21">
-                    <input className={INPUT_CLASS} defaultValue="fabric-server-launch.jar" disabled />
+                  <Field label={$('proto.field.core')} hint={`${inst.core} ${inst.version}`}>
+                    <input
+                      className={INPUT_CLASS}
+                      defaultValue={`${inst.core.toLowerCase()}-server-launch.jar`}
+                      disabled
+                    />
                   </Field>
                   <Field label={$('proto.field.domain')}>
                     <input className={INPUT_CLASS} defaultValue="mc.example.com" />
                   </Field>
                 </FormGrid>
-                <div className="flex flex-wrap gap-1.5 border-t pt-3">
-                  <Button size="xs" variant="outline">
-                    server.properties
-                  </Button>
-                  <Button size="xs" variant="outline">
-                    {$('proto.cfg.plugins')}
-                  </Button>
-                  <Button size="xs" variant="outline">
-                    {$('proto.cfg.mods')}
-                  </Button>
-                  <Button size="xs" variant="ghost">
-                    {$('proto.cp.fullEdit')}
-                  </Button>
+
+                {/* 入口行（配置文件）与下面的维护动作分节，不再六个动作挤一屏底部 */}
+                <div className="grid max-w-[620px] gap-2">
+                  <h3 className="text-[12px] font-medium">{$('proto.quick.config')}</h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button size="xs" variant="outline">
+                      server.properties
+                    </Button>
+                    <Button size="xs" variant="outline">
+                      {$('proto.cfg.plugins')}
+                    </Button>
+                    <Button size="xs" variant="outline">
+                      {$('proto.cfg.mods')}
+                    </Button>
+                    <Button size="xs" variant="ghost">
+                      {$('proto.cp.fullEdit')}
+                    </Button>
+                  </div>
                 </div>
-                {/* 破坏性动作就放在它所属的地方，不另开「危险」页：删除就是删除 */}
-                <div className="grid max-w-[620px] gap-1.5 border-t pt-3">
+
+                {/* 维护：破坏性动作放在这里，删除就是删除 */}
+                <div className="grid max-w-[620px] gap-2">
+                  <h3 className="text-[12px] font-medium">{$('proto.tab.maintenance')}</h3>
                   <div className="flex flex-wrap gap-1.5">
                     <Button size="xs" variant="outline">
                       {$('proto.cp.installPanel')}

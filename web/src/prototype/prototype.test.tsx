@@ -71,5 +71,7 @@ describe('/proto 原型', () => {
     expect(markup).not.toMatch(/>\s*自动化\s*<\/button>/);
     // 概览第一屏先回答「现在有没有事」
     expect(markup).toContain('查看日志');
+    // 实例切换入口
+    expect(markup).toContain('切换实例');
   });
 });
