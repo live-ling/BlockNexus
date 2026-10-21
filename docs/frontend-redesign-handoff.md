@@ -1,88 +1,153 @@
-# 前端重构交接说明（2026-10-21）
+# 前端重构交接说明（2026-10-21 · v2）
 
-> 用途：当前会话上下文将满，本文作为**新会话的起点**。读完本文 + 引用的两份文档，即可继续，不需要翻聊天记录。
+> **用途**：给接手的模型/新会话。读完本文即可开工，不需要翻聊天记录。
+> 配套：`docs/frontend-redesign-design.md`（设计基线与逐页清单）、`docs/frontend-redesign-audit.md`（盘点）、
+> `docs/instance-page-refactor.md`（实例页 P0–P4 方案）。
+
+## 0. 当前在做什么
+
+BlockNexus 面板前端在分支 `refactor/frontend-redesign` 上重构。当前处于**原型设计阶段**：
+`web/src/prototype/` 里有一套 `/proto` 六屏原型（真实 shadcn 组件 + mock 数据、不接任何接口），
+用来确认组件、排版、布局与样式；**真实页面 `web/src/pages/*` 这一轮一行没改**。
+
+用户对原型的评价：列表页、设置页方向认可；**实例详情页「还是难看」**，希望重做视觉。
+下一轮的首要目标是给出一版更耐看、更像桌面应用的详情页，而不是继续堆功能。
 
 ## 1. 仓库状态
 
 | 项 | 值 |
 |---|---|
-| 当前分支 | `refactor/frontend-redesign`（已推送，跟踪 origin） |
-| 分支最新提交 | `45baeea docs: 前端重构总盘点` |
-| 基线 main | `5b3dd11 docs: 实例页功能盘点与重构方案`（已推送） |
-| 工作区 | 干净；仅有用户未跟踪文件 `docs/shenji/`、`docs/正式版发布建议.md`、`merge18n.cjs`（**不要提交**） |
-| 面板/Agent 版本 | 面板 0.6.0；`AGENT_VERSION` 0.5.4 |
+| 分支 | `refactor/frontend-redesign`（HEAD `c489be1`） |
+| 基线 main | `5b3dd11`（未合并本分支） |
+| 面板 / Agent 版本 | 0.6.0 / 0.5.4 |
+| 工作区 | 仅 3 个用户未跟踪文件：`docs/shenji/`、`docs/正式版发布建议.md`、`merge18n.cjs`（**绝对不要提交**） |
+| 原型文案 | `proto.*` 共 217 键，`zh.ts` / `en.ts` 一一对应 |
 
-**本分支相对 main 只多了两份文档**，没有改代码：
+### 本分支提交时间线（都在原型与文档里，没动真实页面）
 
-- `docs/instance-page-refactor.md`（main 上已有，实例页逐项方案）
-- `docs/frontend-redesign-audit.md`（本分支新增，前端总盘点）
+| 提交 | 内容 |
+|---|---|
+| `e25a0b1` | 设计基线首稿（页面清单 / 功能分区 / 尺寸令牌） |
+| `1670f31` | `/proto` 六屏原型 + 外壳 |
+| `3b6d5ef` | 二次修订：底部悬浮导航、行高 36、收窄横向控件、去掉「危险」页 |
+| `aa3051d` | 三次：页头去状态、列表改纯卡片、筛选进右侧抽屉、设置页目录式 |
+| `e7fe475` | 四次：修设置页滚动、去分区线、服务器卡加 Java、筛选按钮贴边悬停 |
+| `0737f59` | 修 `<main>` 高度链（滚不动/目录点不动的根因） |
+| `712ab4d` | 设置页撤销/保存移到页头右上 |
+| `ed217f6` | 服务器卡资源改垂直排列、面板设置补回用户名 |
+| `5683a1a` | 补确认密码与最短长度提示；服务器卡去状态点、Agent 徽章移右上 |
+| `dd91dc0` / `b4fae58` / `ecd6b55` / `0554f49` | 服务器图标占位；实例卡图标与状态徽章的位置调整 |
+| `3bd78a4` | 实例卡补「最近备份」 |
+| `29905a2` | 实例工作台 P0：Tab 7→5、指标条 5→4、概览三段、主操作随状态、去右栏 |
+| `c489be1` | 实例工作台 P1：实例切换下拉、控制面板基础页分三节 |
 
-## 2. 已经做完的（main 上，已合并）
+## 2. 已确认的设计决策（改之前先问用户，别再翻案）
 
-实例页最近一轮渐进改造（`a92f481`→`e0e915e`）：
+| 项 | 结论 |
+|---|---|
+| 导航 | **底部居中悬浮导航**（复用现有 `ExpandableActionBar`），不做左侧栏 |
+| 页头 | 只放标题/副标题/页面操作，**不显示** SSE、在线数、安装进度、版本更新 |
+| 窗口基准 | **1000×720**（外壳最小 960×640；窄了做减法，不压窄列） |
+| 密度 | 正文 13px、列表行 36、工具栏 44、Tab 40、卡片 padding 14 / gap 12 |
+| 列表页 | **只要卡片**（表格/列表视图已删），卡片内不画分割线 |
+| 筛选 | **贴边隐藏**（右边缘只露 7px，hover 滑出），点开 320px 抽屉；默认不占宽度 |
+| 设置页 | 左目录（sticky，锚点 + 滚动高亮）+ 右侧一次性列出全部设置项；分区不画线不套卡片；**撤销/保存在页头右上** |
+| 删除 | **没有「危险」页**；删除放在对象自己的页面里（实例→控制面板「基础」底部；服务器→设置页最后一节） |
+| 实例工作台 | 5 个 Tab（概览/玩家/文件/配置/维护）；指标 4 项；概览三段（状态摘要 / 最近事件 / 快捷操作+MOTD）；主操作随状态翻转；无右栏玩家；标题旁实例切换下拉 |
+| 控制面板 | `min(1160px,94vw) × min(760px,86vh)`；左导航 180；基础页分三节（基础字段 / 配置入口 / 维护） |
 
-- 中区默认「概览」页签（最近事件/快捷操作/命令输入）；
-- 左栏去重（删「更多管理」「危险操作」重复卡）、frp 并进概览行；
-- 指标 5→3、连接地址独立成条；
-- 终端降级为底部 dock（收起/半屏/全屏/错误自动展开/`Ctrl+\``/拖拽调高并记忆）；
-- 实例控制面板模态（基础/网络/玩家/自动化/备份/危险，含内存/备注/域名/frp 端口内联）；
-- 停止时收起右侧玩家栏。
+## 3. 原型结构（`web/src/prototype/`）
 
-## 3. 还没做的（本次要接手的）
+| 文件 | 行数 | 作用 |
+|---|---|---|
+| `index.tsx` | 37 | 入口；`?screen=` 深链与切屏回写地址 |
+| `shell.tsx` | 164 | 悬浮导航、PageHeader、PROTO 切换器 |
+| `proto-ui.tsx` | 259 | 原语：Panel / KV / Field / FormGrid / SearchInput / Select / Segmented / EmptyState |
+| `filter-drawer.tsx` | 48 | 贴边竖标签 + 320px 抽屉 |
+| `settings-layout.tsx` | 63 | 设置页：整页一个滚动容器、目录 sticky、分区无线 |
+| `mock.ts` | 237 | 4 台服务器、7 个实例、玩家、事件、日志、备份 |
+| `screens/instances.tsx` | 262 | 实例卡片网格 |
+| `screens/servers.tsx` | 195 | 服务器卡片网格 |
+| `screens/instance.tsx` | **876** | 实例工作台（5 Tab + Dock + 控制面板） |
+| `screens/server-settings.tsx` | 149 | 服务器设置 |
+| `screens/panel-settings.tsx` | 273 | 面板设置 |
+| `screens/login.tsx` | 44 | 登录 |
+| `prototype.test.tsx` | 62 | 静态渲染冒烟（含「缺键会显示 proto.xxx」守卫） |
 
-用户反馈的两个直接问题，方案已定、**代码未改**：
+打开方式：面板起来后访问 `http://127.0.0.1:<端口>/proto`；`?screen=instances|servers|server-settings|instance|panel-settings|login` 可直达。
 
-1. **控制面板偏小**：当前 `max-w-[860px] min-h-[360px]`；应放大到 `min(1160px,94vw)` × `min(760px,86vh)`，左导航加宽、内容区独立滚动。
-2. **终端不顺手**：dock 目前在**中栏内部**（宽度被左右栏挤掉）、默认收起；应移到**整页底部全宽**，整行可点击展开，收起态保留一行命令输入。
+## 4. 用户对详情页的反馈与可选方向（当前核心问题）
 
-全局重构（F1–F6）尚未开始，详见 `docs/frontend-redesign-audit.md`：
+原话：**「详情页前端还是难看」**。已经试过但没解决：三栏改 Tab 工作台、去掉右栏、指标条瘦身、
+状态摘要、终端 Dock 全宽、控制面板放大。
 
-- F1 设计原语（DialogShell 4 档尺寸 / PageHeader / SettingsSection / ListToolbar / EmptyState / Skeleton）+ 3 个弹层试点；
-- F2 列表页统一（实例/服务器卡片、搜索/筛选/排序/批量）；
-- F3 服务器设置 Tab 化；
-- F4 面板设置 Tab 化；
-- F5 实例页（按 `instance-page-refactor.md` 的 P0–P4，含上面两个问题）；
-- F6 清理死 i18n / 重复弹层 / 路由级 lazy / 页面测试。
+下一模型可先做的诊断（用浏览器的视觉判断，别只读代码）：
 
-## 4. 盘点要点（详见审计文档）
+1. **层次平**：Tab 条、指标条、概览面板用同一套 1px 边框 + 12/13px 字号，页面没有主次与节奏；
+2. **像后台表格**：概览仍是「一行摘要 + 两块面板」，缺少一眼可读的图形（状态带、趋势、迷你图、进度环）；
+3. **图标与色彩弱**：只有 lucide 小图标，没有实例/服务器头像或色彩标识；状态色几乎被 muted 吃掉；
+4. **顶部拥挤**：标题 + 切换箭头 + 状态徽章 + 4 个按钮挤一行；
+5. **卡片/面板同权**：概览面板与列表卡片视觉重量一样，没有 hero 区。
 
-- 页面：8 个路由；`instance-detail` 1899 行、`panel-settings` 1671+648、`server-settings` 1212；
-- 弹层：22 个，7 种宽度写法、4 种高度写法；
-- 重复：SettingsCard 两套、建实例两处、SSH 编辑两处、配置编辑器三套、危险确认 5 套、卡片三处；
-- 缺失：全局搜索/命令面板、列表搜索筛选分页批量、ErrorBoundary/骨架屏、路由级分割（首包 1.47MB）、页面级测试、类型契约；后端缺审计/会话、指标历史、Webhook、任务中心、批量与查询参数、SSE 事件 ID。
+可尝试的方向（供参考，不强制）：实例头部做一条带状态色的横带（左色条或渐变），名字与地址作为 hero；
+指标用大数字 + 趋势/迷你条；概览第一屏 O(状态) → O(异常) → O(事件)；字号阶拉开（11/13/15/20/24）；
+只让状态使用状态色。**先给方案或静态稿，让用户点头，再动代码**（用户明确要求这样协作）。
 
-## 5. 工作约束（必须遵守）
+## 5. 硬约束
 
-- **不一次性重写**：按 F1–F6 小步提交，每阶段独立可回滚；旧页面保留到 parity 通过。
-- **不换 UI 框架**：继续 shadcn/Radix + Tailwind，不重做视觉语言。
-- **i18n**：新增文案必须同时改 `web/src/lib/lang/zh.ts` 与 `en.ts`，占位符一致，en 不出现中文。
-- **构建/测试**：`npm run build:web`、`npm --prefix web run lint`、`npm --prefix web test`；改 Agent 才需要 `npm run build:agent` + 递增 `AGENT_VERSION`（本次不涉及）。
+- **不换 UI 框架**：继续 shadcn/Radix + Tailwind v4；不加新依赖（`motion`、`lucide-react` 已在）。
+- **不一次性重写**：每阶段独立提交、可回滚；旧页面保留到 parity 通过。
+- **i18n**：新增文案必须同时改 `web/src/lib/lang/zh.ts` 与 `en.ts`，占位符一致，en 不出现中文；
+  当前 `proto.*` 217 键。删键也要两边一起删（`en satisfies Record<TranslationKey,string>` 会拦住）。
 - **不提交** `data/`、`docs/shenji/`、`docs/正式版发布建议.md`、`merge18n.cjs`。
-- 提交信息用中文、说明「为什么」；每个阶段结束跑一遍构建与测试。
+- **真实页面未动**：`web/src/pages/*` 仍是旧实现；原型与真实页面并行存在，落地时再逐页替换。
+- 提交信息用中文、说明「为什么」。
 
-## 6. 新会话第一步（建议顺序）
+## 6. 验证方式
 
-1. `git status` / `git branch --show-current`，确认在 `refactor/frontend-redesign`；
-2. 读 `AGENTS.md`、`docs/frontend-redesign-audit.md`、`docs/instance-page-refactor.md`；
-3. 做 **F1**：先建 `web/src/components/dialog-shell.tsx` 等原语，选「备份 / 自动重启 / 属性」三个弹层试点；
-4. 再回头做两个止痛项（面板放大、dock 全宽），或按 F2 继续列表页；
-5. 每完成一项：build + lint + test，提交并推送分支。
+```powershell
+npm --prefix web run build     # tsc -b + vite build（类型检查含在内）
+npm --prefix web run lint      # oxlint，期望 0 error（约 75 条既有 warning）
+npm --prefix web test          # vitest，当前 193 passed
+```
 
-## 7. 验收基线
+布局回归不要只看代码（本轮踩过坑）：起静态服务 + 无头 Edge，用 CDP 量尺寸。
 
-- 单页 ≤ 600 行（实例/设置 ≤ 400）；弹层只用 DialogShell 4 档；列表有搜索/筛选；初始包目标 < 900KB；5 个主路由有页面 smoke 测试。
+```js
+// 思路：serve web/dist（SPA 回退 index.html）→ msedge --headless=new --no-sandbox
+// --remote-debugging-port=9222 --user-data-dir=<temp> → 用 Node 的全局 WebSocket 连 CDP，
+// Runtime.evaluate 读 clientHeight/scrollHeight/scrollTop，或 Input.dispatchMouseEvent 模拟悬停/点击。
+```
 
-## 8. 2026-10-21 追加：设计已定 + `/proto` 原型已就绪
+实测过的结论（可直接复用）：设置页滚动容器 `clientH 414 / scrollH 1017 / maxScroll 603`；
+实例切换下拉点 `skyblock` 后头部变「skyblock 已停止」、指标变 `0/10`、`2.0/4G`、地址 `:25566`。
 
-- 设计基线见 `docs/frontend-redesign-design.md`（信息架构、逐页功能清单、尺寸令牌、组件清单）；
-- 方向已确认（2026-10-21 三次修订）：**底部悬浮导航**（不做左栏）、页头不显示 SSE/在线/安装/版本 /
-  基准窗口 **1000×720** / **列表只要卡片**（卡片内不画分割线）、筛选收进**右边缘抽屉**（默认隐藏）/
-  **设置页左目录 + 右侧全量分区**（整页一个滚动容器、目录 sticky，分区不画线、只留间距）/ 密度 13px·行 36 /
-  **不设「危险」页**（删除放在对象自己的页面里）/ 原型走 app 内 `/proto`；实例工作台本轮未动；
-- 原型代码在 `web/src/prototype/`（六屏、mock 数据、229 个 `proto.*` 文案），
-  访问 `http://127.0.0.1:<端口>/proto` 查看，状态栏 `PROTO` 下拉切换屏幕；
-- 下一步仍是 **F1 原语抽取 + 三个弹层试点**，然后按 F2 列表页推进；两个症状（控制面板、终端 Dock）
-  的最终形态已在原型里，落地随 F5。
-- ⚠ 外壳高度链的坑：`<main>` 必须 `min-h-0 overflow-hidden`，否则 column flex 的自动最小高度会取内容高度，
-  子页面的 `overflow-auto` 拿不到约束（`scrollHeight === clientHeight`），滚动与锚点跳转全失效。
-  原型支持 `?screen=` 直达某屏；布局回归可用无头 Edge + CDP 量尺寸（见设计稿 §7）。
+## 7. 已知的坑（都是本轮踩过的）
+
+1. **`<main>` 必须 `min-h-0 overflow-hidden`**：column flex 子项的自动最小高度会取内容高度，
+   否则子页面 `overflow-auto` 拿不到约束（`scrollHeight === clientHeight`），滚动与锚点跳转全失效。
+2. **PowerShell 5.1 默认按 ANSI 读写**：不要用 `Get-Content`/`Set-Content` 改源码（中文会变成乱码且不可逆），
+   改文件用编辑工具（UTF-8）；写脚本也避免把中文塞进命令行。
+3. **Radix DropdownMenu 的 Trigger 监听 `pointerdown`**，不是 `click`；CDP 里要派发 PointerEvent。
+4. 全局隐藏了滚动条（`html { scrollbar-width: none }`），肉眼判断「能不能滚」不可靠，量 `scrollTop`。
+5. 原型冒烟测试用 `renderToStaticMarkup`（项目测试环境是 node、无 jsdom）；
+   缺 i18n 键时页面会原样显示 `proto.xxx`，测试会顺带拦住。
+
+## 8. 建议的下一步顺序
+
+1. **（用户最在意）实例详情页视觉重做**：先出 1–2 版静态方案（截图或 `/proto` 变体）→ 用户点头 → 再改代码；
+2. **F1 原语抽取**：把 `proto-ui.tsx` 里认可的部分抽到 `components/`（DialogShell 六档、PageHeader、
+   SettingsLayout、ListToolbar、DataTable、StatusBar 等），并拿「备份/自动重启/属性」三个弹层试点；
+3. **F2 列表页接真实数据**：实例总览与服务器列表仍是卡片 + 客户端筛选，接 `GET /servers`、
+   `GET /servers/:id/instances`；后端分页/查询参数不在本轮；
+4. **实例页落地**：按 `docs/instance-page-refactor.md` 的 P0–P4 拆组件，先做 P0 测试基建与日志单一数据源；
+5. P2 的失败原因、近 24h 峰值需要后端字段，先出原型、后接。
+
+## 9. 关键文件
+
+- 设计基线：`docs/frontend-redesign-design.md`
+- 总盘点：`docs/frontend-redesign-audit.md`
+- 实例页方案：`docs/instance-page-refactor.md`
+- 原型入口：`web/src/prototype/index.tsx`
+- 最需要改的文件：`web/src/prototype/screens/instance.tsx`（876 行）
+- 文案：`web/src/lib/lang/zh.ts`、`web/src/lib/lang/en.ts`（搜索 `proto.`）
