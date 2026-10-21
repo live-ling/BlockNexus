@@ -112,16 +112,19 @@ function fileUrl(serverId: string, instance: string, rel: string) {
   return `/api/servers/${serverId}/instances/${encodeURIComponent(instance)}/files/download?path=${encodeURIComponent(rel)}`;
 }
 
-export function FileManagerDialog({
+/**
+ * 文件管理器主体（内联视图）：对话框与实例页「文件」页签共用同一份实现。
+ * 它是 flex 子项，必须由父级提供高度（min-h-0 链），否则预览区拿不到约束。
+ */
+export function FileManagerView({
   server,
   instance,
-  open,
-  onOpenChange,
+  active,
 }: {
   server: ServerSummary;
   instance: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
+  /** 是否可见：不可见时不拉目录（对话框关闭 / 页签切走） */
+  active: boolean;
 }) {
   const { success, error } = useToastHelpers();
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -191,7 +194,7 @@ export function FileManagerDialog({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     setTree([]);
     setExpanded([]);
     setSelected(null);
@@ -200,7 +203,7 @@ export function FileManagerDialog({
     setClip(null);
     setChecked([]);
     loadDir('');
-  }, [open, loadDir]);
+  }, [active, loadDir]);
 
   const onExpandedChange = useCallback(
     (next: string[]) => {
@@ -568,20 +571,8 @@ export function FileManagerDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[82vh] max-h-[82vh] flex-col sm:max-w-4xl">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>{`${$('fileManager.title')} · ${instance}`}</DialogTitle>
-          <DialogDescription>
-            {selected ? (
-              <span className="font-mono">/{selected.value}</span>
-            ) : (
-              $('fileManager.hint.empty')
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex min-h-0 flex-1 gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex min-h-0 flex-1 gap-4">
           {/* 目录树 */}
           <div className="w-60 shrink-0 overflow-auto rounded-lg border p-1">
             {tree.length ? (
@@ -836,6 +827,30 @@ export function FileManagerDialog({
           }
           onConfirm={deleteSelected}
         />
+    </div>
+  );
+}
+
+/** 对话框形态：只负责外壳与标题，内容与「文件」页签共用 FileManagerView */
+export function FileManagerDialog({
+  server,
+  instance,
+  open,
+  onOpenChange,
+}: {
+  server: ServerSummary;
+  instance: string;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[82vh] max-h-[82vh] flex-col sm:max-w-4xl">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>{`${$('fileManager.title')} · ${instance}`}</DialogTitle>
+          <DialogDescription>{$('fileManager.hint.empty')}</DialogDescription>
+        </DialogHeader>
+        <FileManagerView server={server} instance={instance} active={open} />
       </DialogContent>
     </Dialog>
   );
