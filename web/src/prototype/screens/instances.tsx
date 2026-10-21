@@ -214,12 +214,10 @@ function InstanceCard({
       <div className="flex min-w-0 items-start gap-2">
         <InstanceIcon icon={inst.icon} />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <b className="truncate text-[13px] font-medium">{inst.name}</b>
-            <Pill tone={st.tone}>{$(st.key)}</Pill>
-          </div>
+          <b className="block truncate text-[13px] font-medium">{inst.name}</b>
           <p className="truncate text-[11px] text-muted-foreground">{inst.note ?? server?.name ?? '—'}</p>
         </div>
+        <Pill tone={st.tone}>{$(st.key)}</Pill>
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px]">
