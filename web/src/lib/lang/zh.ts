@@ -1777,7 +1777,6 @@ export const zh = {
   'proto.field.portRange': '端口范围',
   'proto.btn.deleteServer': '删除服务器',
   'proto.server.deleteHint': '删除服务器会卸载 Agent，实例文件仍保留在主机上',
-  'proto.save.dirty': '未保存的更改',
   'proto.save.discard': '撤销',
   'proto.save.apply': '保存',
 
