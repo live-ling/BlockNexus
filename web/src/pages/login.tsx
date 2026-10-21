@@ -38,7 +38,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
 function GlassCard({ className = '', children }: { className?: string; children: React.ReactNode }) {
   return (
     <Card
-      className={`w-full max-w-[22rem] border-white/40 bg-white/65 shadow-xl shadow-sky-900/10 ring-1 ring-white/50 backdrop-blur-xl [--card-spacing:1.25rem] dark:border-white/10 dark:bg-card/70 dark:shadow-black/30 dark:ring-white/10 ${className}`}
+      className={`w-full max-w-[20rem] rounded-xl border-white/40 bg-white/70 shadow-xl shadow-sky-900/10 ring-1 ring-white/50 backdrop-blur-xl [--card-spacing:1.15rem] dark:border-white/10 dark:bg-card/80 dark:shadow-black/30 dark:ring-white/10 ${className}`}
     >
       {children}
     </Card>
@@ -49,18 +49,24 @@ function GlassCard({ className = '', children }: { className?: string; children:
 function AuthHeader({ title, description }: { title: string; description?: React.ReactNode }) {
   return (
     <CardHeader>
-      <div className="flex items-center gap-3">
-        <img src="/logo.png" alt="BlockNexus" className="h-10 w-10 rounded-xl object-cover ring-1 ring-border" />
-        <TextReveal as="span" text={title} split="char" stagger={0.06} className="text-xl font-bold tracking-tight" />
+      <div className="flex items-center gap-2.5">
+        <img src="/logo.png" alt="BlockNexus" className="size-8 rounded-lg object-cover ring-1 ring-border" />
+        <TextReveal
+          as="span"
+          text={title}
+          split="char"
+          stagger={0.06}
+          className="text-[15px] font-semibold tracking-tight"
+        />
       </div>
-      {description ? <CardDescription className="pt-1.5">{description}</CardDescription> : null}
+      {description ? <CardDescription className="pt-1 text-[11px]">{description}</CardDescription> : null}
     </CardHeader>
   );
 }
 
 /** 表单统一尺寸：输入框高一点、内边距宽一点；整体收在 19rem 列里（与验证码六格同宽，不撑满卡片） */
-const FORM = 'mx-auto grid w-full max-w-[19rem] gap-5';
-const FIELD = 'h-10 px-3.5 text-sm';
+const FORM = 'mx-auto grid w-full max-w-[19rem] gap-4';
+const FIELD = 'h-9 px-3 text-[13px]';
 
 /** 表单行：标签在输入框上方，两者各占一行 */
 function FieldRow({
@@ -73,8 +79,10 @@ function FieldRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid gap-2">
-      <Label htmlFor={htmlFor}>{label}</Label>
+    <div className="grid gap-1.5">
+      <Label htmlFor={htmlFor} className="text-[11.5px] text-muted-foreground">
+        {label}
+      </Label>
       {children}
     </div>
   );
@@ -158,7 +166,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
               {$('login.remember')}
             </label>
             {err && <p className="text-center text-xs text-destructive">{err}</p>}
-            <Button type="submit" className="h-10 w-full" disabled={busy}>
+            <Button type="submit" className="h-9 w-full text-[13px]" disabled={busy}>
               {busy ? $('login.submitting') : $('login.submit')}
             </Button>
             {/* 「忘记密码」放在提交按钮之后：Tab 顺序保持 用户名 → 密码 → 登录 → 忘记密码 */}

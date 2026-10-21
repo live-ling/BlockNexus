@@ -151,3 +151,40 @@ npm --prefix web test          # vitest，当前 193 passed
 - 原型入口：`web/src/prototype/index.tsx`
 - 最需要改的文件：`web/src/prototype/screens/instance.tsx`（876 行）
 - 文案：`web/src/lib/lang/zh.ts`、`web/src/lib/lang/en.ts`（搜索 `proto.`）
+
+## 10. 落地进度（2026-10-21 · F1 + F2 部分完成）
+
+原型视觉已经开始落到真实页面，**每页独立提交、可单独回滚**：
+
+| 提交 | 内容 |
+|---|---|
+| `0370ffe` | 抽出公共原语 + 实例总览/服务器列表改卡片与右侧筛选抽屉 |
+| `a6e8fb1` | 实例详情：44px 头部（呼吸灯/切换实例/更多）、3 张驾驶舱指标卡、下划线页签、灰底白卡 |
+| `f35e8c5` | 服务器详情/服务器设置/面板设置统一 PageHeader + PageBody + 卡片头部 |
+| `f604d53` | 原型第六版（亮色极简控制台）本身 |
+
+新增的共用层（**后续页面一律从这里取，不要再抄原型**）：
+
+| 文件 | 内容 |
+|---|---|
+| `web/src/components/layout/tokens.ts` | SURFACE / HAIRLINE / LABEL / MUTED / TITLE / INPUT_CLASS / BTN_PRIMARY |
+| `web/src/components/layout/primitives.tsx` | Dot / Pill / Bar / usageTone / Surface / KV / Field / FormGrid / SearchInput / Select / Segmented / EmptyState / SectionHeading / FilterField / FilterChoices |
+| `web/src/components/layout/page-header.tsx` | PageHeader（标题/副标题/返回/操作）+ PageBody（灰底滚动容器，pb-24 给悬浮导航让位） |
+| `web/src/components/layout/filter-drawer.tsx` | 右侧贴边竖标签 + 320px 抽屉 |
+| `web/src/components/layout/status.tsx` | InstanceStatusPill / AgentStatusPill（静态 18px 胶囊，替代动效徽章） |
+| `web/src/components/layout/instance-card.tsx` | 实例卡片（总览与服务器详情共用，actions/extra 两个插槽） |
+
+仍然待办：
+
+1. **设置页还没做「左目录 + 右侧全量分区」结构**：现在只换了页头与卡片外观，
+   分区仍是纵向卡片流（见 §2 的「设置页」决策）。
+2. **登录页只做了轻调**（标题 15px、输入 36px、卡片 20rem），背景图与毛玻璃保留。
+3. `about.tsx` 已跟随（PageHeader + 灰底白卡），只是信息展示，没有交互改动。
+4. 原型里的 5 Tab（概览/玩家/文件/配置/维护）仍未落到真实详情页——
+   详情页现在是「驾驶舱 + 概览/AI/Spark/地图/聊天 + 底部终端」，结构归 `docs/instance-page-refactor.md` 管。
+5. 旧徽章（`components/status-badge.tsx` 的 AnimatedBadge）与 `components/settings-card.tsx`
+   仍在用，等所有页面迁移完再统一删除。
+
+⚠ 本机沙箱里 `vite build` / `vitest` 会因 `spawn EPERM` 失败，需要放宽权限跑；
+只跑 `npx tsc -b` 与 `oxlint` 不受影响。
+

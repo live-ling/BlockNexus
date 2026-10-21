@@ -1,9 +1,8 @@
 // 关于页：面板信息、开源依赖、引用服务与声明
 // 路由 #/about —— 设置页底部进入
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { ChevronDown, ChevronUp, ExternalLink, Info } from 'lucide-react';
+import { PageBody, PageHeader } from '@/components/layout/page-header';
 import { api, type Me } from '@/lib/api';
 import { $, type TranslationKey } from '@/lib/i18n';
 
@@ -105,127 +104,121 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 pb-24 pt-7">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="icon" aria-label={$('common.back')} onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <h2 className="text-xl font-semibold">{$('about.title')}</h2>
-      </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">{$('about.subtitle')}</p>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <PageHeader back={onBack} title={$('about.title')} subtitle={$('about.subtitle')} />
 
-      {/* 宽屏双列铺满，窄屏自动堆叠为单列 */}
-      <div className="mt-5 grid items-start gap-4 xl:grid-cols-2">
-        {/* 面板信息 */}
-        <Card className="ring-1 ring-border xl:col-span-2">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-4">
-              <img
-                src="/logo.png"
-                alt="BlockNexus"
-                className="h-14 w-14 rounded-xl object-cover ring-1 ring-border"
-              />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-lg font-semibold">BlockNexus</h3>
-                  <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
-                    v{me?.version ?? '…'}
-                  </span>
+      <PageBody>
+        <div className="mx-auto w-full max-w-[1200px]">
+          {/* 宽屏双列铺满，窄屏自动堆叠为单列 */}
+          <div className="grid items-start gap-3 xl:grid-cols-2">
+            {/* 面板信息 */}
+            <section className="rounded-xl border border-border/70 bg-card p-4 shadow-xs xl:col-span-2">
+              <div className="flex items-center gap-3.5">
+                <img
+                  src="/logo.png"
+                  alt="BlockNexus"
+                  className="size-12 rounded-lg object-cover ring-1 ring-border"
+                />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-[15px] font-semibold">BlockNexus</h3>
+                    <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+                      v{me?.version ?? '…'}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">{$('about.description')}</p>
                 </div>
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{$('about.description')}</p>
               </div>
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <a
-                href={REPO_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3.5 py-2.5 transition-colors hover:border-foreground/20 hover:bg-muted/70"
-              >
-                <span className="shrink-0 text-xs text-muted-foreground">{$('about.repo')}</span>
-                <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
-                  <span className="truncate">github.com/live-ling/BlockNexus</span>
-                  <ExternalLink className="h-3 w-3 shrink-0 opacity-50 transition-opacity group-hover:opacity-100" />
-                </span>
-              </a>
-              <button
-                type="button"
-                onClick={toggleLicense}
-                className="flex items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3.5 py-2.5 text-left transition-colors hover:border-foreground/20 hover:bg-muted/70"
-              >
-                <span className="text-xs text-muted-foreground">{$('about.license')}</span>
-                <span className="flex items-center gap-1.5 text-xs">
-                  MIT
-                  {licOpen ? <ChevronUp className="h-3.5 w-3.5 opacity-50" /> : <ChevronDown className="h-3.5 w-3.5 opacity-50" />}
-                </span>
-              </button>
-            </div>
-            {licOpen && (
-              <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                {licText ?? $('common.loading')}
-              </pre>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* 引用服务 */}
-        <Card className="ring-1 ring-border">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-2">
-              <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">{$('about.services')}</h3>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">{$('about.services.desc')}</p>
-            <div className="mt-3 grid gap-0.5">
-              {SERVICES.map((s) => (
-                <RefRow key={s.url} name={refName(s)} url={s.url} desc={$(s.descKey)} />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* 开源依赖 */}
-        <Card className="ring-1 ring-border">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-2">
-              <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">{$('about.deps')}</h3>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">{$('about.deps.desc')}</p>
-            <div className="mt-3 grid gap-0.5">
-              {DEPS.map((d) => (
-                <RefRow key={d.url} name={refName(d)} url={d.url} desc={$(d.descKey)} />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* 声明 */}
-        <Card className="ring-1 ring-border xl:col-span-2">
-          <CardContent className="p-5">
-            <div className="flex items-center gap-2">
-              <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">{$('about.disclaimer.title')}</h3>
-            </div>
-            <ul className="mt-2 grid gap-1.5 text-xs leading-relaxed text-muted-foreground">
-              <li>{$('about.disclaimer.mojang')}</li>
-              <li>
-                {$('about.disclaimer.eula.pre')}
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <a
-                  className="underline underline-offset-2 hover:text-foreground"
-                  href="https://aka.ms/MinecraftEULA"
+                  href={REPO_URL}
                   target="_blank"
                   rel="noreferrer"
+                  className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 transition-colors hover:border-foreground/20 hover:bg-muted/70"
                 >
-                  Minecraft EULA
+                  <span className="shrink-0 text-[11.5px] text-muted-foreground">{$('about.repo')}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px]">
+                    <span className="truncate">github.com/live-ling/BlockNexus</span>
+                    <ExternalLink className="size-3 shrink-0 opacity-50 transition-opacity group-hover:opacity-100" />
+                  </span>
                 </a>
-                {$('about.disclaimer.eula.post')}
-              </li>
-              <li>{$('about.disclaimer.personal')}</li>
-            </ul>
-          </CardContent>
-        </Card>
-      </div>
+                <button
+                  type="button"
+                  onClick={toggleLicense}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 text-left transition-colors hover:border-foreground/20 hover:bg-muted/70"
+                >
+                  <span className="text-[11.5px] text-muted-foreground">{$('about.license')}</span>
+                  <span className="flex items-center gap-1.5 text-[11.5px]">
+                    MIT
+                    {licOpen ? (
+                      <ChevronUp className="size-3.5 opacity-50" />
+                    ) : (
+                      <ChevronDown className="size-3.5 opacity-50" />
+                    )}
+                  </span>
+                </button>
+              </div>
+              {licOpen && (
+                <pre className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border/70 bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                  {licText ?? $('common.loading')}
+                </pre>
+              )}
+            </section>
+
+            {/* 引用服务 */}
+            <section className="rounded-xl border border-border/70 bg-card p-4 shadow-xs">
+              <div className="flex items-center gap-1.5">
+                <Info className="size-3.5 text-muted-foreground" />
+                <h3 className="text-[13px] font-semibold">{$('about.services')}</h3>
+              </div>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">{$('about.services.desc')}</p>
+              <div className="mt-2 grid gap-0.5">
+                {SERVICES.map((s) => (
+                  <RefRow key={s.url} name={refName(s)} url={s.url} desc={$(s.descKey)} />
+                ))}
+              </div>
+            </section>
+
+            {/* 开源依赖 */}
+            <section className="rounded-xl border border-border/70 bg-card p-4 shadow-xs">
+              <div className="flex items-center gap-1.5">
+                <Info className="size-3.5 text-muted-foreground" />
+                <h3 className="text-[13px] font-semibold">{$('about.deps')}</h3>
+              </div>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">{$('about.deps.desc')}</p>
+              <div className="mt-2 grid gap-0.5">
+                {DEPS.map((d) => (
+                  <RefRow key={d.url} name={refName(d)} url={d.url} desc={$(d.descKey)} />
+                ))}
+              </div>
+            </section>
+
+            {/* 声明 */}
+            <section className="rounded-xl border border-border/70 bg-card p-4 shadow-xs xl:col-span-2">
+              <div className="flex items-center gap-1.5">
+                <Info className="size-3.5 text-muted-foreground" />
+                <h3 className="text-[13px] font-semibold">{$('about.disclaimer.title')}</h3>
+              </div>
+              <ul className="mt-1.5 grid gap-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                <li>{$('about.disclaimer.mojang')}</li>
+                <li>
+                  {$('about.disclaimer.eula.pre')}
+                  <a
+                    className="underline underline-offset-2 hover:text-foreground"
+                    href="https://aka.ms/MinecraftEULA"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Minecraft EULA
+                  </a>
+                  {$('about.disclaimer.eula.post')}
+                </li>
+                <li>{$('about.disclaimer.personal')}</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </PageBody>
     </div>
   );
 }
