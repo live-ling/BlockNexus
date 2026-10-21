@@ -2,12 +2,12 @@
 // 筛选同样收进右侧抽屉；卡片里能放下 CPU/MEM/DISK 三条，就不再为了列宽裁掉磁盘。
 
 import { useMemo, useState } from 'react';
-import { Ellipsis, Plus, RotateCw, Settings } from 'lucide-react';
+import { Ellipsis, Plus, RotateCw, Server, Settings } from 'lucide-react';
 import { cn } from 'cn';
 import { $ } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { MOCK_SERVERS, type ProtoServer } from '../mock';
-import { Bar, Dot, EmptyState, Pill, SearchInput, Select } from '../proto-ui';
+import { Bar, EmptyState, Pill, SearchInput, Select } from '../proto-ui';
 import { FilterDrawer, FilterField } from '../filter-drawer';
 import { PageHeader, type ProtoScreen } from '../shell';
 
@@ -132,12 +132,19 @@ export function ServersScreen({ onScreen }: { onScreen: (s: ProtoScreen) => void
 }
 
 function AgentPill({ server }: { server: ProtoServer }) {
+  // 右上角的标识：不再用状态圆点，改成服务器图标（没有自定义图标的服务器由它占位）；
+  // 在线/离线/安装中仍由徽章底色与文案表达，不靠那个点。
   if (server.installing !== undefined) {
-    return <Pill tone="warn">{$('proto.group.installing', server.installing)}</Pill>;
+    return (
+      <Pill tone="warn">
+        <Server className="size-3" />
+        {$('proto.group.installing', server.installing)}
+      </Pill>
+    );
   }
   return (
     <Pill tone={server.online ? 'ok' : 'idle'}>
-      <Dot tone={server.online ? 'ok' : 'idle'} />
+      <Server className="size-3" />
       {server.online ? `Agent ${server.agent}` : $('proto.filter.offline')}
     </Pill>
   );
