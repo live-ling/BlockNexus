@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { PrototypeApp } from './index';
+import { ServersScreen } from './screens/servers';
 
 /**
  * `/proto` 布局原型的冒烟测试（本仓库测试环境是 node，没有 jsdom，所以走静态渲染）。
@@ -32,7 +33,13 @@ describe('/proto 原型', () => {
     expect(html).not.toMatch(/proto\.[a-zA-Z]+\.[a-zA-Z]+/);
   });
 
-  it('状态栏挂着原型屏幕切换器', () => {
+  it('页头挂着原型屏幕切换器', () => {
     expect(html).toContain('PROTO');
+  });
+
+  it('服务器卡片带 Java 版本', () => {
+    const markup = renderToStaticMarkup(createElement(ServersScreen, { onScreen: () => {} }));
+    expect(markup).toContain('Java 21');
+    expect(markup).toContain('Java 17');
   });
 });

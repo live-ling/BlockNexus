@@ -13,6 +13,8 @@ export type ProtoServer = {
   installing?: number;
   agent: string;
   system: string;
+  /** 实例默认使用的 Java 主版本；未装/未探测时是 '—' */
+  java: string;
   instances: number;
   latency: number | null;
   cpu: number;
@@ -45,6 +47,7 @@ export const MOCK_SERVERS: ProtoServer[] = [
     online: true,
     agent: '0.5.4',
     system: 'Ubuntu 22.04',
+    java: '21',
     instances: 3,
     latency: 12,
     cpu: 42,
@@ -59,6 +62,7 @@ export const MOCK_SERVERS: ProtoServer[] = [
     online: true,
     agent: '0.5.4',
     system: 'Debian 12',
+    java: '21',
     instances: 2,
     latency: 5,
     cpu: 18,
@@ -73,6 +77,7 @@ export const MOCK_SERVERS: ProtoServer[] = [
     online: false,
     agent: '0.5.3',
     system: 'Debian 12',
+    java: '17',
     instances: 2,
     latency: null,
     cpu: 0,
@@ -88,6 +93,7 @@ export const MOCK_SERVERS: ProtoServer[] = [
     installing: 62,
     agent: '—',
     system: 'Windows 11 (22631)',
+    java: '—',
     instances: 0,
     latency: null,
     cpu: 0,

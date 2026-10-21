@@ -13,15 +13,19 @@ export function FilterDrawer({ children }: { children: ReactNode }) {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title={$('proto.filter.title')}
-        className="fixed top-1/2 right-0 z-30 flex -translate-y-1/2 flex-col items-center gap-1 rounded-l-md border border-r-0 bg-card py-2.5 pr-1 pl-1.5 text-[10.5px] text-muted-foreground shadow-sm transition-colors hover:text-foreground"
-      >
-        <SlidersHorizontal className="size-3.5" />
-        <span className="tracking-[0.18em] [writing-mode:vertical-rl]">{$('proto.filter.title')}</span>
-      </button>
+      {/* 贴边隐藏：平时只在右边缘露出 7px，鼠标靠近才滑出来 */}
+      <div className="group fixed top-1/2 right-0 z-30 -translate-y-1/2">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          title={$('proto.filter.title')}
+          aria-label={$('proto.filter.title')}
+          className="flex translate-x-[calc(100%-7px)] flex-col items-center gap-1 rounded-l-md border border-r-0 bg-card py-2.5 pr-1 pl-1.5 text-[10.5px] text-muted-foreground shadow-sm transition-transform duration-200 ease-out group-hover:translate-x-0 hover:text-foreground focus-visible:translate-x-0"
+        >
+          <SlidersHorizontal className="size-3.5" />
+          <span className="tracking-[0.18em] [writing-mode:vertical-rl]">{$('proto.filter.title')}</span>
+        </button>
+      </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" showCloseButton={false} className="w-[320px] gap-0 p-0 sm:max-w-[320px]">

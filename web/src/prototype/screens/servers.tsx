@@ -190,6 +190,8 @@ function ServerCard({ server, onOpen }: { server: ProtoServer; onOpen: () => voi
         <span>{$('proto.col.instances')} {server.instances}</span>
         <span className="text-muted-foreground/50">·</span>
         <span className="font-mono">{server.latency === null ? '—' : `${server.latency}ms`}</span>
+        <span className="text-muted-foreground/50">·</span>
+        <span className="font-mono">Java {server.java}</span>
         <span className="ml-auto flex items-center gap-1">
           <Button
             size="xs"
