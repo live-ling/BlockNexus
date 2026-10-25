@@ -10,7 +10,7 @@
 >    `web/src` 内 `getInstanceFrp` / `InstanceFrpInfo` / 控制面板「网络」组的代码、
 >    `agent/src/**` 全部。遇到必须触碰时**停下来报告**，不要绕。
 > 1. **不改后端**：`panel/**`、`agent/**`、`scripts/**` 一律只读。只允许改 `web/src/**` 和 `docs/**`。
-> 2. **不动 IA**：5 页签（概览/玩家/文件/配置/维护）、Header 44px + Tabs 40px、终端常驻概览，
+> 2. **不动 IA**：页签（概览/玩家/文件/配置与维护；配置与维护已于 2026-10-25 合并）、Header 44px + Tabs 40px、终端常驻概览，
 >    一律保持。不重排布局、不换组件库、不引新依赖。
 > 3. **布局硬约束**（instance-detail.tsx L4–L11 原文，改动前复述一遍）：
 >    整页不滚动 `h-screen + overflow-hidden`；高度链 `100vh → flex-1 → min-h-0`；

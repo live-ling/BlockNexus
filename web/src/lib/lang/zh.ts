@@ -527,6 +527,7 @@ export const zh = {
   'instanceDetail.tab.players': '玩家',
   'instanceDetail.tab.files': '文件',
   'instanceDetail.tab.config': '配置',
+  'instanceDetail.tab.configMaintenance': '配置与维护',
   'instanceDetail.tab.maintenance': '维护',
   'instanceDetail.overview.env': '运行状态与环境',
   'instanceDetail.overview.motd': '服务器 MOTD',
@@ -544,6 +545,7 @@ export const zh = {
   'instanceDetail.config.modsDesc': 'mods/ 目录里的 jar',
   'instanceDetail.config.modsHint': '启用/禁用、上传或删除 Mod；Spark 也在这里管理。',
   'instanceDetail.config.instanceDesc': '内存、核心版本、备注与自定义图标',
+  'instanceDetail.config.groupHint': '属性、插件与 Mod 入口；保存后按提示重启生效',
   'instanceDetail.value.installed': '已安装',
   'instanceDetail.tab.map': '地图',
 

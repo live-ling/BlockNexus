@@ -329,6 +329,7 @@ export function ServerSettingsPage({
       />
 
       <SettingsLayout
+        contentClassName="max-w-[1080px]"
         sections={[
           {
             id: 'connection',
@@ -1202,13 +1203,13 @@ function RadioDot({ checked }: { checked: boolean }) {
   );
 }
 
-/** 标签/值对齐的信息网格（标签列按内容自适应，值左对齐） */
+/** 标签/值对齐的信息网格（宽屏两列，一行一对；标签列按内容自适应） */
 function InfoGrid({ rows }: { rows: [string, React.ReactNode][] }) {
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-xs">
+    <div className="grid gap-x-10 gap-y-2.5 text-[12px] sm:grid-cols-2">
       {rows.map(([label, value], i) => (
-        <div key={i} className="col-span-2 grid grid-cols-subgrid items-baseline gap-x-4">
-          <span className="whitespace-nowrap text-muted-foreground">{label}</span>
+        <div key={i} className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4">
+          <span className="whitespace-nowrap text-[11px] text-muted-foreground">{label}</span>
           <span className="min-w-0 break-words font-mono text-foreground">{value}</span>
         </div>
       ))}

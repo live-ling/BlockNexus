@@ -77,14 +77,14 @@ export function Field({
   );
 }
 
-/** 表单双列：620 上限，短字段不会被拉成整行宽 */
+/** 表单双列：760 上限，短字段不会被拉成整行宽（放得下两列，又不至于把输入框拉满） */
 export function FormGrid({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn('grid max-w-[620px] gap-x-4 gap-y-3 sm:grid-cols-2', className)}>{children}</div>;
+  return <div className={cn('grid max-w-[760px] gap-x-4 gap-y-3 sm:grid-cols-2', className)}>{children}</div>;
 }
 
 /** 字段行的操作条：按钮靠右、与字段同宽 */
 export function FormActions({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn('flex max-w-[620px] flex-wrap items-center justify-end gap-2', className)}>{children}</div>;
+  return <div className={cn('flex max-w-[760px] flex-wrap items-center justify-end gap-2', className)}>{children}</div>;
 }
 
 /** 区块右上角的配置状态小标 */

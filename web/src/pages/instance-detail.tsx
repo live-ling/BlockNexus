@@ -107,7 +107,7 @@ import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
 
 /** 主区页签（/proto 的 5 Tab）：AI 分析、Spark、地图、聊天按下述归属收进对应页签 */
-type Tab = 'overview' | 'players' | 'files' | 'config' | 'maintenance';
+type Tab = 'overview' | 'players' | 'files' | 'config';
 
 /**
  * 弹层种类：**同一时刻只有一个弹层**。
@@ -562,8 +562,7 @@ export function InstanceDetailPage({
     { key: 'overview', label: $('instanceDetail.tab.overview') },
     { key: 'players', label: $('instanceDetail.tab.players') },
     { key: 'files', label: $('instanceDetail.tab.files') },
-    { key: 'config', label: $('instanceDetail.tab.config') },
-    { key: 'maintenance', label: $('instanceDetail.tab.maintenance') },
+    { key: 'config', label: $('instanceDetail.tab.configMaintenance') },
   ];
 
   // 维护页的两行摘要：没有计划时退回「崩溃后自动拉起 / 未启用」
@@ -1204,123 +1203,115 @@ export function InstanceDetailPage({
             </div>
           </div>
 
-          {/* ============ 配置 ============ */}
+          {/* ============ 配置与维护（合并：左边改配置，右边管备份/自动化） ============ */}
           <div className={tab === 'config' ? 'h-full overflow-y-auto p-4' : 'hidden'}>
-            {/* 行式列表：每行一个入口，比 2×2 卡片网格省一半高度，加条目也不挤 */}
-            <Surface flush className="max-w-[820px] divide-y divide-border/60">
-              <ConfigRow
-                icon={Settings2}
-                title={$('instanceDetail.serverProperties')}
-                hint={$('instanceDetail.config.propsDesc')}
-                value={`${instance.port} · ${instance.maxPlayers} · ${
-                  instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')
-                }`}
-                action={$('instanceDetail.config.open')}
-                onOpen={() => openModal('properties')}
-              />
-              <ConfigRow
-                icon={Puzzle}
-                title={$('instanceDetail.pluginConfig')}
-                hint={hasConfigDirs ? $('instanceDetail.config.pluginsHint') : $('instanceDetail.config.noPlugins')}
-                action={$('instanceDetail.config.open')}
-                disabled={!hasConfigDirs}
-                onOpen={() => openModal('pluginConfig')}
-              />
-              <ConfigRow
-                icon={Puzzle}
-                title={$('instanceDetail.mods')}
-                hint={`${$('instanceDetail.config.modsHint')}${
-                  sparkInstalled ? ` · Spark ${$('instanceDetail.value.installed')}` : ''
-                }`}
-                action={$('instanceDetail.config.open')}
-                onOpen={() => openModal('mods')}
-              />
-              <ConfigRow
-                icon={Pencil}
-                title={$('instanceDetail.edit')}
-                hint={$('instanceDetail.config.instanceDesc')}
-                value={`${coreText} · ${fmtMB(instance.memoryMB)}`}
-                action={$('instanceDetail.edit')}
-                onOpen={() => openModal('edit')}
-              />
-            </Surface>
-          </div>
-
-          {/* ============ 维护 ============ */}
-          <div className={tab === 'maintenance' ? 'h-full overflow-y-auto p-4' : 'hidden'}>
-            <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-              <Surface className="flex flex-col gap-3 p-3.5">
-                <SectionHeading
-                  title={$('instanceDetail.panel.tab.automation')}
-                  hint={$('instanceDetail.panel.watchdog.desc')}
-                />
-                <div className="divide-y divide-border/60">
-                  <div className="flex items-center gap-3 py-2.5">
-                    <RotateCw className="size-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[13px] font-medium">{$('instanceDetail.watchdog')}</p>
-                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{watchdogText}</p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-[13px]"
-                      onClick={() => openModal('watchdog')}
-                    >
-                      {$('instanceDetail.edit')}
-                    </Button>
+            <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+              <div className="grid content-start gap-3.5">
+                {/* 配置入口：每行一个动作，保持 44px 行高 */}
+                <Surface flush className="divide-y divide-border/60">
+                  <div className="px-4 pt-3 pb-2">
+                    <SectionHeading title={$('instanceDetail.tab.config')} hint={$('instanceDetail.config.groupHint')} />
                   </div>
-                  <div className="flex items-center gap-3 py-2.5">
-                    <Archive className="size-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[13px] font-medium">{$('instanceDetail.backupSchedule')}</p>
-                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{backupScheduleText}</p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-[13px]"
-                      onClick={() => openModal('backupSchedule')}
-                    >
-                      {$('instanceDetail.edit')}
-                    </Button>
-                  </div>
-                </div>
-              </Surface>
-
-              <Surface className="flex min-h-[280px] flex-col gap-3 p-3.5">
-                <SectionHeading
-                  title={$('instanceDetail.backups')}
-                  hint={$('instanceDetail.maintenance.backupHint')}
-                />
-                <BackupPanel server={server} instance={instance.name} active={tab === 'maintenance'} />
-              </Surface>
-
-              {/* 诊断：只是两个入口，结果在全屏浮层里看（46vh 就地展开会把备份列表挤没） */}
-              <Surface className="flex flex-col gap-2 p-3.5 xl:col-span-2">
-                <SectionHeading
-                  title={$('instanceDetail.maintenance.diagnostics')}
-                  hint={$('instanceDetail.maintenance.diagnosticsHint')}
-                />
-                <div className="divide-y divide-border/60">
-                  <DiagRow
-                    icon={Sparkles}
-                    title={$('instanceDetail.tab.ai')}
-                    desc={$('instanceDetail.maintenance.diagnosticsReady')}
-                    disabled={!active}
-                    onOpen={() => setDiag('ai')}
+                  <ConfigRow
+                    icon={Settings2}
+                    title={$('instanceDetail.serverProperties')}
+                    hint={$('instanceDetail.config.propsDesc')}
+                    value={`${instance.port} · ${instance.maxPlayers} · ${instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')}`}
+                    action={$('instanceDetail.config.open')}
+                    onOpen={() => openModal('properties')}
                   />
-                  {sparkInstalled && (
+                  <ConfigRow
+                    icon={Puzzle}
+                    title={$('instanceDetail.pluginConfig')}
+                    hint={hasConfigDirs ? $('instanceDetail.config.pluginsHint') : $('instanceDetail.config.noPlugins')}
+                    action={$('instanceDetail.config.open')}
+                    disabled={!hasConfigDirs}
+                    onOpen={() => openModal('pluginConfig')}
+                  />
+                  <ConfigRow
+                    icon={Puzzle}
+                    title={$('instanceDetail.mods')}
+                    hint={`${$('instanceDetail.config.modsHint')}${sparkInstalled ? ` · Spark ${$('instanceDetail.value.installed')}` : ''}`}
+                    action={$('instanceDetail.config.open')}
+                    onOpen={() => openModal('mods')}
+                  />
+                  <ConfigRow
+                    icon={Pencil}
+                    title={$('instanceDetail.edit')}
+                    hint={$('instanceDetail.config.instanceDesc')}
+                    value={`${coreText} · ${fmtMB(instance.memoryMB)}`}
+                    action={$('instanceDetail.edit')}
+                    onOpen={() => openModal('edit')}
+                  />
+                </Surface>
+
+                {/* 诊断：只放入口，结果在全屏浮层里看 */}
+                <Surface className="flex flex-col gap-2 p-3.5">
+                  <SectionHeading
+                    title={$('instanceDetail.maintenance.diagnostics')}
+                    hint={$('instanceDetail.maintenance.diagnosticsHint')}
+                  />
+                  <div className="divide-y divide-border/60">
                     <DiagRow
-                      icon={Activity}
-                      title="Spark"
+                      icon={Sparkles}
+                      title={$('instanceDetail.tab.ai')}
                       desc={$('instanceDetail.maintenance.diagnosticsReady')}
                       disabled={!active}
-                      onOpen={() => setDiag('spark')}
+                      onOpen={() => setDiag('ai')}
                     />
-                  )}
-                </div>
-              </Surface>
+                    {sparkInstalled && (
+                      <DiagRow
+                        icon={Activity}
+                        title="Spark"
+                        desc={$('instanceDetail.maintenance.diagnosticsReady')}
+                        disabled={!active}
+                        onOpen={() => setDiag('spark')}
+                      />
+                    )}
+                  </div>
+                </Surface>
+              </div>
+
+              <div className="grid content-start gap-3.5">
+                {/* 备份是这张页签里的「数据」，占更大的高度 */}
+                <Surface className="flex min-h-[300px] flex-col gap-3 p-3.5">
+                  <SectionHeading
+                    title={$('instanceDetail.backups')}
+                    hint={$('instanceDetail.maintenance.backupHint')}
+                  />
+                  <BackupPanel server={server} instance={instance.name} active={tab === 'config'} />
+                </Surface>
+
+                {/* 自动化：两项计划，排成紧凑的两行 */}
+                <Surface className="flex flex-col gap-2 p-3.5">
+                  <SectionHeading
+                    title={$('instanceDetail.panel.tab.automation')}
+                    hint={$('instanceDetail.panel.watchdog.desc')}
+                  />
+                  <div className="divide-y divide-border/60">
+                    <div className="flex items-center gap-3 py-2.5">
+                      <RotateCw className="size-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium">{$('instanceDetail.watchdog')}</p>
+                        <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{watchdogText}</p>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-8 text-[13px]" onClick={() => openModal('watchdog')}>
+                        {$('instanceDetail.edit')}
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-3 py-2.5">
+                      <Archive className="size-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium">{$('instanceDetail.backupSchedule')}</p>
+                        <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{backupScheduleText}</p>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-8 text-[13px]" onClick={() => openModal('backupSchedule')}>
+                        {$('instanceDetail.edit')}
+                      </Button>
+                    </div>
+                  </div>
+                </Surface>
+              </div>
             </div>
           </div>
         </div>

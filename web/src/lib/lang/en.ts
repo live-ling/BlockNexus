@@ -521,6 +521,7 @@ export const en = {
   'instanceDetail.tab.players': 'Players',
   'instanceDetail.tab.files': 'Files',
   'instanceDetail.tab.config': 'Config',
+  'instanceDetail.tab.configMaintenance': 'Config & maintenance',
   'instanceDetail.tab.maintenance': 'Maintenance',
   'instanceDetail.overview.env': 'Status & environment',
   'instanceDetail.overview.motd': 'Server MOTD',
@@ -538,6 +539,7 @@ export const en = {
   'instanceDetail.config.modsDesc': 'Jars in the mods/ folder',
   'instanceDetail.config.modsHint': 'Enable, disable, upload or delete mods; Spark is managed here too.',
   'instanceDetail.config.instanceDesc': 'Memory, core version, note and custom icon',
+  'instanceDetail.config.groupHint': 'Properties, plugins and mods; restart as prompted after saving',
   'instanceDetail.value.installed': 'installed',
   'instanceDetail.tab.map': 'Map',
 

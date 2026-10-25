@@ -187,7 +187,7 @@ export function PanelSettingsPage({
         避免「访问」+「登录保护」两级标题叠在一起。
       */}
       <SettingsLayout
-        contentClassName="max-w-[680px]"
+        contentClassName="max-w-[1080px]"
         sections={[
           {
             id: 'access',
@@ -200,8 +200,8 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.network'),
             heading: false,
             content: (
-              <div className="grid gap-7">
-                <DomainCard data={data} reload={load} />
+              <div className="grid gap-5 xl:grid-cols-2">
+                <DomainCard data={data} reload={load} className="xl:col-span-2" />
                 {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
                 <DdnsCard />
                 <FrpCard />
@@ -213,7 +213,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.notify'),
             heading: false,
             content: (
-              <div className="grid gap-7">
+              <div className="grid gap-5 xl:grid-cols-2">
                 <SmtpCard data={data} reload={load} />
                 <NotifyCard data={data} reload={load} />
               </div>
@@ -230,7 +230,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.update'),
             heading: false,
             content: (
-              <div className="grid gap-7">
+              <div className="grid gap-5 xl:grid-cols-2">
                 {/* 策略块紧随版本块：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
                 <VersionCard data={data} reload={load} />
                 <UpdatePolicyCard data={data} reload={load} />
@@ -242,7 +242,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.appearance'),
             heading: false,
             content: (
-              <div className="grid gap-7">
+              <div className="grid gap-5 xl:grid-cols-2">
                 <LanguageCard />
                 <AboutEntry />
               </div>
@@ -1122,14 +1122,19 @@ function AuthCard({
     >
       {/* 表单区常驻渲染：开关只切换可用性，区块高度不随开/关变化。
           关闭时整体置灰并禁用，配合右上角「未启用」状态章表达不可用状态。 */}
-      <FormGrid className={authOn ? '' : 'pointer-events-none opacity-60 transition-opacity'}>
-        {/* 用户名跨整行：下方密码/确认才是稳定双列，避免长短行混排错位 */}
+      <FormGrid
+        className={
+          authOn
+            ? 'max-w-none sm:grid-cols-3'
+            : 'pointer-events-none max-w-none opacity-60 transition-opacity sm:grid-cols-3'
+        }
+      >
+        {/* 三列并排：用户名 / 密码 / 确认密码，宽屏下不再挤在左侧 620 里 */}
         <Field
           htmlFor="ps-user"
           label={$('panelSettings.auth.username')}
           hint={$('panelSettings.auth.username.hint')}
           error={authOn ? userInvalid ? $('panelSettings.auth.username.invalid') : undefined : undefined}
-          className="sm:col-span-2"
         >
           <Input
             id="ps-user"
@@ -1172,7 +1177,7 @@ function AuthCard({
           />
         </Field>
       </FormGrid>
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           size="sm"
           disabled={busy || nothingChanged || userInvalid || userEmpty || pwTooShort || pwMissing || pw2Mismatch}
@@ -1207,7 +1212,7 @@ function DomainCard({
       className={className}
       status={<StateChip ok={!!domain.trim()} okText={$('panelSettings.domain.bound')} badText={$('panelSettings.domain.unbound')} />}
     >
-      <div className="grid max-w-[620px] gap-1.5">
+      <div className="grid gap-5 xl:grid-cols-2">
         <Field
           htmlFor="ps-domain"
           label={$('panelSettings.domain.label')}
@@ -1215,13 +1220,13 @@ function DomainCard({
         >
           <Input
             id="ps-domain"
-            className="sm:max-w-[320px]"
+            className="font-mono"
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
             placeholder="panel.example.com"
           />
         </Field>
-        <p className="text-[10.5px] leading-4 text-muted-foreground/80">
+        <p className="self-end text-[11px] leading-5 text-muted-foreground/80">
           {$('panelSettings.domain.sslHint.pre')}
           <code className="font-mono">--host 0.0.0.0</code>
           {$('panelSettings.domain.sslHint.post')}
@@ -1633,7 +1638,7 @@ function AiCard({
     >
       {/* 配置区始终可编辑：开关只决定「是否启用分析」，不锁配置。
           否则未启用时既填不了地址密钥、也点不了「查询模型」，形成先有蛋后有鸡的死结。 */}
-      <FormGrid>
+      <FormGrid className="max-w-none">
         <Field
           htmlFor="ps-ai-base"
           label={$('panelSettings.ai.base')}
@@ -1695,14 +1700,14 @@ function AiCard({
           <Input
             id="ps-ai-key"
             type="password"
-            className="sm:max-w-[320px]"
+            className="font-mono"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={data.ai.hasKey ? $('panelSettings.ai.key.hintSaved') : 'sk-…'}
           />
         </Field>
       </FormGrid>
-      <p className="max-w-[620px] text-[10.5px] leading-4 text-muted-foreground/80">
+      <p className="max-w-none text-[11px] leading-4 text-muted-foreground/80">
         {$('panelSettings.ai.privacy')}
       </p>
       {testResult && <AiTestSummary result={testResult} />}
