@@ -200,8 +200,8 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.network'),
             heading: false,
             content: (
-              <div className="grid gap-5 lg:grid-cols-2">
-                <DomainCard data={data} reload={load} className="lg:col-span-2" />
+              <div className="grid gap-7">
+                <DomainCard data={data} reload={load} />
                 {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
                 <DdnsCard />
                 <FrpCard />
@@ -213,7 +213,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.notify'),
             heading: false,
             content: (
-              <div className="grid gap-5 lg:grid-cols-2">
+              <div className="grid gap-7">
                 <SmtpCard data={data} reload={load} />
                 <NotifyCard data={data} reload={load} />
               </div>
@@ -230,7 +230,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.update'),
             heading: false,
             content: (
-              <div className="grid gap-5 lg:grid-cols-2">
+              <div className="grid gap-7">
                 {/* 策略块紧随版本块：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
                 <VersionCard data={data} reload={load} />
                 <UpdatePolicyCard data={data} reload={load} />
@@ -242,7 +242,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.appearance'),
             heading: false,
             content: (
-              <div className="grid gap-5 lg:grid-cols-2">
+              <div className="grid gap-7">
                 <LanguageCard />
                 <AboutEntry />
               </div>
@@ -293,7 +293,7 @@ function LanguageCard({ className = '' }: { className?: string }) {
       description={$('panelSettings.language.desc')}
       className={className}
     >
-      <FormGrid>
+      <FormGrid className="max-w-none">
         <Field label={$('panelSettings.language.current')}>
           <Select
             value={current}
@@ -957,7 +957,7 @@ function UpdatePolicyCard({
       description={$('panelSettings.update.policy.desc')}
       className={className}
     >
-      <FormGrid>
+      <FormGrid className="max-w-none">
         {/* 三选一：用按钮组而不是下拉，选项只有三个且说明文字要随选择变化 */}
         <Field label={$('panelSettings.update.auto.title')} hint={modeHint[auto]}>
           <div className="inline-flex w-fit rounded-md border border-border bg-muted/40 p-0.5">
@@ -992,7 +992,7 @@ function UpdatePolicyCard({
           />
         </Field>
       </FormGrid>
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           size="sm"
           disabled={saving || sourceInvalid || nothingChanged}
@@ -1232,7 +1232,7 @@ function DomainCard({
           {$('panelSettings.domain.sslHint.post')}
         </p>
       </div>
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           size="sm"
           disabled={busy}
@@ -1307,7 +1307,7 @@ function SmtpCard({
       status={<StateChip ok={data.smtpReady} okText={$('panelSettings.smtp.ready')} badText={$('panelSettings.smtp.notConfigured')} />}
       className={className}
     >
-      <FormGrid>
+      <FormGrid className="max-w-none">
         <Field htmlFor="ps-smtp-host" label={$('panelSettings.smtp.host')} hint={$('panelSettings.smtp.host.hint')}>
           <Input
             id="ps-smtp-host"
@@ -1369,7 +1369,7 @@ function SmtpCard({
         onCheckedChange={setSecure}
         className="max-w-[620px]"
       />
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           variant="outline"
           size="sm"
@@ -1522,7 +1522,7 @@ function NotifyCard({
           onCheckedChange={setRecovery}
         />
       </div>
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           size="sm"
           disabled={busy || emailInvalid}
@@ -1711,7 +1711,7 @@ function AiCard({
         {$('panelSettings.ai.privacy')}
       </p>
       {testResult && <AiTestSummary result={testResult} />}
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           variant="outline"
           size="sm"

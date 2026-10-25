@@ -127,7 +127,7 @@ export function DdnsCard({ className = '' }: { className?: string }) {
         <span>{$('panelSettings.ddns.enabled')}</span>
       </label>
 
-      <FormGrid>
+      <FormGrid className="max-w-none">
         <Field label={$('panelSettings.ddns.provider')}>
           <Select value={cfg.provider} onValueChange={(v) => patch({ provider: v as DdnsConfig['provider'] })}>
             <SelectTrigger className="w-full">
@@ -353,7 +353,7 @@ export function DdnsCard({ className = '' }: { className?: string }) {
         <span className="mt-1">{$('panelSettings.ddns.natHint')}</span>
       </div>
 
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button
           variant="outline"
           size="sm"
@@ -576,7 +576,7 @@ export function FrpCard({ className = '' }: { className?: string }) {
         <span>{$('panelSettings.frp.enabled')}</span>
       </label>
 
-      <FormGrid>
+      <FormGrid className="max-w-none">
         <Field label={$('panelSettings.frp.mode')}>
           <Select value={cfg.mode} onValueChange={(v) => patch({ mode: v as FrpConfig['mode'] })}>
             <SelectTrigger className="w-full">
@@ -699,7 +699,7 @@ export function FrpCard({ className = '' }: { className?: string }) {
         )}
       </div>
 
-      <FormActions>
+      <FormActions className="max-w-none">
         <Button variant="outline" size="sm" disabled={busy} onClick={() => setImportOpen(true)}>
           {$('panelSettings.frp.import')}
         </Button>
