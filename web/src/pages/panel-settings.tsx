@@ -187,7 +187,7 @@ export function PanelSettingsPage({
         避免「访问」+「登录保护」两级标题叠在一起。
       */}
       <SettingsLayout
-        contentClassName="max-w-[1160px]"
+        contentClassName="mx-auto max-w-[860px]"
         sections={[
           {
             id: 'access',
@@ -293,7 +293,7 @@ function LanguageCard({ className = '' }: { className?: string }) {
       description={$('panelSettings.language.desc')}
       className={className}
     >
-      <FormGrid className="max-w-none">
+      <FormGrid>
         <Field label={$('panelSettings.language.current')}>
           <Select
             value={current}
@@ -957,7 +957,7 @@ function UpdatePolicyCard({
       description={$('panelSettings.update.policy.desc')}
       className={className}
     >
-      <FormGrid className="max-w-none">
+      <FormGrid>
         {/* 三选一：用按钮组而不是下拉，选项只有三个且说明文字要随选择变化 */}
         <Field label={$('panelSettings.update.auto.title')} hint={modeHint[auto]}>
           <div className="inline-flex w-fit rounded-md border border-border bg-muted/40 p-0.5">
@@ -992,7 +992,7 @@ function UpdatePolicyCard({
           />
         </Field>
       </FormGrid>
-      <FormActions className="max-w-none">
+      <FormActions>
         <Button
           size="sm"
           disabled={saving || sourceInvalid || nothingChanged}
@@ -1232,7 +1232,7 @@ function DomainCard({
           {$('panelSettings.domain.sslHint.post')}
         </p>
       </div>
-      <FormActions className="max-w-none">
+      <FormActions>
         <Button
           size="sm"
           disabled={busy}
@@ -1307,7 +1307,7 @@ function SmtpCard({
       status={<StateChip ok={data.smtpReady} okText={$('panelSettings.smtp.ready')} badText={$('panelSettings.smtp.notConfigured')} />}
       className={className}
     >
-      <FormGrid className="max-w-none">
+      <FormGrid>
         <Field htmlFor="ps-smtp-host" label={$('panelSettings.smtp.host')} hint={$('panelSettings.smtp.host.hint')}>
           <Input
             id="ps-smtp-host"
@@ -1369,7 +1369,7 @@ function SmtpCard({
         onCheckedChange={setSecure}
         className="max-w-[620px]"
       />
-      <FormActions className="max-w-none">
+      <FormActions>
         <Button
           variant="outline"
           size="sm"
@@ -1522,7 +1522,7 @@ function NotifyCard({
           onCheckedChange={setRecovery}
         />
       </div>
-      <FormActions className="max-w-none">
+      <FormActions>
         <Button
           size="sm"
           disabled={busy || emailInvalid}
@@ -1638,7 +1638,7 @@ function AiCard({
     >
       {/* 配置区始终可编辑：开关只决定「是否启用分析」，不锁配置。
           否则未启用时既填不了地址密钥、也点不了「查询模型」，形成先有蛋后有鸡的死结。 */}
-      <FormGrid className="max-w-none">
+      <FormGrid>
         <Field
           htmlFor="ps-ai-base"
           label={$('panelSettings.ai.base')}
@@ -1711,7 +1711,7 @@ function AiCard({
         {$('panelSettings.ai.privacy')}
       </p>
       {testResult && <AiTestSummary result={testResult} />}
-      <FormActions className="max-w-none">
+      <FormActions>
         <Button
           variant="outline"
           size="sm"

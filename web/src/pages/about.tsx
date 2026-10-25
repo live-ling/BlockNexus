@@ -113,7 +113,7 @@ export function AboutPage({ onBack }: { onBack: () => void }) {
       <PageHeader back={onBack} title={$('about.title')} subtitle={$('about.subtitle')} />
 
       <SettingsLayout
-        contentClassName="max-w-[1040px]"
+        contentClassName="mx-auto max-w-[920px]"
         sections={[
           {
             id: 'panel',
