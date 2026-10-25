@@ -187,7 +187,7 @@ export function PanelSettingsPage({
         避免「访问」+「登录保护」两级标题叠在一起。
       */}
       <SettingsLayout
-        contentClassName="max-w-[1080px]"
+        contentClassName="max-w-[1160px]"
         sections={[
           {
             id: 'access',
@@ -200,8 +200,8 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.network'),
             heading: false,
             content: (
-              <div className="grid gap-5 xl:grid-cols-2">
-                <DomainCard data={data} reload={load} className="xl:col-span-2" />
+              <div className="grid gap-5 lg:grid-cols-2">
+                <DomainCard data={data} reload={load} className="lg:col-span-2" />
                 {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
                 <DdnsCard />
                 <FrpCard />
@@ -213,7 +213,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.notify'),
             heading: false,
             content: (
-              <div className="grid gap-5 xl:grid-cols-2">
+              <div className="grid gap-5 lg:grid-cols-2">
                 <SmtpCard data={data} reload={load} />
                 <NotifyCard data={data} reload={load} />
               </div>
@@ -230,7 +230,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.update'),
             heading: false,
             content: (
-              <div className="grid gap-5 xl:grid-cols-2">
+              <div className="grid gap-5 lg:grid-cols-2">
                 {/* 策略块紧随版本块：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
                 <VersionCard data={data} reload={load} />
                 <UpdatePolicyCard data={data} reload={load} />
@@ -242,7 +242,7 @@ export function PanelSettingsPage({
             label: $('panelSettings.section.appearance'),
             heading: false,
             content: (
-              <div className="grid gap-5 xl:grid-cols-2">
+              <div className="grid gap-5 lg:grid-cols-2">
                 <LanguageCard />
                 <AboutEntry />
               </div>
@@ -1032,7 +1032,7 @@ function ToggleRow({
   className?: string;
 }) {
   return (
-    <label className={`flex items-center gap-3 border-t border-border/60 py-2.5 ${className}`}>
+    <label className={`flex items-center gap-3 py-2.5 ${className}`}>
       <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="text-[12.5px] font-medium">{title}</span>
         {description && <span className="text-[11px] leading-4 text-muted-foreground">{description}</span>}
@@ -1212,7 +1212,7 @@ function DomainCard({
       className={className}
       status={<StateChip ok={!!domain.trim()} okText={$('panelSettings.domain.bound')} badText={$('panelSettings.domain.unbound')} />}
     >
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-2">
         <Field
           htmlFor="ps-domain"
           label={$('panelSettings.domain.label')}

@@ -82,10 +82,20 @@ export interface ServerSummary {
   };
 }
 
-/** 远端 Agent 版本是否落后于面板随附版本 */
+/**
+ * 远端 Agent 版本是否落后于面板随附版本。
+ *
+ * ⚠ 只有「**装上了**、且双方都报得出可比较的版本号」才谈得上落后：
+ *   - `info` 为空 = 没装 / 从未上报 → **不是**「版本过低」（这里返回 false；
+ *     未安装状态由调用方的安装引导与状态胶囊表达）；
+ *   - `info` 在但 `agentVersion` 缺失 = 老 Agent 没上报版本 → 同样不做版本判断。
+ * 之前写成 `remote !== bundled` 导致未安装（remote=undefined）一律被判成落后，
+ * 服务器设置页因此在「Agent 未安装」时显示「有新版本可用 / 版本过低」。
+ */
 export function agentOutdated(s: Pick<ServerSummary, 'info' | 'agentBundled'>): boolean {
   const remote = s.info?.agentVersion;
-  return !!s.agentBundled && remote !== s.agentBundled;
+  if (!s.agentBundled || !remote) return false;
+  return remote !== s.agentBundled;
 }
 
 /**

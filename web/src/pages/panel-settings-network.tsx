@@ -6,8 +6,8 @@
 // 2026-10-25：跟随设置页去卡中卡——不再画边框/阴影/彩色图标；
 // DDNS 的 TTL / 同步间隔 / 取址方式属于低频调参，收进「高级」折叠，首屏只留服务商、域名与凭据。
 
-import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -122,7 +122,7 @@ export function DdnsCard({ className = '' }: { className?: string }) {
 
   return wrap(
     <>
-      <label className="flex max-w-[620px] items-center gap-2 border-b border-border/60 pb-2.5 text-[12.5px]">
+      <label className="flex max-w-[620px] items-center gap-2 pb-1 text-[13px]">
         <Switch checked={cfg.enabled} onCheckedChange={(v) => patch({ enabled: v })} />
         <span>{$('panelSettings.ddns.enabled')}</span>
       </label>
@@ -257,7 +257,7 @@ export function DdnsCard({ className = '' }: { className?: string }) {
         <ChevronDown className={`size-3 transition-transform ${advanced ? 'rotate-180' : ''}`} />
       </button>
       {advanced && (
-        <div className="grid max-w-[620px] gap-3 border-l border-border/60 pl-3">
+        <div className="grid max-w-[620px] gap-3 pl-1">
           <FormGrid className="max-w-none">
             <Field label={$('panelSettings.ddns.ttl')} htmlFor="ddns-ttl">
               <Input
@@ -329,7 +329,7 @@ export function DdnsCard({ className = '' }: { className?: string }) {
       )}
 
       {/* 同步状态：一行摘要 + 最近几行日志，不再用带边框的灰块 */}
-      <div className="grid max-w-[620px] gap-0.5 text-[10.5px] leading-4 text-muted-foreground">
+      <div className="grid max-w-none gap-1 text-[11px] leading-5 text-muted-foreground">
         {checkMsg && <span className="text-foreground">{checkMsg}</span>}
         <span>
           {$('panelSettings.ddns.status')}：
@@ -344,12 +344,11 @@ export function DdnsCard({ className = '' }: { className?: string }) {
           </span>
         )}
         {!!status?.log?.length && (
-          <span className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono opacity-80">
-            {status.log
-              .slice(-5)
-              .map((l) => l.text)
-              .join('\n')}
-          </span>
+          <LogPanel
+            className="mt-1"
+            lines={status.log.slice(-20).map((l) => l.text)}
+            empty={$('panelSettings.log.empty')}
+          />
         )}
         <span className="mt-1">{$('panelSettings.ddns.natHint')}</span>
       </div>
@@ -572,7 +571,7 @@ export function FrpCard({ className = '' }: { className?: string }) {
 
   return wrap(
     <>
-      <label className="flex max-w-[620px] items-center gap-2 border-b border-border/60 pb-2.5 text-[12.5px]">
+      <label className="flex max-w-[620px] items-center gap-2 pb-1 text-[13px]">
         <Switch checked={cfg.enabled} onCheckedChange={(v) => patch({ enabled: v })} />
         <span>{$('panelSettings.frp.enabled')}</span>
       </label>
@@ -675,7 +674,7 @@ export function FrpCard({ className = '' }: { className?: string }) {
         </p>
       )}
 
-      <div className="grid max-w-[620px] gap-0.5 text-[10.5px] leading-4 text-muted-foreground">
+      <div className="grid max-w-none gap-1 text-[11px] leading-5 text-muted-foreground">
         <span className="flex items-center gap-2">
           <span>
             {status?.state === 'running'
@@ -691,10 +690,12 @@ export function FrpCard({ className = '' }: { className?: string }) {
             {$('common.refresh')}
           </button>
         </span>
-        {!!status?.log?.length && (
-          <span className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono opacity-80">
-            {status.log.slice(-12).join('\n')}
-          </span>
+        {status && (
+          <LogPanel
+            className="mt-1"
+            lines={(status.log ?? []).slice(-40)}
+            empty={$('panelSettings.log.empty')}
+          />
         )}
       </div>
 
@@ -724,5 +725,66 @@ export function FrpCard({ className = '' }: { className?: string }) {
         }}
       />
     </>,
+  );
+}
+
+/**
+ * 网络助手的日志面板（DDNS / frp 共用）。
+ *
+ * 改造前日志是行内 `<span className="max-h-24 overflow-auto">`：
+ * `max-height` 对 inline 元素不生效，行数一多就往页面里无限长，而且没有换行/滚动边界。
+ * 这里改成固定高度的块级滚动区 + 逐行渲染，并自动滚到最新一行。
+ */
+function LogPanel({
+  lines,
+  empty,
+  className = '',
+}: {
+  lines: string[];
+  empty: string;
+  className?: string;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lines]);
+
+  const tone = (line: string) =>
+    /error|failed|失败|错误|refused|timeout/i.test(line)
+      ? 'text-red-500'
+      : /warn|警告|deprecated/i.test(line)
+        ? 'text-amber-500'
+        : 'text-muted-foreground';
+
+  // frpc 的日志带 ANSI 颜色控制符（\x1b[0m / \x1b[1;33m …）。
+  // 直接渲染会变成满屏「[0m[1;33m」，所以显示前统一剥掉。
+  const clean = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, '');
+
+  return (
+    <div className={`grid gap-1.5 ${className}`}>
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <Terminal className="size-3 shrink-0" />
+        <span>{$('panelSettings.log.title')}</span>
+        {lines.length > 0 && <span className="ml-auto tabular-nums">{$('panelSettings.log.lines', lines.length)}</span>}
+      </div>
+      <div
+        ref={box}
+        className="max-h-40 overflow-y-auto rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-5"
+      >
+        {lines.length === 0 ? (
+          <div className="text-muted-foreground/60">{empty}</div>
+        ) : (
+          lines.map((line, i) => {
+            const text = clean(line);
+            return (
+              <div key={i} className={`whitespace-pre-wrap break-all ${tone(text)}`}>
+                {text}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }

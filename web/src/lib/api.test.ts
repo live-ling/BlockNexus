@@ -150,11 +150,18 @@ describe('agentVersionText / agentOutdated（版本号展示契约）', () => {
     expect(`· ${$('serverSettings.sys.agentLocal', agentVersionText('0.5.0'))}`).not.toContain('vv')
   })
 
-  it('agentOutdated：远端与随附版本不一致即为落后（随附版本缺失时不算）', () => {
+  it('agentOutdated：只有「已安装且双方版本可比」才判落后', () => {
     expect(agentOutdated({ info: { agentVersion: '0.4.5' }, agentBundled: '0.5.0' } as never)).toBe(true)
     expect(agentOutdated({ info: { agentVersion: '0.5.0' }, agentBundled: '0.5.0' } as never)).toBe(false)
-    expect(agentOutdated({ info: null, agentBundled: '0.5.0' } as never)).toBe(true)
     expect(agentOutdated({ info: { agentVersion: '0.4.5' }, agentBundled: '' } as never)).toBe(false)
+  })
+
+  it('agentOutdated：未安装 / 未上报版本不算「版本过低」', () => {
+    // info 为空 = Agent 没装或从未上报：页面应走进安装引导，而不是「有新版本可用」
+    expect(agentOutdated({ info: null, agentBundled: '0.5.0' } as never)).toBe(false)
+    // 老 Agent 装了但没上报版本：无从比较，也不能说它落后
+    expect(agentOutdated({ info: { agentVersion: '' }, agentBundled: '0.5.0' } as never)).toBe(false)
+    expect(agentOutdated({ info: {} as never, agentBundled: '0.5.0' } as never)).toBe(false)
   })
 })
 

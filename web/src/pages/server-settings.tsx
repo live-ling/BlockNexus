@@ -329,7 +329,7 @@ export function ServerSettingsPage({
       />
 
       <SettingsLayout
-        contentClassName="max-w-[1080px]"
+        contentClassName="max-w-[1160px]"
         sections={[
           {
             id: 'connection',
