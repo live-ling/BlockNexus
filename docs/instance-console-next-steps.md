@@ -1,0 +1,164 @@
+# 实例控制台页 · 勘察结论与后续修改建议（2026-10-25）
+
+> 勘察对象：`web/src/pages/instance-detail.tsx`（1821 行）、`console-panel.tsx`（319 行）、
+> `lib/sse.ts`（151 行）。本文只列**经代码验证**的事实，建议按优先级排序。
+> 与 `instance-page-refactor.md`（排版规格）、`frontend-redesign-audit.md`（全局盘点）互补，不重复其内容。
+>
+> **状态：S1–S5 已实施（2026-10-25）**，实施结果见文末「实施结果」。
+
+## 0. 勘察后修正的三个前提
+
+1. **前端没有权限系统**。全仓 grep 不到 role/permission 字段——面板是单用户登录制。
+   之前报告里的「权限派生」不适用于当前代码；真正的访问控制只有登录态。
+   **建议：本轮不为它发明权限模型**（AGENTS.md 也写明多租户暂不做），但状态建模时把
+   `canOperate` 留成派生函数的位置，未来加权限只改一处。
+2. **第三版 IA 已落地且基本健康**：5 页签、终端常驻概览、弹层入口已收敛（`openFromPanel` 统一调度）。
+   页面头部注释（L4–L11）甚至写了布局硬约束。**骨架不要动。**
+3. **真正的病在数据层与组件边界**，全部可在实例页内部修，不动后端、不动其它页面。
+
+## 1. 代码实证的问题（按严重度）
+
+### P0-a 日志双数据源（结构性，refactor 文档 §6 已标记未修）
+
+- 页面：`console?tail=200`，**常驻 5s 轮询**（L243–261）→ 喂 ERROR 计数/最近事件。
+- ConsolePanel：自拉 `tail=300` 历史 + 自订阅 SSE `console` 事件（L136–172）→ 喂显示。
+- 后果：两条时间线；页面**永远**每 5 秒打一次接口（切走页签也不停）；计数与屏幕可能不一致；
+  断线恢复时两处各补各的，缺口策略不同。
+
+### P0-b 状态所有权混乱（实测 30+ 个 useState，14 个弹层开关平铺）
+
+L130–175：`modsOpen/backupOpen/backupScheduleOpen/watchdogOpen/propsOpen/plugCfgOpen/editOpen/
+deleteOpen/reinstallOpen/bansOpen/panelOpen/statsOpen/mapOpen/diag` —— 14 个布尔/枚举
+平铺在页面顶层。任何一个弹层组件改名都要动页面。另有 `forceTick`（L175）这种
+「为让时长走动而每秒重渲整页」的 hack（30s 一次，可接受，但应隔离在指标组件内）。
+
+### P0-c ConsolePanel 内部维护第二份 status（L84）
+
+`const [status, setStatus] = useState(instanceStatus)` —— 接收 prop 后又自立门户，
+靠 SSE `instance.updated` 自行更新。父组件的 `instance.status` 与它可能短暂不一致，
+「启停按钮可用」与「命令输入可用」由此会出现不同步的窗口期。
+
+### P1-a 轮询无页签门控、无运行态门控
+
+- `tail=200` 5s：无条件常驻（见 P0-a）。
+- players 20s / stats 60s：有 `running` 门控（L291–304，好），但**没有 tab 门控**——
+  用户在「文件」页签时玩家数据照刷。
+- `files?path=` 探测（L264–278）：每次进页面都列一次根目录只为判断插件入口显隐，
+  应延后到首次打开「配置」页签。
+
+### P1-b SSE 事件处理散在组件里写 if 链（L307–343）
+
+`subscribeServer` 回调里 5 个 if 分支 + 3 处 `setTimeout(load*, 800/1500)` 的
+「等等再拉」猜测式刷新。没有 `Last-Event-ID`，断线期间的事件直接丢（sse.ts L88 靠
+EventSource 自带重连，无补洞逻辑）。`installLogStore`（sse.ts L111–151）已是正确的
+store 模式，但**实例日志没有走它**——两套模式并存。
+
+### P1-c 乐观刷新靠 setTimeout 猜测
+
+L416–419、L436：`op()` 成功后 `setTimeout(1500)` 再拉数据。正确做法已存在一半：
+SSE `instance.updated` 会推状态，setTimeout 只是兜底。**保留兜底可以，但 UI 应以
+SSE 为准**，当前代码里两者都在改同一份 state，时序靠运气。
+
+### P2-a 页面内还藏着 3 个子组件（L1659+）
+
+文件尾部内联定义了全屏浮层壳、Java 缺失引导、玩家操作确认等组件（各自带 useState），
+加上主组件共 1821 行。应拆文件。
+
+### P2-b 无错误边界、加载态是纯文本
+
+`if (!server || !instance) return <div>加载中</div>`（L455–457）。agent 离线、
+实例 404、SSE 断线三者在视觉上无法区分。
+
+## 2. 修改建议（按执行顺序，每步独立可回滚）
+
+### S1 · 日志单源化（P0-a + P0-c，最大收益）
+
+1. 在 `lib/sse.ts` 旁新增 `instanceLogStore`（照搬 `installLogStore` 的
+   `useSyncExternalStore` 模式）：订阅 SSE `console` 事件，按 `serverId:instance` 分键，
+   环形缓冲 1500 行，派生 ERROR 计数。
+2. ConsolePanel 改受控：`lines` / `status` 全部由 store 经 props/hook 注入，
+   删除其内部 `tail=300` 拉取与 `subscribeSSE`（保留滚动跟随、命令历史等纯 UI 逻辑）。
+3. 页面删除 5s `tail=200` 轮询，改从同一 store 读计数/最近事件。
+4. 断线补偿：SSE `onerror` 后首次 `onmessage` 时拉一次 `tail=N` 补缺口（一次性，非常驻）。
+   验收：整页只有一处 `console?tail=`；切页签后 Network 面板无周期请求。
+
+### S2 · 状态收口：`useInstancePage` hook（P0-b）
+
+- 14 个弹层开关合成一个 `modal: { kind: 'none' | 'mods' | 'backup' | ... }` 判别联合——
+  同时只能开一个弹层本来就是事实（`openFromPanel` 已在强行保证），用类型把它钉死。
+- 所有 `setInterval`/`subscribeServer` 收进 hook；组件只消费返回值。
+- `forceTick` 挪进指标组件内部。
+  验收：页面文件 ≤ 800 行，顶层 useState ≤ 8 个。
+
+### S3 · 轮询门控（P1-a）
+
+players/stats 加 `tab === 'players' || tab === 'overview'` 门控；`files?path=` 探测
+延后到配置页签首次激活。纯减法，无风险。
+
+### S4 · 事件处理集中化（P1-b + P1-c）
+
+SSE 回调改为单一 reducer 式 switch；`op()` 后不再 setTimeout 猜刷新，UI 等
+`instance.updated`（保留一次 5s 兜底超时即可）。补 10 种异常态的 UI 表达
+（断线灰点 + 重连提示是最优先的一个，目前完全缺失）。
+
+### S5 · 拆文件（P2-a）
+
+页尾 3 个内联组件移出为 `components/instance/` 下独立文件。最后做，纯机械。
+
+### 不做
+
+- 不引入状态库/TanStack Query（audit 已定调）；`installLogStore` 模式够用。
+- 不动 IA、不动后端 API、不加权限模型。
+- 不重写 ConsolePanel 的显示/交互逻辑（命令历史、自动跟随是好的）。
+
+## 3. 给 AI 协作的落地约束（写进每次 prompt）
+
+1. 「整页不滚动、高度链 100vh→flex-1→min-h-0」已在文件头注释，改动前复述。
+2. 任何新 state 必须先回答「归 hook 还是归组件」；禁止第 15 个平铺弹层开关。
+3. 组件不得自带 `setInterval`/`subscribeSSE`。
+4. 每步交付附 parity 检查：功能清单逐项勾 + Network 面板无多余周期请求。
+
+## 4. 实施结果（2026-10-25，S1–S5 已完成）
+
+### 落地的文件
+
+| 文件 | 变化 |
+|---|---|
+| `web/src/lib/instance-log-store.ts` | **新增**：全页面唯一的日志数据源（历史一次拉取 + SSE 实时追加 + 断线补偿），按 `serverId:instance` 分键，1500 行环形缓冲 + dropped 计数 |
+| `web/src/lib/instance-log-store.test.ts` | **新增**：10 个用例（历史加载 / 实时追加 / 缓冲上限 / 断线合并） |
+| `web/src/lib/sse.ts` | 新增 `sseConnection` 状态机（idle/connecting/open/reconnecting/closed）+ 浏览器 `offline`/`online` 事件接线 |
+| `web/src/components/console-panel.tsx` | 改受控：删除内部 `tail=300` 拉取与 `subscribeSSE`，日志/状态一律来自 store |
+| `web/src/pages/instance-detail.tsx` | 删除 5s `tail=200` 轮询；弹层 12 个布尔 → `ModalKind` 判别联合；轮询加页签门控；新增断线/Agent 离线条件条与头部连接指示；拆文件后 1461 行 |
+| `web/src/pages/instance-detail/parts.tsx` | **新增**：指标条 / 配置行 / 浮层壳 / 页签 / 图标等展示组件 |
+| `web/src/pages/instance-detail/dialogs.tsx` | **新增**：Java 安装行 + 玩家操作确认框 |
+| `web/src/pages/instance-detail/avatar.ts` | **新增**：头像底色（单独成文件以满足 Fast Refresh 约束） |
+
+### 关键实现取舍
+
+1. **断线补偿不做内容去重**：MC 日志里重复行是常态（"Saving chunks" 连着出现），
+   按内容去重会悄悄吃掉真实日志。合并策略是「以 Agent 尾部末行为锚点」，
+   锚点找不到（Agent 重启过）时直接拼接，本地行一条不丢。
+2. **只往已打开的实例追加**：Agent 会为同服所有实例推 `console` 事件，
+   没人看的实例不在面板内存里堆缓冲。
+3. **`onerror` 不可靠**：实测 CDP 断网时已建立的 SSE 连接不会立刻报错。
+   所以额外接了浏览器 `offline`/`online` 事件，并把 `reconnecting`（能自愈）
+   与 `closed`（必须刷新）区分开。
+4. **命令执行后的刷新**：以 SSE `instance.updated` 为准，原来的固定 `setTimeout(1500)`
+   改成 5s 兜底（原来是猜「差不多该好了」）。
+
+### 实测验证（真实远程实例 minimc）
+
+- 概览页 12 秒内 **零** 周期请求（改造前每 5 秒一次 `/console?tail=200`）；
+- 切到「文件」页签 10 秒内 **零** players/console/files 请求；
+- 切回「概览」后 players 轮询恢复；
+- 断网 → 顶部出现「实时连接已断开」条件条，恢复 → 自动消失；
+- 终端 300 行历史一次拉取、实时追加正常；ERROR 计数与「最近事件」同源；
+- 布局硬约束未变：整页不滚动、Header 44px、指标条 72px、终端区 412px；
+- `npx tsc -b` 绿、`oxlint` 0 warning、vitest **207 passed**（原 197 + 新 10）、`npm run build:web` 通过。
+
+### 仍未做（留给下一轮）
+
+- `useInstancePage` hook 尚未抽离（页面 1461 行，顶层 useState 已从 30+ 降到 20，其中一半是弹层/菜单的 UI 态）；
+- SSE 回调仍是 if 链（未改 reducer/switch）；
+- 错误边界（ErrorBoundary）与骨架屏仍未加；
+- 指标历史图表、任务中心等属产品能力，不在前端重构范围。

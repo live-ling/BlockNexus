@@ -81,6 +81,7 @@ export const en = {
   'console.error.send': 'Failed to send command',
   'console.search': 'Search logs',
   'console.search.empty': 'No matching lines',
+  'console.dropped': '(buffer full, {0} oldest lines dropped)',
 
   // ---------- 关于页 ----------
   'about.title': 'About',
@@ -641,6 +642,13 @@ export const en = {
   'instanceDetail.domain.none': 'No domain set',
   'instanceDetail.info.title': 'Instance Details',
   'instanceDetail.agent.online': 'Agent connected',
+  'instanceDetail.agent.offlineHint': 'Commands cannot be sent; metrics and logs may be stale',
+  'instanceDetail.conn.lost': 'Live connection lost',
+  'instanceDetail.conn.lostHint': 'Reconnecting automatically; missed logs are backfilled on recovery',
+  'instanceDetail.conn.ok': 'Live',
+  'instanceDetail.conn.connecting': 'Connecting',
+  'instanceDetail.conn.closed': 'Live connection closed',
+  'instanceDetail.conn.closedHint': 'It will not recover automatically — refresh the page',
   'instanceDetail.tools': 'Common Tools',
   'instanceDetail.tools.files': 'Files',
   'instanceDetail.more': 'More',

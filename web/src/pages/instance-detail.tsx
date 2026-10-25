@@ -10,7 +10,7 @@
 //   · 指标卡高度写死 h-[84px]：同样是防跳动；改大小只改 MetricCard/MetricValue/MetricHelper。
 //   · 主操作按钮（启动↔停止）位置恒定：宽度也按最长文案取齐，否则右对齐的按钮组会被推走。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -40,7 +40,6 @@ import {
   Square,
   Terminal,
   Users,
-  X,
 } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog, BackupPanel } from '@/components/backup-dialog';
@@ -60,20 +59,25 @@ import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
 import { InstanceControlPanel } from '@/components/instance-control-panel';
 import { SectionHeading, Surface } from '@/components/layout/primitives';
+import {
+  ConfigRow,
+  DiagRow,
+  Dot,
+  FullScreenOverlay,
+  InstanceIcon,
+  MetricBar,
+  MetricCell,
+  MetricHelper,
+  MetricStrip,
+  MetricTrend,
+  MetricValue,
+  ViewTab,
+} from './instance-detail/parts';
+import { avatarTone } from './instance-detail/avatar';
+import { JavaInstallRow, PlayerActionDialog } from './instance-detail/dialogs';
 import { LatencyBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,26 +86,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   api,
-  consoleLines,
   CORE_LABEL,
   errText,
   fmtMB,
   fmtUptime,
   getInstanceFrp,
   getPlayersStats,
-  instanceIconUrl,
   type Instance,
   type InstanceFrpInfo,
   type PlayersSnapshot,
   type PlayersStats,
   type ServerSummary,
 } from '@/lib/api';
+import { instanceLogStore } from '@/lib/instance-log-store';
 import { $ } from '@/lib/i18n';
 import { navigate } from '@/lib/router';
-import { subscribeServer } from '@/lib/sse';
+import { subscribeServer, sseConnection } from '@/lib/sse';
 import { fmtDuration, sessionMs, totalWithSession } from '@/lib/player-stats';
 import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
@@ -109,12 +111,46 @@ import { useToastHelpers } from '@/lib/toast';
 /** 主区页签（/proto 的 5 Tab）：AI 分析、Spark、地图、聊天按下述归属收进对应页签 */
 type Tab = 'overview' | 'players' | 'files' | 'config' | 'maintenance';
 
+/**
+ * 弹层种类：**同一时刻只有一个弹层**。
+ *
+ * 改造前页面上平铺着 12 个 `xxxOpen` 布尔开关，任何两个都能同时为真 ——
+ * 曾经真的出现过「控制面板里再开一个对话框」两个 Dialog 抢焦点（见 openFromPanel 的 160ms 延时）。
+ * 用判别联合把「只能开一个」写进类型里，比靠事件流程维持更可靠。
+ */
+type ModalKind =
+  | 'none'
+  | 'panel'
+  | 'mods'
+  | 'backup'
+  | 'backupSchedule'
+  | 'watchdog'
+  | 'properties'
+  | 'pluginConfig'
+  | 'edit'
+  | 'delete'
+  | 'reinstall'
+  | 'bans'
+  | 'stats';
+
 /** 状态 → 呼吸灯色（头部与「切换实例」下拉共用；颜色只在这里定义） */
 function statusDotClass(status: string): string {
   if (status === 'running') return 'bg-emerald-500';
   if (status === 'starting') return 'bg-amber-400';
   if (status === 'failed') return 'bg-red-500';
   return 'bg-muted-foreground/40';
+}
+
+/** 域名连通检测结果（Agent 侧解析 + TCP 探测） */
+interface DomainCheckResult {
+  domain: string;
+  srv: { host: string; port: number } | null;
+  host: string;
+  ip: string | null;
+  port: number | null;
+  tcp: boolean;
+  latencyMs: number | null;
+  error: string | null;
 }
 
 export function InstanceDetailPage({
@@ -127,23 +163,21 @@ export function InstanceDetailPage({
   onBack: () => void;
 }) {
   const { success, error } = useToastHelpers();
+  // 面板 ↔ 浏览器 的实时连接状态：断了要能看见（改造前 EventSource 的 onerror 是空的，
+  // 断线与「实例没日志」在界面上完全无法区分）
+  const connState = useSyncExternalStore(
+    sseConnection.subscribe,
+    sseConnection.get,
+    sseConnection.get,
+  );
   const [server, setServer] = useState<ServerSummary | null>(null);
   const [instance, setInstance] = useState<Instance | null>(null);
   // 同服务器的实例清单（头部「切换实例」下拉；与当前实例同一份响应，不额外请求）
   const [siblings, setSiblings] = useState<Instance[]>([]);
   const [players, setPlayers] = useState<PlayersSnapshot[string] | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [modsOpen, setModsOpen] = useState(false);
-  const [backupOpen, setBackupOpen] = useState(false);
-  const [backupScheduleOpen, setBackupScheduleOpen] = useState(false);
-  const [watchdogOpen, setWatchdogOpen] = useState(false);
-  const [propsOpen, setPropsOpen] = useState(false);
-  const [plugCfgOpen, setPlugCfgOpen] = useState(false);
   // 是否存在 plugins/ 或 config/ 目录：vanilla 实例不显示「插件配置」入口
   const [hasConfigDirs, setHasConfigDirs] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [reinstallOpen, setReinstallOpen] = useState(false);
   const [backupBeforeDelete, setBackupBeforeDelete] = useState(true);
   const [busy, setBusy] = useState(false);
   // 终端日志关键字（页签栏右侧搜索框；只影响显示，不动缓冲区）
@@ -155,21 +189,18 @@ export function InstanceDetailPage({
   const [domainCheck, setDomainCheck] = useState<
     { state: 'checking' | 'done'; result?: DomainCheckResult } | null
   >(null);
-  const [bansOpen, setBansOpen] = useState(false);
   // frp 端口映射（仅本机实例；远程实例的 frpc 不在面板这台机器上）
   // 入口只在控制面板「网络」组 —— 页面里不再有第二个 frp 对话框（旧的 InstanceFrpDialog 已删）
   const [frpInfo, setFrpInfo] = useState<InstanceFrpInfo | null>(null);
-  // 概览终端与「最近事件」共用：控制台尾部（错误计数、事件筛选）
-  const [tailLines, setTailLines] = useState<string[]>([]);
-  // 实例控制面板：设置/自动化/备份/危险操作的唯一入口
-  const [panelOpen, setPanelOpen] = useState(false);
   // 玩家统计（在线时长）与聊天记录页签
-  const [statsOpen, setStatsOpen] = useState(false);
   const [playerStats, setPlayerStats] = useState<PlayersStats | null>(null);
   // 主区页签（/proto 的 5 Tab）：默认「概览」
   const [tab, setTab] = useState<Tab>('overview');
   // 概览里的世界地图：默认收起，点「地图」就地展开
   const [mapOpen, setMapOpen] = useState(false);
+  // 弹层：同一时刻只有一个（判别联合，见 ModalKind 的注释）
+  const [modal, setModal] = useState<ModalKind>('none');
+  const openModal = useCallback((kind: ModalKind) => setModal(kind), []);
   // 维护页的诊断面板：AI 日志分析 / Spark 性能
   const [diag, setDiag] = useState<'none' | 'ai' | 'spark'>('none');
   const [, forceTick] = useState(0);
@@ -239,29 +270,29 @@ export function InstanceDetailPage({
     };
   }, [server?.isLocal, serverId, instanceName]);
 
-  // 控制台尾部：每 5 秒拉一次（概览的「最近事件」与终端头部的 ERROR 计数共用）
+  // 离开页面时释放该实例的日志缓冲（1500 行常驻内存不清掉会一直挂着）
   useEffect(() => {
-    let alive = true;
-    const load = () => {
-      api<{ lines?: unknown }>(
-        `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/console?tail=200`,
-      )
-        .then((r) => {
-          // 必须归一化：Agent 回的是 { ts, text }[]，直接渲染对象会整页白屏（React #31）
-          if (alive) setTailLines(consoleLines(r));
-        })
-        .catch(() => {});
-    };
-    load();
-    const timer = setInterval(load, 5000);
     return () => {
-      alive = false;
-      clearInterval(timer);
+      instanceLogStore.close(serverId, instanceName);
     };
   }, [serverId, instanceName]);
 
+  // 控制台尾部：**唯一数据源**是 instanceLogStore（历史一次拉取 + SSE 实时追加 + 断线补偿）。
+  // 改造前这里还有一个常驻 5s 轮询 `console?tail=200`（切走页签照跑），已删除。
+  const logState = useSyncExternalStore(
+    instanceLogStore.subscribe,
+    () => instanceLogStore.get(serverId, instanceName),
+    () => instanceLogStore.get(serverId, instanceName),
+  );
+  const tailLines = logState.lines;
+
   // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
+  // 门控：**只在「配置」页签首次激活时探测一次**。
+  // 改造前每次进页面都列一次根目录，只为了判断一个入口显隐——纯浪费。
+  const probedConfigDirs = useRef(false);
   useEffect(() => {
+    if (tab !== 'config' || probedConfigDirs.current) return;
+    probedConfigDirs.current = true;
     let alive = true;
     api<{ name: string; type: 'dir' | 'file' }[]>(
       `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/files?path=`,
@@ -275,7 +306,7 @@ export function InstanceDetailPage({
     return () => {
       alive = false;
     };
-  }, [serverId, instanceName]);
+  }, [tab, serverId, instanceName]);
 
   // 运行中：每 20 秒刷新在线人数；启动中不查询（服务端还没开始监听）
   const running = instance?.status === 'running';
@@ -288,8 +319,11 @@ export function InstanceDetailPage({
     if (!sparkInstalled && diag === 'spark') setDiag('none');
     if (!active && diag !== 'none') setDiag('none');
   }, [sparkInstalled, active, diag]);
+  // 轮询门控：**只有概览/玩家页签可见时才轮询**。
+  // 改造前 players 20s / stats 60s 是无条件的——用户停在「文件」页签时后台照样在刷。
+  const pollVisible = tab === 'overview' || tab === 'players';
   useEffect(() => {
-    if (!running) return;
+    if (!running || !pollVisible) return;
     loadPlayers();
     // 玩家统计走 60 秒：它是累计值，不需要跟在线人数一样勤（少一次往返）
     loadStats();
@@ -301,7 +335,7 @@ export function InstanceDetailPage({
       window.clearInterval(t2);
       window.clearInterval(t3);
     };
-  }, [running, loadPlayers, loadStats]);
+  }, [running, pollVisible, loadPlayers, loadStats]);
 
   // 实时事件：状态/延迟/资源快照变化
   useEffect(() => {
@@ -362,7 +396,7 @@ export function InstanceDetailPage({
 
   /** 控制面板里点具体项：先关面板，再打开原来的对话框（避免两个 Dialog 抢焦点） */
   const openFromPanel = useCallback((fn: () => void) => {
-    setPanelOpen(false);
+    setModal('none');
     // 留出对话框关闭动画/焦点归还的时间，避免两个 Dialog 抢焦点
     window.setTimeout(fn, 160);
   }, []);
@@ -402,7 +436,8 @@ export function InstanceDetailPage({
     else error($('instanceDetail.copyFailed'), $('instanceDetail.copyFailed.hint'));
   };
 
-  const op = async (action: 'start' | 'stop' | 'restart') => {    setBusy(true);
+  const op = async (action: 'start' | 'stop' | 'restart') => {
+    setBusy(true);
     try {
       await api(`/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/${action}`, {
         method: 'POST',
@@ -413,10 +448,13 @@ export function InstanceDetailPage({
         : action === 'stop'
           ? $('instanceDetail.op.stopped')
           : $('instanceDetail.op.restarting'));
+      // 状态以 SSE 的 instance.updated 为准（见下面的 subscribeServer 处理）。
+      // 这里只留一个兜底：万一事件没来（Agent 忙/通道抖动），5 秒后补拉一次，
+      // 别再用固定 1.5 秒去猜「差不多该好了」。
       setTimeout(() => {
         loadInstance();
         loadPlayers();
-      }, 1500);
+      }, 5000);
     } catch (e) {
       error(errText(e));
     } finally {
@@ -623,6 +661,39 @@ export function InstanceDetailPage({
             <span className="min-w-0 truncate">
               {server.online ? $('instanceDetail.agent.online') : $('server.detail.agentOffline')}
             </span>
+            {/* 面板 ↔ 浏览器的实时连接：断线时给一个灰色小点（不抢状态色） */}
+            <span className="shrink-0">·</span>
+            <span
+              className="inline-flex shrink-0 items-center gap-1"
+              title={
+                connState === 'open'
+                  ? $('instanceDetail.conn.ok')
+                  : connState === 'reconnecting'
+                    ? $('instanceDetail.conn.lost')
+                    : connState === 'closed'
+                      ? $('instanceDetail.conn.closed')
+                      : $('instanceDetail.conn.connecting')
+              }
+            >
+              <span
+                className={`size-1.5 shrink-0 rounded-full ${
+                  connState === 'open'
+                    ? 'bg-emerald-500'
+                    : connState === 'reconnecting' || connState === 'closed'
+                      ? 'bg-amber-500'
+                      : 'bg-muted-foreground/40'
+                }`}
+              />
+              <span className="hidden sm:inline">
+                {connState === 'open'
+                  ? $('instanceDetail.conn.ok')
+                  : connState === 'reconnecting'
+                    ? $('instanceDetail.conn.lost')
+                    : connState === 'closed'
+                      ? $('instanceDetail.conn.closed')
+                      : $('instanceDetail.conn.connecting')}
+              </span>
+            </span>
           </p>
         </div>
 
@@ -673,11 +744,11 @@ export function InstanceDetailPage({
                 <RotateCw className="h-3.5 w-3.5" />
                 {$('instanceDetail.op.restart')}
               </DropdownMenuItem>
-              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setPanelOpen(true)}>
+              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('panel')}>
                 <Settings2 className="h-3.5 w-3.5" />
                 {$('instanceDetail.panel.open')}
               </DropdownMenuItem>
-              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setBackupOpen(true)}>
+              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('backup')}>
                 <Archive className="h-3.5 w-3.5" />
                 {$('instanceDetail.backups')}
               </DropdownMenuItem>
@@ -781,7 +852,33 @@ export function InstanceDetailPage({
                 </MetricCell>
               </MetricStrip>
 
-              {/* 条件条：失败 / Java 缺失才出现，正常时零高度（不再和地址抢同一张卡） */}
+              {/* 条件条：连接中断 / Agent 离线 / 失败 / Java 缺失才出现，正常时零高度 */}
+              {(connState === 'reconnecting' || connState === 'closed') && (
+                <div className="flex shrink-0 items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-[12px]">
+                  <AlertCircle className="size-3.5 shrink-0 text-amber-500" />
+                  <span className="shrink-0 font-medium text-amber-600 dark:text-amber-400">
+                    {connState === 'closed'
+                      ? $('instanceDetail.conn.closed')
+                      : $('instanceDetail.conn.lost')}
+                  </span>
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    {connState === 'closed'
+                      ? $('instanceDetail.conn.closedHint')
+                      : $('instanceDetail.conn.lostHint')}
+                  </span>
+                </div>
+              )}
+              {!server.online && (
+                <div className="flex shrink-0 items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[12px]">
+                  <AlertCircle className="size-3.5 shrink-0 text-destructive" />
+                  <span className="shrink-0 font-medium text-destructive">
+                    {$('server.detail.agentOffline')}
+                  </span>
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    {$('instanceDetail.agent.offlineHint')}
+                  </span>
+                </div>
+              )}
               {isFailed && instance.error && (
                 <div className="flex shrink-0 items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[12px]">
                   <AlertCircle className="size-3.5 shrink-0 text-destructive" />
@@ -906,7 +1003,7 @@ export function InstanceDetailPage({
                       {
                         icon: Archive,
                         label: $('instanceDetail.overview.backupNow'),
-                        onClick: () => setBackupOpen(true),
+                        onClick: () => openModal('backup'),
                       },
                       {
                         icon: FolderOpen,
@@ -946,7 +1043,7 @@ export function InstanceDetailPage({
                           <MapIcon className="size-3.5" />
                           {$('instanceDetail.tab.map')}
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setPropsOpen(true)}>
+                        <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('properties')}>
                           <Settings2 className="size-3.5" />
                           {$('instanceDetail.serverProperties')}
                         </DropdownMenuItem>
@@ -1166,7 +1263,7 @@ export function InstanceDetailPage({
                   variant="ghost"
                   size="sm"
                   className="w-full justify-start text-muted-foreground hover:text-foreground"
-                  onClick={() => setStatsOpen(true)}
+                  onClick={() => openModal('stats')}
                 >
                   <Users className="size-3.5" /> {$('instanceDetail.playerStats')}
                 </Button>
@@ -1174,7 +1271,7 @@ export function InstanceDetailPage({
                   variant="ghost"
                   size="sm"
                   className="w-full justify-start text-muted-foreground hover:text-foreground"
-                  onClick={() => setBansOpen(true)}
+                  onClick={() => openModal('bans')}
                 >
                   <Ban className="size-3.5" /> {$('instanceDetail.banList')}
                 </Button>
@@ -1213,7 +1310,7 @@ export function InstanceDetailPage({
                   instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')
                 }`}
                 action={$('instanceDetail.config.open')}
-                onOpen={() => setPropsOpen(true)}
+                onOpen={() => openModal('properties')}
               />
               <ConfigRow
                 icon={Puzzle}
@@ -1221,7 +1318,7 @@ export function InstanceDetailPage({
                 hint={hasConfigDirs ? $('instanceDetail.config.pluginsHint') : $('instanceDetail.config.noPlugins')}
                 action={$('instanceDetail.config.open')}
                 disabled={!hasConfigDirs}
-                onOpen={() => setPlugCfgOpen(true)}
+                onOpen={() => openModal('pluginConfig')}
               />
               <ConfigRow
                 icon={Puzzle}
@@ -1230,7 +1327,7 @@ export function InstanceDetailPage({
                   sparkInstalled ? ` · Spark ${$('instanceDetail.value.installed')}` : ''
                 }`}
                 action={$('instanceDetail.config.open')}
-                onOpen={() => setModsOpen(true)}
+                onOpen={() => openModal('mods')}
               />
               <ConfigRow
                 icon={Pencil}
@@ -1238,7 +1335,7 @@ export function InstanceDetailPage({
                 hint={$('instanceDetail.config.instanceDesc')}
                 value={`${coreText} · ${fmtMB(instance.memoryMB)}`}
                 action={$('instanceDetail.edit')}
-                onOpen={() => setEditOpen(true)}
+                onOpen={() => openModal('edit')}
               />
             </Surface>
           </div>
@@ -1262,7 +1359,7 @@ export function InstanceDetailPage({
                       variant="ghost"
                       size="sm"
                       className="h-7 text-[12.5px]"
-                      onClick={() => setWatchdogOpen(true)}
+                      onClick={() => openModal('watchdog')}
                     >
                       {$('instanceDetail.edit')}
                     </Button>
@@ -1277,7 +1374,7 @@ export function InstanceDetailPage({
                       variant="ghost"
                       size="sm"
                       className="h-7 text-[12.5px]"
-                      onClick={() => setBackupScheduleOpen(true)}
+                      onClick={() => openModal('backupSchedule')}
                     >
                       {$('instanceDetail.edit')}
                     </Button>
@@ -1336,15 +1433,15 @@ export function InstanceDetailPage({
             running={running}
             visible={diag === 'spark'}
             heightClass="h-full"
-            onOpenMods={() => setModsOpen(true)}
+            onOpenMods={() => openModal('mods')}
           />
         </FullScreenOverlay>
 
       </div>
 
       <InstanceControlPanel
-        open={panelOpen}
-        onOpenChange={setPanelOpen}
+        open={modal === 'panel'}
+        onOpenChange={(o) => setModal(o ? 'panel' : 'none')}
         server={server}
         instance={instance}
         active={active}
@@ -1353,79 +1450,79 @@ export function InstanceDetailPage({
         watchdogOn={watchdogOn}
         backupOn={backupOn}
         onCopy={handleCopy}
-        onWatchdog={() => openFromPanel(() => setWatchdogOpen(true))}
-        onBackupSchedule={() => openFromPanel(() => setBackupScheduleOpen(true))}
-        onReinstall={() => openFromPanel(() => setReinstallOpen(true))}
+        onWatchdog={() => openFromPanel(() => openModal('watchdog'))}
+        onBackupSchedule={() => openFromPanel(() => openModal('backupSchedule'))}
+        onReinstall={() => openFromPanel(() => openModal('reinstall'))}
         onPanelInstall={() => openFromPanel(() => void panelInstall())}
-        onDelete={() => openFromPanel(() => setDeleteOpen(true))}
+        onDelete={() => openFromPanel(() => openModal('delete'))}
         onSaved={loadInstance}
         onFrpChanged={setFrpInfo}
       />
       <PlayerStatsDialog
         serverId={serverId}
         instance={instanceName}
-        open={statsOpen}
-        onOpenChange={setStatsOpen}
+        open={modal === 'stats'}
+        onOpenChange={(o) => setModal(o ? 'stats' : 'none')}
       />
       <ModManagerDialog
         serverId={server.id}
         instance={instance.name}
-        open={modsOpen}
-        onOpenChange={setModsOpen}
+        open={modal === 'mods'}
+        onOpenChange={(o) => setModal(o ? 'mods' : 'none')}
         onChanged={loadInstance}
       />
       <BackupDialog
         server={server}
         instance={instance.name}
-        open={backupOpen}
-        onOpenChange={setBackupOpen}
+        open={modal === 'backup'}
+        onOpenChange={(o) => setModal(o ? 'backup' : 'none')}
       />
       <PropertiesDialog
         server={server}
         instance={instance}
-        open={propsOpen}
-        onOpenChange={setPropsOpen}
+        open={modal === 'properties'}
+        onOpenChange={(o) => setModal(o ? 'properties' : 'none')}
         onSaved={loadInstance}
         onRestart={() => op('restart')}
       />
       <PluginConfigDialog
         server={server}
         instance={instance}
-        open={plugCfgOpen}
-        onOpenChange={setPlugCfgOpen}
+        open={modal === 'pluginConfig'}
+        onOpenChange={(o) => setModal(o ? 'pluginConfig' : 'none')}
         onRestart={() => op('restart')}
       />
       <AutoRestartDialog
         server={server}
         instance={instance}
-        open={watchdogOpen}
-        onOpenChange={setWatchdogOpen}
+        open={modal === 'watchdog'}
+        onOpenChange={(o) => setModal(o ? 'watchdog' : 'none')}
         onSaved={loadInstance}
       />
       <BackupScheduleDialog
         server={server}
         instance={instance}
-        open={backupScheduleOpen}
-        onOpenChange={setBackupScheduleOpen}
+        open={modal === 'backupSchedule'}
+        onOpenChange={(o) => setModal(o ? 'backupSchedule' : 'none')}
         onSaved={loadInstance}
       />
       <ReinstallDialog
         server={server}
         instance={instance}
-        open={reinstallOpen}
-        onOpenChange={setReinstallOpen}
+        open={modal === 'reinstall'}
+        onOpenChange={(o) => setModal(o ? 'reinstall' : 'none')}
         onStarted={loadInstance}
       />
       <EditInstanceDialog
         server={server}
         instance={instance}
-        open={editOpen}
-        onOpenChange={setEditOpen}
+        open={modal === 'edit'}
+        onOpenChange={(o) => setModal(o ? 'edit' : 'none')}
         onSaved={loadInstance}
       />
       <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
+        open={modal === 'delete'}
+        onOpenChange={(o) => setModal(o ? 'delete' : 'none')}
         title={$('instanceDetail.delete.title', instance.name)}
         description={
           <div>
@@ -1471,432 +1568,10 @@ export function InstanceDetailPage({
         <BanListDialog
           serverId={server.id}
           instance={instance.name}
-          open={bansOpen}
-          onOpenChange={setBansOpen}
+          open={modal === 'bans'}
+          onOpenChange={(o) => setModal(o ? 'bans' : 'none')}
         />
       )}
     </div>
-  );
-}
-
-/* ---------------- 局部组件（只服务本页，不改动通用组件） ---------------- */
-
-/**
- * 指标条：一条 72px 的分段 strip，取代三张各自带卡壳的 104px 卡——
- * 省掉卡与卡之间的间距/圆角空耗，把 36px 竖向空间还给内容区。
- * 高度写死仍然是为了防跳动；分段之间用 1px 发丝线，不用分割卡片。
- */
-function MetricStrip({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="shrink-0 px-4 pt-3 pb-3">
-      <div className="grid h-[72px] grid-cols-3 overflow-hidden rounded-lg border border-border/70 bg-card shadow-xs sm:divide-x sm:divide-border/60">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-/** 指标条的一格：10.5px 大写标签 + 20px 大数字 + 辅助行 */
-function MetricCell({
-  icon,
-  label,
-  children,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-w-0 flex-col justify-center gap-1.5 px-3.5">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <p className="truncate text-[10.5px] font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
-        {icon && <span className="ml-auto shrink-0 text-muted-foreground/60 [&_svg]:size-3">{icon}</span>}
-      </div>
-      <div className="flex min-w-0 flex-col gap-1">{children}</div>
-    </div>
-  );
-}
-
-/** 数值行：20px mono + 小字号后缀（strip 里没有卡壳撑场，字号略收一档） */
-function MetricValue({ value, suffix }: { value: string; suffix?: string }) {
-  return (
-    <div className="flex h-5 shrink-0 items-baseline gap-1 overflow-hidden">
-      <span className="truncate text-[20px] leading-none font-semibold tracking-tight tabular-nums">{value}</span>
-      {suffix && <span className="shrink-0 text-[11px] text-muted-foreground">{suffix}</span>}
-    </div>
-  );
-}
-
-/** 辅助行：文字/进度条都装在 h-4 里，保证文字型与条型辅助行等高 */
-function MetricHelper({ children, title }: { children: React.ReactNode; title?: string }) {
-  return (
-    <div className="flex h-4 shrink-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={title}>
-      {children}
-    </div>
-  );
-}
-
-/** 趋势/状态胶囊（中性灰，不用状态色——颜色留给头部呼吸灯） */
-function MetricTrend({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-muted px-2 text-[11px] font-medium text-muted-foreground tabular-nums">
-      {children}
-    </span>
-  );
-}
-
-/** 进度条型辅助行（ratio 0~1；trailing 是右侧的小号数值说明） */
-function MetricBar({
-  ratio,
-  tone,
-  trailing,
-  title,
-}: {
-  ratio: number;
-  tone: string;
-  trailing?: string;
-  title?: string;
-}) {
-  const pct = Math.round(Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0)) * 100);
-  return (
-    <MetricHelper title={title}>
-      <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-        <div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} />
-      </div>
-      {trailing && <span className="shrink-0 font-mono text-[10px] leading-[14px]">{trailing}</span>}
-    </MetricHelper>
-  );
-}
-
-function Dot({ tone = 'bg-emerald-500' }: { tone?: string }) {
-  return <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone}`} />;
-}
-
-/** 配置页的一行入口：icon + 标题 + 说明 + 当前值摘要 + 打开按钮 */
-function ConfigRow({
-  icon: Icon,
-  title,
-  hint,
-  value,
-  action,
-  disabled,
-  onOpen,
-}: {
-  icon: typeof Settings2;
-  title: string;
-  hint: string;
-  value?: string;
-  action: string;
-  disabled?: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
-      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted/50 text-muted-foreground">
-        <Icon className="size-3.5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-medium">{title}</p>
-        <p className="truncate text-[11px] text-muted-foreground">{hint}</p>
-      </div>
-      {value && (
-        <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground sm:block">{value}</span>
-      )}
-      <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={disabled} onClick={onOpen}>
-        {action}
-      </Button>
-    </div>
-  );
-}
-
-/** 维护页诊断的一行入口 */
-function DiagRow({
-  icon: Icon,
-  title,
-  desc,
-  disabled,
-  onOpen,
-}: {
-  icon: typeof Sparkles;
-  title: string;
-  desc: string;
-  disabled?: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-3 py-2.5">
-      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted/50 text-muted-foreground">
-        <Icon className="size-3.5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-medium">{title}</p>
-        <p className="truncate text-[11px] text-muted-foreground">{desc}</p>
-      </div>
-      <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={disabled} onClick={onOpen}>
-        {$('instanceDetail.config.open')}
-      </Button>
-    </div>
-  );
-}
-
-/**
- * 全屏浮层：地图 / AI 分析 / Spark 这类重内容的家。
- * 为什么是全屏而不是 46vh 就地展开：就地展开会把当前页签挤成残废；
- * 为什么不是抽屉：这些内容本身就占满一屏（地图/长文结果），抽屉反而窄。
- * Esc / 右上角关闭；fixed 定位不受页面 overflow-hidden 影响。
- */
-function FullScreenOverlay({
-  open,
-  title,
-  onClose,
-  children,
-}: {
-  open: boolean;
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-  return (
-    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-50 flex flex-col bg-background">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/70 px-4">
-        <h2 className="truncate text-[13px] font-semibold">{title}</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          title={$('common.close')}
-          aria-label={$('common.close')}
-          className="ml-auto grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <X className="size-4" />
-        </button>
-      </header>
-      <div className="min-h-0 flex-1 p-3">{children}</div>
-    </div>
-  );
-}
-
-/** 主区页签：下划线式（与 /proto 一致），不用灰底药丸，避免和驾驶舱抢层级 */
-function ViewTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`relative -mb-px flex h-10 shrink-0 items-center border-b-2 px-3 text-[13px] transition-colors ${
-        active
-          ? 'border-foreground font-medium text-foreground'
-          : 'border-transparent text-muted-foreground hover:text-foreground'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-/**
- * 实例图标：优先用游戏内的 server-icon（编辑里上传的 64×64 PNG），
- * 没有则回退到等距立方体方块（38×38 圆角）。
- */
-function InstanceIcon({ serverId, instance }: { serverId: string; instance: string }) {
-  const [missing, setMissing] = useState(false);
-  return (
-    <div className="grid h-[38px] w-[38px] shrink-0 place-items-center overflow-hidden rounded-[10px] border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-      {missing ? (
-        <CubeGlyph className="h-5 w-5" />
-      ) : (
-        <img
-          src={instanceIconUrl(serverId, instance)}
-          alt=""
-          className="h-full w-full object-cover"
-          onError={() => setMissing(true)}
-        />
-      )}
-    </div>
-  );
-}
-
-/** 等距立方体（服务器图标占位/回退图形） */
-function CubeGlyph({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className}>
-      <path d="M12 2.4 21 7.2v9.6L12 21.6 3 16.8V7.2z" fill="currentColor" opacity="0.16" />
-      <path d="M12 2.4 21 7.2 12 12 3 7.2z" fill="currentColor" opacity="0.9" />
-      <path d="M12 12v9.6L3 16.8V7.2z" fill="currentColor" opacity="0.5" />
-      <path d="M21 7.2v9.6L12 21.6V12z" fill="currentColor" opacity="0.72" />
-    </svg>
-  );
-}
-
-/** 玩家名 → 头像底色（同名恒定；用 Tailwind 调色板类，不引入新 token） */
-const AVATAR_TONES = [
-  'bg-sky-500',
-  'bg-emerald-500',
-  'bg-amber-500',
-  'bg-violet-500',
-  'bg-rose-500',
-  'bg-teal-500',
-  'bg-orange-500',
-  'bg-indigo-500',
-];
-
-function avatarTone(name: string): string {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 100003;
-  return AVATAR_TONES[h % AVATAR_TONES.length];
-}
-
-/** 侧栏内：Java 版本选择 + 安装（缺 Java 或版本低于 21 时显示） */
-function JavaInstallRow({ serverId, onDone }: { serverId: string; onDone: () => void }) {
-  const { success, error } = useToastHelpers();
-  const [busy, setBusy] = useState(false);
-  const [major, setMajor] = useState('21');
-  return (
-    <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3">
-      <Select value={major} onValueChange={setMajor}>
-        <SelectTrigger size="sm" className="w-[120px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="21">{$('instanceDetail.java.recommended', 21)}</SelectItem>
-          <SelectItem value="17">Java 17</SelectItem>
-        </SelectContent>
-      </Select>
-      <Button
-        size="sm"
-        variant="secondary"
-        className="ml-auto"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            const r = await api<{ busy?: boolean }>(`/servers/${serverId}/java-install`, {
-              method: 'POST',
-              body: { major: Number(major) },
-            });
-            success(r.busy
-              ? $('instanceDetail.java.installing')
-              : $('instanceDetail.java.queued', major), $('instanceDetail.java.queuedDetail'));
-          } catch (e) {
-            error(errText(e));
-          } finally {
-            setBusy(false);
-            setTimeout(onDone, 500);
-          }
-        }}
-      >
-        {busy ? $('instanceDetail.java.installing.btn') : $('instanceDetail.java.install')}
-      </Button>
-    </div>
-  );
-}
-
-/** 域名连通检测结果（Agent 侧解析 + TCP 探测） */
-interface DomainCheckResult {
-  domain: string;
-  srv: { host: string; port: number } | null;
-  host: string;
-  ip: string | null;
-  port: number | null;
-  tcp: boolean;
-  latencyMs: number | null;
-  error: string | null;
-}
-
-/** 玩家操作确认框：踢出 / 封禁 / 封禁 IP 统一走这里，原因可选（随指令下发给服务端） */
-function PlayerActionDialog({
-  target,
-  onClose,
-  onConfirm,
-}: {
-  target: { name: string; kind: 'kick' | 'ban' | 'ban-ip' };
-  onClose: () => void;
-  /** 返回是否执行成功；成功后自动关闭 */
-  onConfirm: (cmd: string, okText: string) => Promise<boolean>;
-}) {
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const meta = {
-    kick: {
-      title: $('instanceDetail.ban.kickTitle', target.name),
-      cmd: `kick ${target.name}`,
-      hint: $('instanceDetail.ban.kickHint'),
-    },
-    ban: {
-      title: $('instanceDetail.ban.banTitle', target.name),
-      cmd: `ban ${target.name}`,
-      hint: $('instanceDetail.ban.banHint'),
-    },
-    'ban-ip': {
-      title: $('instanceDetail.ban.banIpTitle', target.name),
-      cmd: `ban-ip ${target.name}`,
-      hint: $('instanceDetail.ban.banIpHint'),
-    },
-  }[target.kind];
-  const cmd = reason.trim() ? `${meta.cmd} ${reason.trim()}` : meta.cmd;
-  const okText =
-    target.kind === 'kick'
-      ? $('instanceDetail.ban.kicked', target.name)
-      : target.kind === 'ban'
-        ? $('instanceDetail.ban.banned', target.name)
-        : $('instanceDetail.ban.bannedIp', target.name);
-
-  const submit = async () => {
-    setBusy(true);
-    try {
-      const ok = await onConfirm(cmd, okText);
-      if (ok) onClose();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <AlertDialog open onOpenChange={(v) => !v && onClose()}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{meta.title}</AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div>
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{cmd}</code>
-              <span className="mt-1 block">{meta.hint}</span>
-            </div>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <Input
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder={$('instanceDetail.ban.reasonPlaceholder')}
-          maxLength={100}
-          disabled={busy}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing && !busy) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{$('common.cancel')}</AlertDialogCancel>
-          <AlertDialogAction
-            disabled={busy}
-            onClick={async (e) => {
-              e.preventDefault();
-              await submit();
-            }}
-          >
-            {busy ? $('instanceDetail.busy') : $('confirm.ok')}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

@@ -88,6 +88,7 @@ export const zh = {
   'console.error.send': '指令发送失败',
   'console.search': '搜索日志',
   'console.search.empty': '没有匹配的日志行',
+  'console.dropped': '（缓冲已满，最早的 {0} 行日志被丢弃）',
 
   // ---------- 关于页 ----------
   'about.title': '关于',
@@ -647,6 +648,13 @@ export const zh = {
   'instanceDetail.domain.none': '未配置域名',
   'instanceDetail.info.title': '实例详情',
   'instanceDetail.agent.online': 'Agent 已连接',
+  'instanceDetail.agent.offlineHint': '无法下发指令，指标与日志可能已过期',
+  'instanceDetail.conn.lost': '实时连接已断开',
+  'instanceDetail.conn.lostHint': '正在自动重连，恢复后会自动补齐这段时间的日志',
+  'instanceDetail.conn.ok': '实时已连接',
+  'instanceDetail.conn.connecting': '实时连接中',
+  'instanceDetail.conn.closed': '实时连接已关闭',
+  'instanceDetail.conn.closedHint': '连接不会自动恢复，请刷新页面',
   'instanceDetail.tools': '常用工具',
   'instanceDetail.tools.files': '文件管理',
   'instanceDetail.more': '更多管理',

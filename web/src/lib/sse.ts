@@ -74,9 +74,48 @@ type Listener = (e: SseEvent) => void;
 let es: EventSource | null = null;
 const listeners = new Set<Listener>();
 
+/**
+ * SSE 连接状态。
+ *
+ * 为什么要单独建模：EventSource 断了以后浏览器会自己重连，但**页面完全不知道**
+ * （`onerror` 里以前是空函数）。运维页面上「断线」和「实例没日志」必须能区分开，
+ * 否则用户会把连接问题误判成服务器问题。
+ *
+ * - idle：从未连接 / 已关闭（面板登出等）
+ * - connecting：刚建立，握手未完成
+ * - open：正常
+ * - reconnecting：连接断开，浏览器正在自动重连（readyState = CONNECTING）
+ * - closed：连接被彻底关闭，**不会**自动重连（readyState = CLOSED）
+ *
+ * ⚠ 区分 reconnecting 与 closed 很关键：前者能自愈（恢复后补日志），
+ * 后者要靠用户刷新页面。混为一谈会让「等一会儿就好」和「必须重来」看起来一样。
+ */
+export type SseConnection = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
+
+let connection: SseConnection = 'idle';
+const connectionListeners = new Set<() => void>();
+
+function setConnection(next: SseConnection) {
+  if (next === connection) return;
+  connection = next;
+  connectionListeners.forEach((fn) => fn());
+}
+
+export const sseConnection = {
+  get: (): SseConnection => connection,
+  subscribe: (fn: () => void): (() => void) => {
+    connectionListeners.add(fn);
+    return () => {
+      connectionListeners.delete(fn);
+    };
+  },
+};
+
 export function connectSSE() {
   if (es) es.close();
+  setConnection('connecting');
   es = new EventSource('/api/events');
+  es.onopen = () => setConnection('open');
   es.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data) as SseEvent;
@@ -85,12 +124,44 @@ export function connectSSE() {
       // 忽略坏帧
     }
   };
-  es.onerror = () => {}; // EventSource 自带重连
+  // EventSource 自带重连。readyState 决定是「正在重试」还是「彻底断了」：
+  //   CONNECTING(0) = 浏览器会重连；CLOSED(2) = 不会重连了，得让用户刷新。
+  es.onerror = () => {
+    setConnection(es && es.readyState === 2 ? 'closed' : 'reconnecting');
+  };
 }
+
+/**
+ * 系统级网络状态 → SSE 状态。
+ *
+ * 为什么需要它：EventSource 的 `onerror` **不一定**会触发。
+ * 实测（CDP `Network.emulateNetworkConditions offline`）把网断掉时，
+ * 已建立的 SSE 连接不会立刻报错，界面仍然显示「实时已连接」——
+ * 用户以为日志是实时的，其实已经瞎了。
+ *
+ * 浏览器自己的 `offline`/`online` 事件是可靠的，所以把它们也接进同一套状态机：
+ *   - 断网 → reconnecting（会自动重连）
+ *   - 恢复网 → connecting（等 EventSource 自己的 onopen 把它推到 open）
+ */
+function wireNetworkEvents() {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('offline', () => {
+    if (connection === 'open' || connection === 'connecting') setConnection('reconnecting');
+  });
+  window.addEventListener('online', () => {
+    if (connection !== 'reconnecting') return;
+    // EventSource 可能已经自己连回去了（onopen 先到）：别把已连接的状态退回去。
+    if (es && es.readyState === 1) setConnection('open');
+    else setConnection('connecting');
+  });
+}
+
+wireNetworkEvents();
 
 export function closeSSE() {
   es?.close();
   es = null;
+  setConnection('idle');
 }
 
 export function subscribeSSE(fn: Listener): () => void {

@@ -1,12 +1,16 @@
 // 实例控制台：内嵌终端卡片（页面内联，非弹窗/抽屉），SSE 实时日志 + 指令输入
 // 输入区样式参考 beUI agents/prompt-input：自增高输入 + 右下角圆形发送按钮
+//
+// 数据源：**唯一**是 `lib/instance-log-store.ts`（历史一次拉取 + SSE 实时追加 + 断线补偿）。
+// 本组件不再自己拉 `tail=`、不再自己订阅 SSE —— 那是改造前的双数据源病灶
+// （见 docs/instance-console-next-steps.md 的 P0-a）。
 
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Ref } from 'react';
 import { Eraser, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { api, consoleLines, errText, type ServerSummary } from '@/lib/api';
+import { api, errText, type ServerSummary } from '@/lib/api';
+import { instanceLogStore } from '@/lib/instance-log-store';
 import { $, type TranslationKey } from '@/lib/i18n';
-import { subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 
 /** 实例状态 → i18n 键。未知状态回退显示原始值，绝不显示空白 */
@@ -16,7 +20,6 @@ function statusLabel(status: string): string {
   return text === key ? status : text;
 }
 
-const MAX_LINES = 1500;
 /** 历史指令最大保存条数（含合并相邻重复） */
 const MAX_HISTORY = 200;
 /** 输入框自增高行数范围 */
@@ -79,9 +82,17 @@ export function ConsolePanel({
   query = '',
   ref,
 }: Props) {
-  const [lines, setLines] = useState<string[]>([]);
+  // 日志与状态来自唯一数据源（store）：历史一次拉取 + SSE 实时追加 + 断线补偿。
+  // 组件只负责显示与交互，不拥有数据。
+  const logState = useSyncExternalStore(
+    instanceLogStore.subscribe,
+    () => instanceLogStore.get(server.id, instance),
+    () => instanceLogStore.get(server.id, instance),
+  );
+  const lines = logState.lines;
   const [cmd, setCmd] = useState('');
-  const [status, setStatus] = useState<string>(instanceStatus);
+  // 状态以 store 为准（Agent 推的 instance.updated），页面传来的 instanceStatus 作为兜底
+  const status = logState.status ?? instanceStatus;
   /** 已发送过的指令（最新在末尾）；正在回显时保存未提交的草稿 */
   const [history, setHistory] = useState<string[]>([]);
   const [histIndex, setHistIndex] = useState<number | null>(null);
@@ -92,7 +103,10 @@ export function ConsolePanel({
   const { error: toastError } = useToastHelpers();
 
   // 清屏：嵌入模式下由页面页签栏的按钮触发（面板不渲染自己的头部）
-  useImperativeHandle(ref, () => ({ clear: () => setLines([]) }), []);
+  useImperativeHandle(ref, () => ({ clear: () => instanceLogStore.clear(server.id, instance) }), [
+    server.id,
+    instance,
+  ]);
 
   // 实例未运行（也不在启动中）时控制台不可写入：发送按钮禁用，输入框给出原因
   const idle = status !== 'running' && status !== 'starting';
@@ -132,43 +146,11 @@ export function ConsolePanel({
     return () => io.disconnect();
   }, [resizeInput]);
 
-  // 打开/切换实例时拉取历史尾部
+  // 打开/切换实例时打开日志源：首次拉一次历史，之后靠 store 的 SSE 实时追加。
+  // （拉取失败由 store 静默处理，Agent 离线由页面的条件条表达）
   useEffect(() => {
-    let alive = true;
     followingRef.current = true;
-    api<{ lines?: unknown; status: string }>(
-      `/servers/${server.id}/instances/${encodeURIComponent(instance)}/console?tail=300`,
-    )
-      .then((data) => {
-        if (!alive) return;
-        setStatus(data.status);
-        // 历史行是 { ts, text }[]（老 Agent 是 string[]）：统一取 text，别把对象塞进 JSX
-        setLines(consoleLines(data));
-      })
-      .catch((e) => toastError($('console.error.load'), errText(e)));
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [server.id, instance]);
-
-  // 订阅实时输出
-  useEffect(() => {
-    return subscribeSSE((e) => {
-      if (e.type !== 'agent-event' || e.serverId !== server.id) return;
-      if (e.event === 'console' && e.data?.instance === instance) {
-        // 实时行目前是 string[]，但同样走归一化：老/新 Agent 混用时不至于整块空白
-        const incoming = consoleLines({ lines: e.data.lines });
-        if (!incoming.length) return;
-        setLines((cur) => {
-          const next = [...cur, ...incoming];
-          return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-        });
-      }
-      if (e.event === 'instance.updated' && e.data?.instance === instance && typeof e.data.status === 'string') {
-        setStatus(e.data.status);
-      }
-    });
+    instanceLogStore.open(server.id, instance);
   }, [server.id, instance]);
 
   // 自动跟随滚动（依赖过滤后的列表：搜索后行数变少也要跟到新的末尾）
@@ -254,7 +236,7 @@ export function ConsolePanel({
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100"
-              onClick={() => setLines([])}
+              onClick={() => instanceLogStore.clear(server.id, instance)}
             >
               <Eraser className="h-3.5 w-3.5" /> {$('console.clear')}
             </Button>
@@ -284,6 +266,12 @@ export function ConsolePanel({
             : 'p-3 text-xs leading-relaxed text-zinc-300'
         }`}
       >
+        {/* 缓冲上限丢弃提示：不静默吞日志（原来超过 1500 行直接切掉，用户毫无感知） */}
+        {logState.dropped > 0 && (
+          <div className="mb-1 text-[10.5px] text-amber-500/80">
+            {$('console.dropped', logState.dropped)}
+          </div>
+        )}
         {shown.map((text, i) => (
           // whitespace-pre-wrap：日志里的缩进（堆栈、对齐的表格）不能被折叠掉
           <div key={i} className={`whitespace-pre-wrap break-words ${consoleLineClass(text)}`}>
