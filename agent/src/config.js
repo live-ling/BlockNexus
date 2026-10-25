@@ -19,7 +19,9 @@ const state = require('./state.js');
 //        server-icon.png 加载失败（ImageIO "Can't create cache file!"）。
 // 0.5.4：Windows 安装 Java 的下载临时目录从系统 %TEMP% 改到 <Agent>/tmp，
 //        运行时产物统一收敛在面板/Agent 托管目录内（便于排查与清理）。
-const AGENT_VERSION = '0.5.4';
+// 0.5.5：sys.stats 增加 cpuPct（系统 CPU 占用，两次采样差值）；
+//        sys.info 增加 distro（读 /etc/os-release），供面板显示系统图标。
+const AGENT_VERSION = '0.5.5';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。

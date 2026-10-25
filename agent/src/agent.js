@@ -9,6 +9,31 @@ const { sendEvent, setHandler } = require('./eventbus.js');
 const { Sealer, Opener } = require('./crypto.js');
 const { WSSocket, WSServer, runHandshake, panelWsUrl } = require('./ws.js');
 
+/**
+ * 发行版标识（面板卡片上的系统图标用）。
+ *
+ * `os.type()/release()` 只能给出内核（Linux 5.15.0-30-generic），
+ * 分不出 Ubuntu 还是 Debian——所以 Linux 下读 /etc/os-release 的 ID / PRETTY_NAME。
+ * 拿不到就退回 `{ id: 'linux', name: 'Linux <release>' }`，面板用通用终端图标，不猜品牌。
+ */
+function readDistro() {
+  if (process.platform === 'win32') return { id: 'windows', name: 'Windows' };
+  if (process.platform === 'darwin') return { id: 'macos', name: 'macOS' };
+  try {
+    const text = fs.readFileSync('/etc/os-release', 'utf8');
+    const field = (key) => {
+      const m = new RegExp(`^${key}=(.*)$`, 'm').exec(text);
+      return m ? m[1].trim().replace(/^"(.*)"$/, '$1') : '';
+    };
+    const id = field('ID').toLowerCase();
+    const name = field('PRETTY_NAME') || field('NAME') || id;
+    if (id) return { id, name };
+  } catch {
+    // 容器/精简系统可能没有 os-release
+  }
+  return { id: 'linux', name: `Linux ${os.release()}` };
+}
+
 class Agent {
   constructor(conf, manager) {
     this.conf = conf;
@@ -184,6 +209,8 @@ class Agent {
       hostname: os.hostname(),
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
+      // 发行版（Linux 读 /etc/os-release）：面板用它选系统图标
+      distro: readDistro(),
       node: process.version,
       agentVersion: AGENT_VERSION,
       memTotalMB: Math.round(os.totalmem() / 1048576),

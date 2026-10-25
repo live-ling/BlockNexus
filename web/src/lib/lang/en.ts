@@ -214,6 +214,18 @@ export const en = {
 
   // ---------- Server connection fields (reused by the edit-server dialog) ----------
   'serverField.name': 'Name',
+  'serverField.region': 'Region',
+  'serverField.region.none': 'Not set',
+  'serverRegion.cn': 'China',
+  'serverRegion.hk': 'Hong Kong, China',
+  'serverRegion.tw': 'Taiwan, China',
+  'serverRegion.jp': 'Japan',
+  'serverRegion.kr': 'South Korea',
+  'serverRegion.sg': 'Singapore',
+  'serverRegion.us': 'United States',
+  'serverRegion.de': 'Germany',
+  'serverRegion.gb': 'United Kingdom',
+  'serverRegion.other': 'Other',
   'serverField.host': 'Host',
   'serverField.localHint': 'Local server: the panel manages the Agent process directly, so no SSH credentials are needed.',
   'serverField.sshHost': 'SSH host',

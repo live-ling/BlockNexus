@@ -121,7 +121,9 @@ const state = __require("src/state.js");
 //        server-icon.png 加载失败（ImageIO "Can't create cache file!"）。
 // 0.5.4：Windows 安装 Java 的下载临时目录从系统 %TEMP% 改到 <Agent>/tmp，
 //        运行时产物统一收敛在面板/Agent 托管目录内（便于排查与清理）。
-const AGENT_VERSION = '0.5.4';
+// 0.5.5：sys.stats 增加 cpuPct（系统 CPU 占用，两次采样差值）；
+//        sys.info 增加 distro（读 /etc/os-release），供面板显示系统图标。
+const AGENT_VERSION = '0.5.5';
 
 // 对外标识：启动横幅与面板握手 hello 的 agent 字段都用它；HTTP 请求的 User-Agent
 // 也取自这里（见 http.js），因此只有 AGENT_VERSION 一处需要维护。
@@ -228,6 +230,40 @@ const { sendEvent } = __require("src/eventbus.js");
  * 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
  * 没有读数就无法验收，所以随 sysStats 一起上报。
  */
+/**
+ * CPU 占用（系统整体，0–100）。
+ *
+ * 为什么用「两次采样差值」而不是瞬时值：os.cpus() 只给累计 CPU 时间，
+ * 单次读取算不出占用率。面板每 30s 拉一次 sysStats，正好用两次调用的差值；
+ * 模块加载时先采一次基线，所以第一次调用也能给出从启动到现在的平均值。
+ *
+ * 返回 null 的情况：两次采样间隔为 0（同一毫秒内重复调用）或平台没给 times。
+ * 前端据此显示「—」，不编造 0%。
+ */
+function readCpuTimes() {
+  const cpus = os.cpus() || [];
+  let idle = 0;
+  let total = 0;
+  for (const c of cpus) {
+    const t = c && c.times;
+    if (!t) continue;
+    idle += t.idle || 0;
+    total += (t.user || 0) + (t.nice || 0) + (t.sys || 0) + (t.idle || 0) + (t.irq || 0);
+  }
+  return { idle, total };
+}
+
+let cpuPrev = readCpuTimes();
+
+function cpuPctSincePrev() {
+  const now = readCpuTimes();
+  const dTotal = now.total - cpuPrev.total;
+  const dIdle = now.idle - cpuPrev.idle;
+  cpuPrev = now;
+  if (dTotal <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((1 - dIdle / dTotal) * 100)));
+}
+
 function selfUsage() {
   const mu = process.memoryUsage();
   const MB = 1048576;
@@ -318,6 +354,8 @@ class InstanceManager {
     const stats = {
       memTotalMB: Math.round(total / 1048576),
       memUsedMB: Math.max(0, Math.round((total - avail) / 1048576)),
+      // 系统整体 CPU 占用（两次 sysStats 之间的均值；首次为启动至今）
+      cpuPct: cpuPctSincePrev(),
       disk: null,
       // Agent 自身占用：面板据此展示「Agent 占用」并在超阈值时提示。
       // 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
@@ -7090,6 +7128,31 @@ const { sendEvent, setHandler } = __require("src/eventbus.js");
 const { Sealer, Opener } = __require("src/crypto.js");
 const { WSSocket, WSServer, runHandshake, panelWsUrl } = __require("src/ws.js");
 
+/**
+ * 发行版标识（面板卡片上的系统图标用）。
+ *
+ * `os.type()/release()` 只能给出内核（Linux 5.15.0-30-generic），
+ * 分不出 Ubuntu 还是 Debian——所以 Linux 下读 /etc/os-release 的 ID / PRETTY_NAME。
+ * 拿不到就退回 `{ id: 'linux', name: 'Linux <release>' }`，面板用通用终端图标，不猜品牌。
+ */
+function readDistro() {
+  if (process.platform === 'win32') return { id: 'windows', name: 'Windows' };
+  if (process.platform === 'darwin') return { id: 'macos', name: 'macOS' };
+  try {
+    const text = fs.readFileSync('/etc/os-release', 'utf8');
+    const field = (key) => {
+      const m = new RegExp(`^${key}=(.*)$`, 'm').exec(text);
+      return m ? m[1].trim().replace(/^"(.*)"$/, '$1') : '';
+    };
+    const id = field('ID').toLowerCase();
+    const name = field('PRETTY_NAME') || field('NAME') || id;
+    if (id) return { id, name };
+  } catch {
+    // 容器/精简系统可能没有 os-release
+  }
+  return { id: 'linux', name: `Linux ${os.release()}` };
+}
+
 class Agent {
   constructor(conf, manager) {
     this.conf = conf;
@@ -7265,6 +7328,8 @@ class Agent {
       hostname: os.hostname(),
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
+      // 发行版（Linux 读 /etc/os-release）：面板用它选系统图标
+      distro: readDistro(),
       node: process.version,
       agentVersion: AGENT_VERSION,
       memTotalMB: Math.round(os.totalmem() / 1048576),

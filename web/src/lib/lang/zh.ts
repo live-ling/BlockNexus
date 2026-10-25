@@ -224,6 +224,18 @@ export const zh = {
 
   // ---------- 服务器连接字段（编辑服务器弹窗复用；快速添加弹窗用自己的 quickAdd.*） ----------
   'serverField.name': '名称',
+  'serverField.region': '地区',
+  'serverField.region.none': '未设置',
+  'serverRegion.cn': '中国',
+  'serverRegion.hk': '中国香港',
+  'serverRegion.tw': '中国台湾',
+  'serverRegion.jp': '日本',
+  'serverRegion.kr': '韩国',
+  'serverRegion.sg': '新加坡',
+  'serverRegion.us': '美国',
+  'serverRegion.de': '德国',
+  'serverRegion.gb': '英国',
+  'serverRegion.other': '其他',
   'serverField.host': '主机地址',
   'serverField.localHint': '本机服务器：面板直接托管 Agent 进程，不需要 SSH 凭据。',
   'serverField.sshHost': 'SSH 主机',

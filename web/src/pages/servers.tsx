@@ -6,10 +6,11 @@
 // 交互保留原有能力：拖动排序（顺序持久化到面板）、点卡片进服务器详情、右上角快速添加。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GripVertical, Plus, RotateCw, Server as ServerIcon, Settings } from 'lucide-react';
+import { GripVertical, Plus, RotateCw, Settings } from 'lucide-react';
 import { cn } from 'cn';
 import { QuickAddDialog } from '@/components/quick-add-dialog';
 import { MaskedText } from '@/components/masked-text';
+import { OsMark, RegionFlag } from '@/components/server-marks';
 import { Button } from '@/components/ui/button';
 import { FilterDrawer } from '@/components/layout/filter-drawer';
 import { PageBody, PageHeader } from '@/components/layout/page-header';
@@ -36,6 +37,7 @@ import {
   type ServerSummary,
 } from '@/lib/api';
 import { $ } from '@/lib/i18n';
+import { regionLabel } from '@/lib/regions';
 
 type OnlineFilter = 'all' | 'online' | 'offline';
 type SortKey = 'manual' | 'latency' | 'memory';
@@ -309,12 +311,15 @@ function ServerCard({
       )}
     >
       <div className="flex min-w-0 items-start gap-2">
-        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground">
-          <ServerIcon className="size-3.5" />
-        </span>
+        <OsMark distro={s.info?.distro} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1">
             <b className="truncate text-[13px] font-medium">{s.name}</b>
+            {s.region && (
+              <span className="shrink-0" title={regionLabel(s.region)}>
+                <RegionFlag region={s.region} />
+              </span>
+            )}
             <span
               className="shrink-0 cursor-grab text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
               title={$('servers.drag.tooltip')}
@@ -326,7 +331,7 @@ function ServerCard({
           </div>
           <p className="truncate font-mono text-[10.5px] text-muted-foreground">
             <MaskedText value={s.host} />
-            {s.info ? ` · ${osLabel(s.info.os)}` : ''}
+            {s.info ? ` · ${s.info.distro?.name ?? osLabel(s.info.os)}` : ''}
           </p>
         </div>
         <AgentStatusPill online={s.online} installing={s.installing} />
@@ -334,6 +339,12 @@ function ServerCard({
 
       {s.stats ? (
         <div className="grid gap-1.5">
+          {/* CPU：老 Agent 没有这个字段时显示「—」，不拿 0% 冒充 */}
+          <Resource
+            label="CPU"
+            value={typeof s.stats.cpuPct === 'number' ? `${s.stats.cpuPct}%` : '—'}
+            pct={typeof s.stats.cpuPct === 'number' ? s.stats.cpuPct : 0}
+          />
           <Resource
             label="MEM"
             value={`${(s.stats.memUsedMB / 1024).toFixed(1)}/${(s.stats.memTotalMB / 1024).toFixed(1)} GB`}

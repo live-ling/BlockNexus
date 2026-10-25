@@ -173,6 +173,9 @@ class Config {
     const server = {
       id: 'srv_' + crypto.randomBytes(6).toString('hex'),
       name: String(fields.name || '未命名').slice(0, 60),
+      // 服务器所在地区（手动选择：cn/hk/tw/jp/sg/us/de/gb/other；空 = 未设置）
+      // 不做 IP 地理库自动推断：那需要外部数据源，且猜错会让卡片显示错误国旗。
+      region: String(fields.region || '').trim().slice(0, 20),
       host: String(fields.host || '').trim(),
       token: randomToken(),
       createdAt: Date.now(),
@@ -212,6 +215,7 @@ class Config {
     const s = this.getServer(id);
     if (!s) return null;
     if (patch.name !== undefined) s.name = String(patch.name).slice(0, 60);
+    if (patch.region !== undefined) s.region = String(patch.region || '').trim().slice(0, 20);
     if (patch.host !== undefined) s.host = String(patch.host).trim();
     if (patch.panelUrl !== undefined) s.agent.panelUrl = String(patch.panelUrl).trim();
     if (patch.agentMode !== undefined) s.agent.mode = patch.agentMode === 'inbound' ? 'inbound' : 'outbound';

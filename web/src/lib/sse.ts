@@ -7,7 +7,12 @@ export type SseEvent =
   | {
       type: 'stats';
       serverId: string;
-      stats: { memTotalMB: number; memUsedMB: number; disk: { totalGB: number; freeGB: number } | null };
+      stats: {
+        memTotalMB: number;
+        memUsedMB: number;
+        cpuPct?: number | null;
+        disk: { totalGB: number; freeGB: number } | null;
+      };
     }
   | { type: 'agent-event'; serverId: string; event: string; data: Record<string, unknown> | null }
   | {

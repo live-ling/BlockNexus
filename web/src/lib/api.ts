@@ -11,6 +11,8 @@ export interface JavaInfo {
 export interface ServerInfo {
   hostname: string;
   os: string;
+  /** 发行版（Agent ≥0.5.5 读 /etc/os-release；旧 Agent 缺省） */
+  distro?: { id: string; name: string } | null;
   arch: string;
   node: string;
   /** Agent 脚本版本（旧版 Agent 未上报时缺省） */
@@ -24,6 +26,8 @@ export interface ServerInfo {
 export interface ServerSummary {
   id: string;
   name: string;
+  /** 服务器所在地区（手动设置；空/缺省 = 未设置） */
+  region?: string;
   host: string;
   token?: string;
   createdAt: number;
@@ -40,6 +44,8 @@ export interface ServerSummary {
   stats: {
     memTotalMB: number;
     memUsedMB: number;
+    /** 系统 CPU 占用（0–100）；旧 Agent 或首次采样时为 null/缺省 */
+    cpuPct?: number | null;
     disk: { totalGB: number; freeGB: number } | null;
   } | null;
   /** 面板自身监听地址（127.0.0.1 表示仅本机，手工安装命令对外不可用） */

@@ -1856,6 +1856,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (b.host !== undefined && !isValidHost(b.host)) return fail(res, 'server.host-invalid');
     const patch = {
       name: b.name,
+      region: b.region,
       host: b.host,
       panelUrl: b.panelUrl,
       agentMode: b.agentMode,
@@ -2285,6 +2286,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
     const server = config.addServer({
       name: b.name || host,
+      region: b.region,
       host,
       sshPort: b.sshPort,
       sshUser: b.sshUser,

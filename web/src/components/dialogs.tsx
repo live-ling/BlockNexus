@@ -32,6 +32,7 @@ import { api, errText, fmtMB, instanceIconUrl, setInstanceIcon, CORE_LABEL, INST
 import { uploadFile, uploadFileViaSftp } from '@/lib/upload';
 import { escapeValue, parseProperties, serializeProperties, unescapeValue } from '@/lib/properties';
 import { $, type TranslationKey } from '@/lib/i18n';
+import { REGIONS, regionLabel } from '@/lib/regions';
 import { UploadChannelSelect, type UploadChannel } from '@/components/upload-channel';
 import { useToastHelpers } from '@/lib/toast';
 import { FileUpload, type FileUploadItem } from '@/components/motion/file-upload';
@@ -99,9 +100,13 @@ export function EditServerDialog({
   const { success, error } = useToastHelpers();
   const [busy, setBusy] = useState(false);
   const [editTls, setEditTls] = useState(!!server.agent.tls);
+  const [region, setRegion] = useState(server.region || 'none');
   useEffect(() => {
-    if (open) setEditTls(!!server.agent.tls);
-  }, [open, server.agent.tls]);
+    if (open) {
+      setEditTls(!!server.agent.tls);
+      setRegion(server.region || 'none');
+    }
+  }, [open, server.agent.tls, server.region]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
@@ -112,9 +117,27 @@ export function EditServerDialog({
         <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         {/* 与添加弹窗一致：双列紧凑排布，端口等短字段按内容收敛宽度 */}
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-          <div className="grid gap-1.5 sm:col-span-2">
-            <Label htmlFor="e-name">{$('serverField.name')}</Label>
-            <Input id="e-name" className="sm:max-w-sm" defaultValue={server.name} />
+          <div className="flex items-end gap-3 sm:col-span-2">
+            <div className="grid min-w-0 flex-1 gap-1.5">
+              <Label htmlFor="e-name">{$('serverField.name')}</Label>
+              <Input id="e-name" defaultValue={server.name} />
+            </div>
+            <div className="grid w-[180px] shrink-0 gap-1.5">
+              <Label>{$('serverField.region')}</Label>
+              <Select value={region} onValueChange={setRegion}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{$('serverField.region.none')}</SelectItem>
+                  {REGIONS.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {regionLabel(r)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           {/* 主机占满剩余宽度，端口按内容收敛为固定窄列。
               本机服务器由面板直接托管 Agent，SSH 端口/用户/密码对它毫无意义——不显示，
@@ -206,6 +229,7 @@ export function EditServerDialog({
                 const isOutbound = (server.agent.mode || 'outbound') === 'outbound';
                 const body: Record<string, unknown> = {
                   name: val('e-name'),
+                  region: region === 'none' ? '' : region,
                   host: val('e-host').trim(),
                   // 本机服务器没有 SSH 字段（元素根本没渲染），不能按 id 去读
                   ...(server.isLocal

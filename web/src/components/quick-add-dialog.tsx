@@ -35,6 +35,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { api, errText, type ServerSummary } from '@/lib/api';
 import { $ } from '@/lib/i18n';
+import { REGIONS, regionLabel } from '@/lib/regions';
 import { subscribeServer } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
 import { navigate } from '@/lib/router';
@@ -70,6 +71,7 @@ interface McOptions {
 /** 一个可被「重试」复用的提交体 */
 interface SubmitBody {
   name: string;
+  region: string;
   host: string;
   sshPort: string;
   sshUser: string;
@@ -129,6 +131,7 @@ export function QuickAddDialog({
   // ---------- 目标机器 ----------
   const [target, setTarget] = useState<Target>('remote');
   const [name, setName] = useState('');
+  const [region, setRegion] = useState('none');
   const [host, setHost] = useState('');
   const [sshPort, setSshPort] = useState('22');
   const [sshUser, setSshUser] = useState('root');
@@ -264,6 +267,7 @@ export function QuickAddDialog({
     const pastedKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(keyText);
     return {
       name: name.trim() || (target === 'local' ? $('quickAdd.serverName.local') : h),
+      region: region === 'none' ? '' : region,
       host: h,
       sshPort,
       sshUser: sshUser.trim(),
@@ -381,15 +385,32 @@ export function QuickAddDialog({
                     )}
                   </div>
 
-                  <div className="grid gap-1.5 sm:col-span-2">
-                    <Label htmlFor="q-name">{$('quickAdd.name')}</Label>
-                    <Input
-                      id="q-name"
-                      className="sm:max-w-sm"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder={$('quickAdd.name.placeholder')}
-                    />
+                  <div className="flex items-end gap-3 sm:col-span-2">
+                    <div className="grid min-w-0 flex-1 gap-1.5">
+                      <Label htmlFor="q-name">{$('quickAdd.name')}</Label>
+                      <Input
+                        id="q-name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder={$('quickAdd.name.placeholder')}
+                      />
+                    </div>
+                    <div className="grid w-[180px] shrink-0 gap-1.5">
+                      <Label>{$('serverField.region')}</Label>
+                      <Select value={region} onValueChange={setRegion}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">{$('serverField.region.none')}</SelectItem>
+                          {REGIONS.map((r) => (
+                            <SelectItem key={r} value={r}>
+                              {regionLabel(r)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
                   {target === 'remote' && (

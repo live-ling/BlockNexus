@@ -50,6 +50,11 @@ fs.mkdirSync(instancesDir, { recursive: true });
       `uptimeSec=${st.self && st.self.uptimeSec}`,
     );
     check('仍保留原有的主机内存字段', Number.isFinite(st.memTotalMB) && st.memTotalMB > 0);
+    check(
+      'cpuPct 为 null 或 0–100 的整数（首次采样可能无间隔）',
+      st.cpuPct === null || (Number.isInteger(st.cpuPct) && st.cpuPct >= 0 && st.cpuPct <= 100),
+      `cpuPct=${st.cpuPct}`,
+    );
   }
 
   // ---------- 2. 下载会话有数量上限，且淘汰最旧 ----------

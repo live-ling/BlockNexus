@@ -17,6 +17,40 @@ const { sendEvent } = require('../eventbus.js');
  * 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
  * 没有读数就无法验收，所以随 sysStats 一起上报。
  */
+/**
+ * CPU 占用（系统整体，0–100）。
+ *
+ * 为什么用「两次采样差值」而不是瞬时值：os.cpus() 只给累计 CPU 时间，
+ * 单次读取算不出占用率。面板每 30s 拉一次 sysStats，正好用两次调用的差值；
+ * 模块加载时先采一次基线，所以第一次调用也能给出从启动到现在的平均值。
+ *
+ * 返回 null 的情况：两次采样间隔为 0（同一毫秒内重复调用）或平台没给 times。
+ * 前端据此显示「—」，不编造 0%。
+ */
+function readCpuTimes() {
+  const cpus = os.cpus() || [];
+  let idle = 0;
+  let total = 0;
+  for (const c of cpus) {
+    const t = c && c.times;
+    if (!t) continue;
+    idle += t.idle || 0;
+    total += (t.user || 0) + (t.nice || 0) + (t.sys || 0) + (t.idle || 0) + (t.irq || 0);
+  }
+  return { idle, total };
+}
+
+let cpuPrev = readCpuTimes();
+
+function cpuPctSincePrev() {
+  const now = readCpuTimes();
+  const dTotal = now.total - cpuPrev.total;
+  const dIdle = now.idle - cpuPrev.idle;
+  cpuPrev = now;
+  if (dTotal <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((1 - dIdle / dTotal) * 100)));
+}
+
 function selfUsage() {
   const mu = process.memoryUsage();
   const MB = 1048576;
@@ -107,6 +141,8 @@ class InstanceManager {
     const stats = {
       memTotalMB: Math.round(total / 1048576),
       memUsedMB: Math.max(0, Math.round((total - avail) / 1048576)),
+      // 系统整体 CPU 占用（两次 sysStats 之间的均值；首次为启动至今）
+      cpuPct: cpuPctSincePrev(),
       disk: null,
       // Agent 自身占用：面板据此展示「Agent 占用」并在超阈值时提示。
       // 用户要求 Agent 内存尽量小（目标 ≤80MB，大内存机可放宽到 120MB），
