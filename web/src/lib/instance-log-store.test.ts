@@ -226,3 +226,82 @@ describe('instanceLogStore：断线补偿', () => {
     })
   })
 })
+
+describe('instanceLogStore：当前运行周期（ERROR 徽章只算本次）', () => {
+  it('从 running 直接重新 starting（重启）时也会开启新一轮计数', async () => {
+    apiMock.mockResolvedValue(consoleRes(['old-error-1', 'old-error-2'], 'running'))
+    store.open('s1', 'survival')
+    await vi.waitFor(() => expect(store.get('s1', 'survival').loaded).toBe(true))
+    expect(store.get('s1', 'survival').runStart).toBe(0)
+
+    sseMock.serverListeners.forEach((fn) =>
+      fn({
+        type: 'agent-event',
+        serverId: 's1',
+        event: 'instance.updated',
+        data: { instance: 'survival', status: 'starting' },
+      }),
+    )
+    // 重启也是一轮新运行：旧错误归零，runStart 落在当前末尾
+    expect(store.get('s1', 'survival').runStart).toBe(2)
+  })
+
+  it('停止后重新 starting：旧错误不再计入本次运行', async () => {
+    apiMock.mockResolvedValue(consoleRes(['old-error'], 'stopped'))
+    store.open('s1', 'survival')
+    await vi.waitFor(() => expect(store.get('s1', 'survival').loaded).toBe(true))
+
+    sseMock.serverListeners.forEach((fn) =>
+      fn({
+        type: 'agent-event',
+        serverId: 's1',
+        event: 'instance.updated',
+        data: { instance: 'survival', status: 'starting' },
+      }),
+    )
+    const st = store.get('s1', 'survival')
+    // runStart 指向旧日志之后：页面用它切掉历史错误
+    expect(st.runStart).toBe(1)
+
+    sseMock.serverListeners.forEach((fn) =>
+      fn({
+        type: 'agent-event',
+        serverId: 's1',
+        event: 'console',
+        data: { instance: 'survival', lines: ['new-error'] },
+      }),
+    )
+    const after = store.get('s1', 'survival')
+    expect(after.lines.slice(after.runStart)).toEqual(['new-error'])
+  })
+
+  it('缓冲裁剪时 runStart 同步左移，不会把上个周期算进本次', async () => {
+    apiMock.mockResolvedValue(consoleRes(['a', 'b'], 'stopped'))
+    store.open('s1', 'survival')
+    await vi.waitFor(() => expect(store.get('s1', 'survival').loaded).toBe(true))
+
+    sseMock.serverListeners.forEach((fn) =>
+      fn({
+        type: 'agent-event',
+        serverId: 's1',
+        event: 'instance.updated',
+        data: { instance: 'survival', status: 'starting' },
+      }),
+    )
+    expect(store.get('s1', 'survival').runStart).toBe(2)
+
+    const many = Array.from({ length: 1600 }, (_, i) => `l${i}`)
+    sseMock.serverListeners.forEach((fn) =>
+      fn({
+        type: 'agent-event',
+        serverId: 's1',
+        event: 'console',
+        data: { instance: 'survival', lines: many },
+      }),
+    )
+    const st = store.get('s1', 'survival')
+    // 2 + 1600 - 1500 = 102 行被裁掉，runStart 从 2 变成 0
+    expect(st.lines.length).toBe(1500)
+    expect(st.runStart).toBe(0)
+  })
+})

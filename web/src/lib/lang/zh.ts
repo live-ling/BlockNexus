@@ -89,6 +89,8 @@ export const zh = {
   'console.search': '搜索日志',
   'console.search.empty': '没有匹配的日志行',
   'console.dropped': '（缓冲已满，最早的 {0} 行日志被丢弃）',
+  'console.errorsOnly': '仅看错误',
+  'console.currentRunErrors': '仅统计本次运行产生的错误',
 
   // ---------- 关于页 ----------
   'about.title': '关于',
@@ -701,6 +703,9 @@ export const zh = {
   'instanceDetail.idle.released': '停止后已释放',
   'instanceDetail.idle.lastRun': '上次运行',
   'instanceDetail.idle.normalStop': '正常停止，无异常退出',
+  'instanceDetail.idle.viewLogs': '查看最近日志',
+  'instanceDetail.idle.hideLogs': '收起日志',
+  'instanceDetail.idle.recentLogs': '最近日志',
   'instanceDetail.value.nodata': '暂无数据',
   'instanceDetail.players.empty.hint': '实例停止时不查询玩家名单，启动后自动恢复实时列表',
   'instanceDetail.players.hint': '点击玩家行可快捷执行 踢出 / 封禁 / OP',

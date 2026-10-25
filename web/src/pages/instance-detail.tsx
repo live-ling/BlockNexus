@@ -18,11 +18,9 @@ import {
   ArrowLeft,
   Ban,
   Check,
-  ChevronRight,
   Copy,
   ChevronDown,
   Eraser,
-  FolderOpen,
   Globe,
   HardDrive,
   LogOut,
@@ -182,6 +180,8 @@ export function InstanceDetailPage({
   const [busy, setBusy] = useState(false);
   // 终端日志关键字（页签栏右侧搜索框；只影响显示，不动缓冲区）
   const [logQuery, setLogQuery] = useState('');
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [idleConsoleOpen, setIdleConsoleOpen] = useState(false);
   const consoleRef = useRef<ConsolePanelHandle>(null);
   // 玩家快捷管理：待确认的操作（踢出/封禁/封禁 IP 统一走模态框，原因可选）
   const [playerAction, setPlayerAction] = useState<{ name: string; kind: 'kick' | 'ban' | 'ban-ip' } | null>(null);
@@ -482,7 +482,7 @@ export function InstanceDetailPage({
   if (notFound) {
     return (
       <div className="mx-auto w-full max-w-5xl px-5 pt-10 text-center">
-        <p className="text-sm text-muted-foreground">{$('instanceDetail.notFound')}</p>
+        <p className="text-[13px] text-muted-foreground">{$('instanceDetail.notFound')}</p>
         <Button className="mt-4" variant="outline" onClick={onBack}>
           {$('instanceDetail.backToList')}
         </Button>
@@ -491,7 +491,7 @@ export function InstanceDetailPage({
   }
 
   if (!server || !instance) {
-    return <div className="p-10 text-center text-sm text-muted-foreground">{$('common.loading')}</div>;
+    return <div className="p-10 text-center text-[13px] text-muted-foreground">{$('common.loading')}</div>;
   }
 
   // 安装失败：删除时跳过备份（目录里只有半成品，备份无意义且可能卡住）
@@ -513,13 +513,11 @@ export function InstanceDetailPage({
   // 连接地址：没配域名就用主机地址，两者都是玩家真能用的地址（不显示空值）
   const connectAddress = instance.address || `${server.host}:${instance.port}`;
 
-  // 概览的「最近事件」：从控制台尾部挑出值得看的行（错误、上下线、备份、启动完成）
-  const overviewEvents = tailLines
-    .filter((l) => /ERROR|Exception|Caused by|joined the game|left the game|Done \(|备份|Backup/i.test(l))
-    .slice(-8)
-    .reverse();
-  // 终端头部的 ERROR 计数（概览终端卡片 + 事件卡底部共用）
-  const dockErrCount = tailLines.filter((l) => /ERROR|Exception|Caused by/.test(l)).length;
+  // ERROR 徽章只统计「本次运行」产生的日志。停止后还展示上次启动的报错，
+  // 会让用户误以为实例此刻仍在报警；历史日志本身仍然保留、可以查看。
+  const dockErrCount = tailLines
+    .slice(logState.runStart)
+    .filter((l) => /ERROR|Exception|Caused by/.test(l)).length;
 
   const onlineReason = !active
     ? $('instanceDetail.metric.idle')
@@ -595,7 +593,7 @@ export function InstanceDetailPage({
           onClick={onBack}
           title={$('common.back')}
           aria-label={$('common.back')}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
@@ -652,7 +650,7 @@ export function InstanceDetailPage({
               </>
             )}
           </div>
-          <p className="flex min-w-0 items-center gap-1 text-[10.5px] leading-4 text-muted-foreground">
+          <p className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
             <span className="min-w-0 truncate">{server.name}</span>
             <span className="shrink-0">·</span>
             {/* 与服务器列表/详情页一致：主机地址默认脱敏，点击才显示 */}
@@ -697,53 +695,57 @@ export function InstanceDetailPage({
           </p>
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {/* 主操作位：只换内容不换位置（运行中=停止，启动中=停止启动，否则=启动）。
-              min-w 按最长文案（en「Stop starting」）取齐：否则按钮宽度随状态变化，
-              右对齐的按钮组会把左边的「更多」一起推走 */}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* 主操作：启动/停止常驻，重启提为第二个常驻按钮（原来藏在 ⋮ 里，常用动作两步才够到）。
+              min-w 固定，避免文案随状态变宽把右侧按钮组推来推去。 */}
           {active ? (
             <Button
               size="sm"
-              className="h-7 min-w-[124px] bg-foreground px-3 text-[13px] font-normal text-background hover:bg-foreground/85"
+              className="h-9 min-w-[124px] bg-foreground px-3.5 text-[13px] font-normal text-background hover:bg-foreground/85"
               disabled={busy}
               onClick={() => op('stop')}
             >
               <Square className="h-3.5 w-3.5 fill-current" />
               {starting ? $('instanceDetail.op.stopStarting') : $('instanceDetail.op.stop')}
             </Button>
-          ) : (
+          ) : idleConsoleOpen ? (
+            /* 停止态默认由中央「启动」承担主操作；这里只在用户展开日志时保留一个可达入口 */
             <Button
               size="sm"
-              className="h-7 min-w-[124px] bg-foreground px-3 text-[13px] font-normal text-background hover:bg-foreground/85"
-              disabled={busy || instance.status !== 'stopped'}
+              className="h-9 min-w-[124px] bg-foreground px-3.5 text-[13px] font-normal text-background hover:bg-foreground/85"
+              disabled={busy || instance.status !== 'stopped' || !server.online}
               onClick={() => op('start')}
             >
               <Play className="h-3.5 w-3.5 fill-current" /> {$('instanceDetail.op.start')}
             </Button>
+          ) : null}
+          {active && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 px-3 text-[13px]"
+              disabled={busy}
+              onClick={() => void op('restart')}
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+              <span className="ml-1.5 hidden sm:inline">{$('instanceDetail.op.restart')}</span>
+            </Button>
           )}
 
-          {/* 重启 / 控制面板 / 备份收进「更多」：头部只留一个主操作 */}
+          {/* 低频动作收进「更多」：地图 / 属性 / 控制面板 / 备份 */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 aria-label={$('ui.action.more')}
                 title={$('ui.action.more')}
-                className="text-muted-foreground hover:text-foreground"
+                className="size-9 text-muted-foreground hover:text-foreground"
               >
                 <MoreVertical />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem
-                className="gap-2 text-[13px]"
-                disabled={busy || !active}
-                onSelect={() => op('restart')}
-              >
-                <RotateCw className="h-3.5 w-3.5" />
-                {$('instanceDetail.op.restart')}
-              </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('panel')}>
                 <Settings2 className="h-3.5 w-3.5" />
                 {$('instanceDetail.panel.open')}
@@ -751,6 +753,15 @@ export function InstanceDetailPage({
               <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('backup')}>
                 <Archive className="h-3.5 w-3.5" />
                 {$('instanceDetail.backups')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setMapOpen(true)}>
+                <MapIcon className="h-3.5 w-3.5" />
+                {$('instanceDetail.tab.map')}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('properties')}>
+                <Pencil className="h-3.5 w-3.5" />
+                {$('instanceDetail.serverProperties')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -773,12 +784,12 @@ export function InstanceDetailPage({
               之前这里是 overflow-y-auto + min-h-full，日志内容把 flex-1 撑成内容高（7500px+），
               看起来就是「终端无限加载」。滚动交给终端/事件自己的内部滚动区。
             */}
-            <div className="flex h-full min-h-0 flex-col gap-3.5">
+            <div className="flex h-full min-h-0 flex-col gap-3">
               {/*
-                指标条：只属于概览（玩家/时长/内存是「这个实例现在怎么样」的答案，
-                切到文件/配置页签时没有理由继续占一整条）。72px 分段 strip，
-                高度写死防跳动；不再常驻页签上方，其它页签的内容区整体多出 96px。
+                指标条只在实例有运行数据时出现。停止态不再用三格「—」占据 96px：
+                空指标不是信息，反而把真正的下一步（启动/看失败原因）挤到下面。
               */}
+              {active && (
               <MetricStrip>
                 <MetricCell icon={<Users />} label={$('instanceDetail.field.players')}>
                   {playersOnline != null ? (
@@ -851,6 +862,7 @@ export function InstanceDetailPage({
                   )}
                 </MetricCell>
               </MetricStrip>
+              )}
 
               {/* 条件条：连接中断 / Agent 离线 / 失败 / Java 缺失才出现，正常时零高度 */}
               {(connState === 'reconnecting' || connState === 'closed') && (
@@ -901,251 +913,151 @@ export function InstanceDetailPage({
                   <JavaInstallRow serverId={server.id} onDone={loadServer} />
                 )}
 
-              {/* 连接地址：概览第一高频信息，独占一行；核心/时长/Java/端口降为下方 caption */}
-              <Surface className="flex shrink-0 flex-col gap-1 px-3.5 py-2.5">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 truncate font-mono text-[12.5px] font-medium" title={connectAddress}>
-                    {connectAddress}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(connectAddress)}
-                    title={$('instanceDetail.copied.tooltip')}
-                    aria-label={$('instanceDetail.copied.tooltip')}
-                    className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <Copy className="size-3.5" />
-                  </button>
-                  {frpInfo?.bound && (
-                    <span
-                      className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-[1px] text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-                      title={frpInfo.publicAddress}
-                    >
-                      frp
+              {active ? (
+                <>
+                  {/* 地址只保留一行：可复制、可检测，不再用独立卡片和第二行元数据占高度 */}
+                  <div className="flex h-8 shrink-0 items-center gap-2 px-1 text-[12px]">
+                    <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 truncate font-mono text-[13px] font-medium" title={connectAddress}>
+                      {connectAddress}
                     </span>
-                  )}
-                  <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-                    {!instance.address ? (
-                      <span className="truncate">{$('instanceDetail.domain.none')}</span>
-                    ) : !active ? (
-                      <span className="truncate">{$('instanceDetail.domain.notRunning')}</span>
-                    ) : domainCheck?.state === 'checking' ? (
-                      <span className="truncate">{$('instanceDetail.domain.checking')}</span>
-                    ) : domainCheck?.result?.error ? (
-                      <span className="max-w-[180px] truncate text-destructive" title={domainCheck.result.error}>
-                        {domainCheck.result.error}
-                      </span>
-                    ) : domainCheck?.result ? (
-                      <>
-                        <Dot />
-                        <span
-                          className="max-w-[180px] truncate font-mono text-emerald-600 dark:text-emerald-400"
-                          title={`${domainCheck.result.ip}:${domainCheck.result.port}`}
-                        >
-                          {domainCheck.result.ip}:{domainCheck.result.port}
-                          {domainCheck.result.latencyMs != null ? ` · TCP ${domainCheck.result.latencyMs}ms` : ''}
-                          {domainCheck.result.srv ? ' · SRV' : ''}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="truncate">{$('instanceDetail.domain.unchecked')}</span>
-                    )}
-                    {instance.address && active && (
-                      <button
-                        type="button"
-                        onClick={runDomainCheck}
-                        title={$('instanceDetail.domain.check')}
-                        aria-label={$('instanceDetail.domain.recheck')}
-                        className="grid size-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
-                      >
-                        <Globe className="size-3" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-muted-foreground">
-                  <span className="truncate">{coreText}</span>
-                  <span aria-hidden>·</span>
-                  <span className="truncate">
-                    {$('instanceDetail.metric.uptime')} {uptimeText ?? '—'}
-                  </span>
-                  <span aria-hidden>·</span>
-                  <span className="truncate">
-                    Java{' '}
-                    {server.info?.java.installed
-                      ? String(server.info.java.major ?? '—')
-                      : $('servers.java.notInstalled')}
-                  </span>
-                  <span aria-hidden>·</span>
-                  <span className="truncate">
-                    {$('instanceDetail.field.port')} {instance.port}
-                  </span>
-                  {instance.note && (
-                    <>
-                      <span aria-hidden>·</span>
-                      <span className="min-w-0 truncate" title={instance.note}>
-                        {instance.note}
-                      </span>
-                    </>
-                  )}
-                </div>
-              </Surface>
-
-              <div className="grid min-h-0 flex-1 gap-3.5 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-                <div className="flex min-h-0 min-w-0 flex-col gap-3.5">
-                  {/* 快捷操作：只留 4 个高频动作（备份/终端/文件/重启），低频的进 ⋮ */}
-                  <div className="flex shrink-0 flex-wrap items-center gap-0.5">
-                    <span className="mr-1.5 px-1 text-[10.5px] font-medium tracking-wider text-muted-foreground uppercase">
-                      {$('instanceDetail.overview.actions')}
-                    </span>
-                    {[
-                      {
-                        icon: Archive,
-                        label: $('instanceDetail.overview.backupNow'),
-                        onClick: () => openModal('backup'),
-                      },
-                      {
-                        icon: FolderOpen,
-                        label: $('instanceDetail.tools.files'),
-                        onClick: () => setTab('files'),
-                      },
-                      {
-                        icon: RotateCw,
-                        label: $('instanceDetail.op.restart'),
-                        onClick: () => void op('restart'),
-                      },
-                    ].map((q) => (
-                      <button
-                        key={q.label}
-                        type="button"
-                        onClick={q.onClick}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                      >
-                        <q.icon className="size-3.5 text-muted-foreground/70" />
-                        {q.label}
-                      </button>
-                    ))}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={$('ui.action.more')}
-                          title={$('ui.action.more')}
-                          className="text-muted-foreground hover:text-foreground"
-                        >
-                          <MoreVertical />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-44">
-                        <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setMapOpen(true)}>
-                          <MapIcon className="size-3.5" />
-                          {$('instanceDetail.tab.map')}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => openModal('properties')}>
-                          <Settings2 className="size-3.5" />
-                          {$('instanceDetail.serverProperties')}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-
-                {/* 终端：概览的主内容面（原 MOTD 预览块 + 底部 Dock 合并于此）。
-                    深色卡片自带轻头部（状态 + ERROR + 清空 + 搜索），日志区 flex-1 填满。 */}
-                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-[#0B0B0F] shadow-xs">
-                  <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[11px] text-zinc-400">
-                    <Terminal className="size-3.5 shrink-0" />
-                    <span className="shrink-0">{$('instanceDetail.dock.title')}</span>
-                    <span className="shrink-0 text-zinc-500">{instanceStatusText}</span>
-                    {dockErrCount > 0 && (
-                      <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-[1px] text-[10px] font-medium text-red-400">
-                        {dockErrCount} ERROR
-                      </span>
-                    )}
-                    <div className="relative ml-auto hidden shrink-0 sm:block">
-                      <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-zinc-500" />
-                      <input
-                        value={logQuery}
-                        onChange={(e) => setLogQuery(e.target.value)}
-                        placeholder={$('console.search')}
-                        aria-label={$('console.search')}
-                        spellCheck={false}
-                        className="h-6 w-[130px] rounded border border-zinc-800 bg-[#1C1C21] pr-2 pl-6 font-mono text-[10.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
-                      />
-                    </div>
                     <button
                       type="button"
-                      title={$('console.clear')}
-                      aria-label={$('console.clear')}
-                      onClick={() => consoleRef.current?.clear()}
-                      className="grid size-6 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200"
+                      onClick={() => handleCopy(connectAddress)}
+                      title={$('instanceDetail.copied.tooltip')}
+                      aria-label={$('instanceDetail.copied.tooltip')}
+                      className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
-                      <Eraser className="size-3" />
+                      <Copy className="size-3.5" />
+                    </button>
+                    {frpInfo?.bound && (
+                      <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-[1px] text-[11px] font-medium text-emerald-600 dark:text-emerald-400" title={frpInfo.publicAddress}>
+                        frp
+                      </span>
+                    )}
+                    <span className="ml-auto hidden shrink-0 text-[11px] text-muted-foreground lg:inline">
+                      {coreText} · Java {server.info?.java.installed ? String(server.info.java.major ?? '—') : $('servers.java.notInstalled')} · {$('instanceDetail.field.port')} {instance.port}
+                    </span>
+                    <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground lg:ml-2">
+                      {!instance.address ? (
+                        <span className="truncate">{$('instanceDetail.domain.none')}</span>
+                      ) : domainCheck?.state === 'checking' ? (
+                        <span className="truncate">{$('instanceDetail.domain.checking')}</span>
+                      ) : domainCheck?.result?.error ? (
+                        <span className="max-w-[180px] truncate text-destructive" title={domainCheck.result.error}>{domainCheck.result.error}</span>
+                      ) : domainCheck?.result ? (
+                        <>
+                          <Dot />
+                          <span className="max-w-[180px] truncate font-mono text-emerald-600 dark:text-emerald-400" title={`${domainCheck.result.ip}:${domainCheck.result.port}`}>
+                            {domainCheck.result.ip}:{domainCheck.result.port}
+                            {domainCheck.result.latencyMs != null ? ` · TCP ${domainCheck.result.latencyMs}ms` : ''}
+                            {domainCheck.result.srv ? ' · SRV' : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="truncate">{$('instanceDetail.domain.unchecked')}</span>
+                      )}
+                      {instance.address && (
+                        <button type="button" onClick={runDomainCheck} title={$('instanceDetail.domain.check')} aria-label={$('instanceDetail.domain.recheck')} className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
+                          <Globe className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 终端是唯一主内容面：全宽、吃掉剩余高度；不再用「最近事件」复制一份日志 */}
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-[#0B0B0F] shadow-xs">
+                    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[12px] text-zinc-400">
+                      <Terminal className="size-3.5 shrink-0" />
+                      <span className="shrink-0">{$('instanceDetail.dock.title')}</span>
+                      {dockErrCount > 0 && (
+                        <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-[1px] text-[11px] font-medium text-red-400" title={$('console.currentRunErrors')}>
+                          {dockErrCount} ERROR
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        aria-pressed={errorsOnly}
+                        onClick={() => setErrorsOnly((v) => !v)}
+                        className={`ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] ${errorsOnly ? 'bg-red-500/15 text-red-400' : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'}`}
+                      >
+                        <AlertCircle className="size-3.5" /> {$('console.errorsOnly')}
+                      </button>
+                      <div className="relative hidden shrink-0 sm:block">
+                        <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-zinc-500" />
+                        <input
+                          value={logQuery}
+                          onChange={(e) => setLogQuery(e.target.value)}
+                          placeholder={$('console.search')}
+                          aria-label={$('console.search')}
+                          spellCheck={false}
+                          className="h-8 w-[150px] rounded-md border border-zinc-800 bg-[#1C1C21] pr-2 pl-7 font-mono text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
+                        />
+                      </div>
+                      <button type="button" title={$('console.clear')} aria-label={$('console.clear')} onClick={() => consoleRef.current?.clear()} className="grid size-8 shrink-0 place-items-center rounded-md text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200">
+                        <Eraser className="size-3.5" />
+                      </button>
+                    </div>
+                    <ConsolePanel
+                      ref={consoleRef}
+                      server={server}
+                      instance={instance.name}
+                      instanceStatus={instance.status}
+                      embedded
+                      query={logQuery}
+                      errorsOnly={errorsOnly}
+                      heightClass="flex-1"
+                    />
+                  </div>
+                </>
+              ) : idleConsoleOpen ? (
+                /* 停止态：日志默认收起；用户明确要看时才把终端还给主区 */
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-[#0B0B0F] shadow-xs">
+                  <div className="flex h-10 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[12px] text-zinc-400">
+                    <Terminal className="size-3.5" />
+                    <span>{$('instanceDetail.idle.recentLogs')}</span>
+                    <button type="button" onClick={() => setIdleConsoleOpen(false)} className="ml-auto inline-flex h-8 items-center rounded-md px-2 text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200">
+                      {$('instanceDetail.idle.hideLogs')}
+                    </button>
+                    <button type="button" title={$('console.clear')} aria-label={$('console.clear')} onClick={() => consoleRef.current?.clear()} className="grid size-8 place-items-center rounded-md text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200">
+                      <Eraser className="size-3.5" />
                     </button>
                   </div>
-                  <ConsolePanel
-                    ref={consoleRef}
-                    server={server}
-                    instance={instance.name}
-                    instanceStatus={instance.status}
-                    embedded
-                    query={logQuery}
-                    heightClass="flex-1"
-                  />
+                  <ConsolePanel ref={consoleRef} server={server} instance={instance.name} instanceStatus={instance.status} embedded query={logQuery} errorsOnly={errorsOnly} heightClass="flex-1" />
                 </div>
-              </div>
-
-              {/* 最近事件：极简时间轴，不放边框表格 */}
-              <Surface className="flex min-h-[220px] flex-col p-3.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-[13px] font-semibold tracking-tight">{$('instanceDetail.overview.events')}</h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">{$('instanceDetail.overview.eventsHint')}</p>
+              ) : (
+                /* 停止/失败态的第一优先级是「下一步做什么」，不是展示一排没有意义的 — */
+                <div className="flex min-h-0 flex-1 items-center justify-center">
+                  <div className="flex w-full max-w-[520px] flex-col items-center px-6 text-center">
+                    <div className={`grid size-12 place-items-center rounded-2xl ${isFailed ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'}`}>
+                      {isFailed ? <AlertCircle className="size-6" /> : <Square className="size-5" />}
+                    </div>
+                    <h2 className="mt-4 text-[18px] font-semibold tracking-tight">{instanceStatusText}</h2>
+                    <p className={`mt-2 max-w-full break-words text-[13px] leading-6 ${isFailed ? 'text-destructive' : 'text-muted-foreground'}`} title={instance.error || undefined}>
+                      {isFailed && instance.error ? instance.error : $('instanceDetail.idle.normalStop')}
+                    </p>
+                    <p className="mt-2 text-[12px] text-muted-foreground">
+                      {coreText} · {$('instanceDetail.field.memoryLimit')} {fmtMB(instance.memoryMB)} · {$('instanceDetail.field.port')} {instance.port}
+                    </p>
+                    {instance.status === 'stopped' && (
+                      <Button className="mt-6 h-11 min-w-[180px] px-6 text-[14px]" disabled={busy || !server.online} onClick={() => void op('start')}>
+                        <Play className="size-4 fill-current" /> {$('instanceDetail.op.start')}
+                      </Button>
+                    )}
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      <Button variant="outline" className="h-9" onClick={() => setIdleConsoleOpen(true)}>
+                        <Terminal className="size-3.5" /> {$('instanceDetail.idle.viewLogs')}
+                      </Button>
+                      <Button variant="ghost" className="h-9" onClick={() => openModal('backup')}>
+                        <Archive className="size-3.5" /> {$('instanceDetail.backups')}
+                      </Button>
+                      <Button variant="ghost" className="h-9" onClick={() => openModal('panel')}>
+                        <Settings2 className="size-3.5" /> {$('instanceDetail.panel.open')}
+                      </Button>
+                    </div>
                   </div>
-                  <span className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-muted/60 px-2 text-[11px] text-muted-foreground">
-                    <span className={`size-1.5 rounded-full ${active ? 'bg-emerald-500' : 'bg-muted-foreground/50'}`} />
-                    {instanceStatusText}
-                  </span>
                 </div>
-
-                <div className="mt-2.5 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                  {overviewEvents.length ? (
-                    overviewEvents.map((line, i) => (
-                      <div key={i} className="flex items-start gap-2 text-[12px] leading-snug">
-                        <span
-                          className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
-                            /ERROR|Exception|Caused by/.test(line) ? 'bg-destructive' : 'bg-muted-foreground/40'
-                          }`}
-                        />
-                        <p
-                          className={`min-w-0 break-words ${
-                            /ERROR|Exception|Caused by/.test(line)
-                              ? 'text-destructive'
-                              : 'text-muted-foreground'
-                          }`}
-                          title={line}
-                        >
-                          {line}
-                        </p>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-[11.5px] text-muted-foreground">{$('instanceDetail.overview.noEvents')}</p>
-                  )}
-                </div>
-
-                <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-border/60 pt-2.5">
-                  <span className="text-[11px] text-muted-foreground">
-                    {dockErrCount > 0 ? `${dockErrCount} ERROR` : '—'}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70">
-                    {$('instanceDetail.dock.title')}
-                    <ChevronRight className="size-3" />
-                  </span>
-                </div>
-              </Surface>
-              </div>
+              )}
             </div>
           </div>
 
@@ -1181,13 +1093,13 @@ export function InstanceDetailPage({
                         >
                           <span
                             aria-hidden
-                            className={`grid size-6 shrink-0 place-items-center rounded-md text-[10px] font-semibold text-white ${avatarTone(name)}`}
+                            className={`grid size-6 shrink-0 place-items-center rounded-md text-[11px] font-semibold text-white ${avatarTone(name)}`}
                           >
                             {name.slice(0, 1).toUpperCase()}
                           </span>
                           <span className="flex min-w-0 flex-1 flex-col">
-                            <span className="truncate font-mono text-[12.5px] leading-4">{name}</span>
-                            <span className="truncate text-[10.5px] leading-4 text-muted-foreground">
+                            <span className="truncate font-mono text-[13px] leading-4">{name}</span>
+                            <span className="truncate text-[11px] leading-4 text-muted-foreground">
                               {stat
                                 ? `${$('instanceDetail.playerStats.session.now', fmtDuration(sess))} · ${$(
                                     'instanceDetail.playerStats.total.now',
@@ -1250,7 +1162,7 @@ export function InstanceDetailPage({
                       {!active ? $('instanceDetail.players.none') : onlineReason}
                     </p>
                     {!active && (
-                      <p className="mt-1 text-[10.5px] leading-4 text-muted-foreground/80">
+                      <p className="mt-1 text-[11px] leading-4 text-muted-foreground/80">
                         {$('instanceDetail.players.empty.hint')}
                       </p>
                     )}
@@ -1358,7 +1270,7 @@ export function InstanceDetailPage({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-7 text-[12.5px]"
+                      className="h-7 text-[13px]"
                       onClick={() => openModal('watchdog')}
                     >
                       {$('instanceDetail.edit')}
@@ -1373,7 +1285,7 @@ export function InstanceDetailPage({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-7 text-[12.5px]"
+                      className="h-7 text-[13px]"
                       onClick={() => openModal('backupSchedule')}
                     >
                       {$('instanceDetail.edit')}
@@ -1528,11 +1440,11 @@ export function InstanceDetailPage({
           <div>
             {$('instanceDetail.delete.desc')}
             {isFailed ? (
-              <p className="mt-2 text-xs text-muted-foreground">
+              <p className="mt-2 text-[12px] text-muted-foreground">
                 {$('instanceDetail.delete.failedDesc')}
               </p>
             ) : (
-              <label className="mt-3 flex items-center gap-2 text-sm font-normal text-foreground">
+              <label className="mt-3 flex items-center gap-2 text-[13px] font-normal text-foreground">
                 <Checkbox
                   checked={backupBeforeDelete}
                   onCheckedChange={(v) => setBackupBeforeDelete(v === true)}

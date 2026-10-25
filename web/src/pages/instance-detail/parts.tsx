@@ -22,7 +22,7 @@ import { $ } from '@/lib/i18n';
  */
 export function MetricStrip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="shrink-0 px-4 pt-3 pb-3">
+    <div className="shrink-0">
       <div className="grid h-[72px] grid-cols-3 overflow-hidden rounded-lg border border-border/70 bg-card shadow-xs sm:divide-x sm:divide-border/60">
         {children}
       </div>
@@ -30,7 +30,7 @@ export function MetricStrip({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 指标条的一格：10.5px 大写标签 + 20px 大数字 + 辅助行 */
+/** 指标条的一格：11px 大写标签 + 20px 大数字 + 辅助行 */
 export function MetricCell({
   icon,
   label,
@@ -43,7 +43,7 @@ export function MetricCell({
   return (
     <div className="flex min-w-0 flex-col justify-center gap-1.5 px-3.5">
       <div className="flex min-w-0 items-center gap-1.5">
-        <p className="truncate text-[10.5px] font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
+        <p className="truncate text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
         {icon && <span className="ml-auto shrink-0 text-muted-foreground/60 [&_svg]:size-3">{icon}</span>}
       </div>
       <div className="flex min-w-0 flex-col gap-1">{children}</div>
@@ -97,7 +97,7 @@ export function MetricBar({
       <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} />
       </div>
-      {trailing && <span className="shrink-0 font-mono text-[10px] leading-[14px]">{trailing}</span>}
+      {trailing && <span className="shrink-0 font-mono text-[11px] leading-[14px]">{trailing}</span>}
     </MetricHelper>
   );
 }

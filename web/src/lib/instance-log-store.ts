@@ -41,11 +41,13 @@ export interface InstanceLogState {
   status: string | null;
   /** 因缓冲上限被丢弃的行数（>0 时 UI 应提示） */
   dropped: number;
+  /** 当前进程日志的起始下标；本次运行结束前的历史不计算 ERROR 徽章 */
+  runStart: number;
   /** 是否已经拉过一次历史（false = 还没加载） */
   loaded: boolean;
 }
 
-const EMPTY: InstanceLogState = { lines: [], status: null, dropped: 0, loaded: false };
+const EMPTY: InstanceLogState = { lines: [], status: null, dropped: 0, runStart: 0, loaded: false };
 
 const states = new Map<string, InstanceLogState>();
 const listeners = new Set<() => void>();
@@ -75,11 +77,13 @@ function append(key: string, incoming: string[]) {
   if (!cur) return;
   const next = [...cur.lines, ...incoming];
   let dropped = cur.dropped;
+  let removed = 0;
   if (next.length > MAX_LINES) {
-    dropped += next.length - MAX_LINES;
-    next.splice(0, next.length - MAX_LINES);
+    removed = next.length - MAX_LINES;
+    dropped += removed;
+    next.splice(0, removed);
   }
-  states.set(key, { ...cur, lines: next, dropped });
+  states.set(key, { ...cur, lines: next, dropped, runStart: Math.max(0, cur.runStart - removed) });
   emit();
 }
 
@@ -143,8 +147,11 @@ export const instanceLogStore = {
       const fetched = consoleLines(data);
       const cur = states.get(key) ?? EMPTY;
       const lines = merge ? mergeTail(fetched, cur.lines) : fetched;
+      // 合并可能给缓冲前面补上历史；runStart 也要同步后移，否则 ERROR 统计会错位。
+      const runStart = merge ? Math.min(lines.length, cur.runStart + Math.max(0, lines.length - cur.lines.length)) : 0;
       update(key, {
         lines,
+        runStart,
         status: typeof data.status === 'string' ? data.status : cur.status,
         loaded: true,
       });
@@ -157,7 +164,7 @@ export const instanceLogStore = {
 
   /** 清屏（只清本地缓冲，不动 Agent 侧缓冲） */
   clear: (serverId: string, instance: string): void => {
-    update(keyOf(serverId, instance), { lines: [], dropped: 0 });
+    update(keyOf(serverId, instance), { lines: [], dropped: 0, runStart: 0 });
   },
 
   /** 关闭一个实例的日志（离开页面时调用，释放内存） */
@@ -197,7 +204,14 @@ function wire() {
       return;
     }
     if (e.event === 'instance.updated' && typeof e.data?.status === 'string') {
-      update(key, { status: e.data.status });
+      const cur = states.get(key);
+      const startingRun = e.data.status === 'running' && cur?.status !== 'running';
+      // starting 也可能发生在 watchdog 重启：必须按「新一轮日志」计，不能沿用旧错误计数。
+      const startingBoot = e.data.status === 'starting' && cur?.status !== 'starting';
+      update(key, {
+        status: e.data.status,
+        ...(startingRun || startingBoot ? { runStart: cur?.lines.length ?? 0 } : {}),
+      });
     }
   });
 

@@ -82,6 +82,8 @@ export const en = {
   'console.search': 'Search logs',
   'console.search.empty': 'No matching lines',
   'console.dropped': '(buffer full, {0} oldest lines dropped)',
+  'console.errorsOnly': 'Errors only',
+  'console.currentRunErrors': 'Counts only errors from this run',
 
   // ---------- 关于页 ----------
   'about.title': 'About',
@@ -695,6 +697,9 @@ export const en = {
   'instanceDetail.idle.released': 'Released after stop',
   'instanceDetail.idle.lastRun': 'Last Session',
   'instanceDetail.idle.normalStop': 'Stopped cleanly',
+  'instanceDetail.idle.viewLogs': 'View recent logs',
+  'instanceDetail.idle.hideLogs': 'Hide logs',
+  'instanceDetail.idle.recentLogs': 'Recent logs',
   'instanceDetail.value.nodata': 'No data',
   'instanceDetail.players.empty.hint': 'The player list is not queried while stopped; it resumes automatically after start',
   'instanceDetail.players.hint': 'Click a player for kick / ban / OP',

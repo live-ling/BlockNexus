@@ -25,7 +25,7 @@ const MAX_HISTORY = 200;
 /** 输入框自增高行数范围 */
 const MIN_ROWS = 1;
 const MAX_ROWS = 5;
-const LINE_HEIGHT = 20;
+const LINE_HEIGHT = 22;
 
 /**
  * 终端行按日志级别着色（返回空串时继承容器默认色）。
@@ -69,6 +69,8 @@ interface Props {
   embedded?: boolean;
   /** 日志关键字过滤（页面的搜索框）；空串不过滤 */
   query?: string;
+  /** 仅显示错误与异常堆栈（取代旧「最近事件」卡，不复制第二份日志视图） */
+  errorsOnly?: boolean;
   ref?: Ref<ConsolePanelHandle>;
 }
 
@@ -80,6 +82,7 @@ export function ConsolePanel({
   heightClass = 'h-[40vh]',
   embedded = false,
   query = '',
+  errorsOnly = false,
   ref,
 }: Props) {
   // 日志与状态来自唯一数据源（store）：历史一次拉取 + SSE 实时追加 + 断线补偿。
@@ -110,11 +113,16 @@ export function ConsolePanel({
 
   // 实例未运行（也不在启动中）时控制台不可写入：发送按钮禁用，输入框给出原因
   const idle = status !== 'running' && status !== 'starting';
-  // 关键字过滤只影响显示，不动已拉取的缓冲区
+  // 过滤只影响显示，不动已拉取的缓冲区。
+  // 「仅看错误」连堆栈行一起保留（at … / Caused by），否则排障时只剩一行孤零零的 ERROR。
   const shown = useMemo(() => {
+    let next = errorsOnly
+      ? lines.filter((l) => /ERROR|FATAL|SEVERE|Exception|Caused by:|^\s+at\s|^\s*\.\.\. \d+ more/.test(l))
+      : lines;
     const q = query.trim().toLowerCase();
-    return q ? lines.filter((l) => l.toLowerCase().includes(q)) : lines;
-  }, [lines, query]);
+    if (q) next = next.filter((l) => l.toLowerCase().includes(q));
+    return next;
+  }, [lines, query, errorsOnly]);
 
   // 自增高：用一个隐藏镜像元素量出文本高度，再写回 textarea（与 beUI prompt-input 同思路）
   const measureRef = useRef<HTMLDivElement>(null);
@@ -227,15 +235,15 @@ export function ConsolePanel({
       {!embedded && (
         <div className="flex items-center gap-2 border-b border-zinc-800 bg-[#10141c] px-3 py-2">
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/90" />
-          <b className="text-xs font-semibold text-zinc-200">
+          <b className="text-[12px] font-semibold text-zinc-200">
             {server.name} / {instance}
           </b>
-          <span className="text-xs text-zinc-500">{statusLabel(status)}</span>
+          <span className="text-[12px] text-zinc-500">{statusLabel(status)}</span>
           <div className="ml-auto flex items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100"
+              className="h-7 px-2 text-[12px] text-zinc-400 hover:text-zinc-100"
               onClick={() => instanceLogStore.clear(server.id, instance)}
             >
               <Eraser className="h-3.5 w-3.5" /> {$('console.clear')}
@@ -262,13 +270,13 @@ export function ConsolePanel({
         }}
         className={`console-scroll no-scrollbar ${heightClass} min-h-0 overflow-y-auto font-mono ${
           embedded
-            ? 'px-3.5 py-2.5 text-[12.5px] leading-5 text-zinc-400'
-            : 'p-3 text-xs leading-relaxed text-zinc-300'
+            ? 'px-3.5 py-2.5 text-[13px] leading-[22px] text-zinc-400'
+            : 'p-3 text-[13px] leading-[22px] text-zinc-300'
         }`}
       >
         {/* 缓冲上限丢弃提示：不静默吞日志（原来超过 1500 行直接切掉，用户毫无感知） */}
         {logState.dropped > 0 && (
-          <div className="mb-1 text-[10.5px] text-amber-500/80">
+          <div className="mb-1 text-[11px] text-amber-500/80">
             {$('console.dropped', logState.dropped)}
           </div>
         )}
@@ -280,7 +288,7 @@ export function ConsolePanel({
         ))}
         {!shown.length && (
           <div className="text-zinc-600">
-            {lines.length && query.trim() ? $('console.search.empty') : $('console.empty')}
+            {lines.length && (query.trim() || errorsOnly) ? $('console.search.empty') : $('console.empty')}
           </div>
         )}
       </div>
@@ -294,7 +302,7 @@ export function ConsolePanel({
               : 'rounded-xl border border-zinc-700/60 bg-[#0a0d12] px-2.5 py-1.5 focus-within:border-zinc-600'
           }`}
         >
-          <span aria-hidden className="select-none font-mono text-xs leading-5 text-emerald-500/80">
+          <span aria-hidden className="select-none font-mono text-[13px] leading-[22px] text-emerald-500/80">
             &gt;
           </span>
           <div className="relative min-w-0 flex-1">
@@ -302,7 +310,7 @@ export function ConsolePanel({
             <div
               ref={measureRef}
               aria-hidden
-              className="pointer-events-none invisible absolute inset-x-0 top-0 whitespace-pre-wrap font-mono text-xs leading-5 [overflow-wrap:break-word]"
+              className="pointer-events-none invisible absolute inset-x-0 top-0 whitespace-pre-wrap font-mono text-[13px] leading-[22px] [overflow-wrap:break-word]"
             >
               {`${cmd}\u200b`}
             </div>
@@ -316,7 +324,7 @@ export function ConsolePanel({
               autoComplete="off"
               aria-label={$('console.input.aria')}
               placeholder={idle ? $('instanceDetail.cmd.idle') : $('console.input.placeholder')}
-              className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent font-mono text-xs leading-5 text-zinc-200 outline-none placeholder:text-zinc-600"
+              className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent font-mono text-[13px] leading-[22px] text-zinc-200 outline-none placeholder:text-zinc-600"
             />
           </div>
           <Button

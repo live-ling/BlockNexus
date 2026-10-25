@@ -129,7 +129,7 @@ export function PlayerActionDialog({
           <AlertDialogTitle>{meta.title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div>
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{cmd}</code>
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[12px]">{cmd}</code>
               <span className="mt-1 block">{meta.hint}</span>
             </div>
           </AlertDialogDescription>

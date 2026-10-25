@@ -31,7 +31,7 @@ export function MaskedText({
       className={`max-w-full rounded px-0.5 text-left break-all hover:bg-muted ${className}`}
     >
       {shown ? value : '•'.repeat(dots)}
-      <span className="ml-1 align-middle text-[10px] text-muted-foreground">
+      <span className="ml-1 align-middle text-[11px] text-muted-foreground">
         {shown ? $('common.hide') : $('common.show')}
       </span>
       {title ? <span className="sr-only">{title}</span> : null}
