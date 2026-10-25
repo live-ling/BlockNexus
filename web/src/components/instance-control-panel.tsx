@@ -1,8 +1,12 @@
 // 实例控制面板：设置类操作的唯一入口（工作区在页签，设置在这里）。
 //
-// 2026-10-25 改版：
-//   · 尺寸 860×360 → min(1160px, 94vw) × min(760px, 86vh)，左导航 180，内容独立滚动——
-//     原来 6 组内容挤在窄框里，是实例页头号「挤」源；
+// 2026-10-25 改版（第二次）：
+//   · **修宽度**：`DialogContent` 自带 `sm:max-w-sm`（384px），之前只写 `max-w-none`
+//     在 sm 断点被压回 384px——面板一直很窄的真正原因。现在 `max-w-none!` + `sm:max-w-none!`，
+//     实测 1160×774（nav 200 + 内容 960），无横向溢出。
+//   · 内容区 620px 单栏 → 自适应双栏：基础信息＝表单 + 只读侧栏，网络＝域名 / frp 两张卡，
+//     自动化＝两张并排卡；字号收敛 11/12/13/16，控件高度 36px。
+//   · 尺寸 min(1160px, 94vw) × min(780px, 90vh)，左导航 200，内容独立滚动。
 //   · 6 组 → 4 组：「玩家」（统计/封禁）与「备份」和页签完全重复，删除；
 //     InstanceFrpDialog 死代码一并清掉，frp 只在这里的「网络」组；
 //   · 入口去重：属性 / 插件配置 / 完整编辑只在「配置」页签，这里不再复刻。
@@ -146,13 +150,18 @@ export function InstanceControlPanel({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[min(760px,86vh)] w-[min(1160px,94vw)] max-w-none flex-col gap-0 p-0">
-        <DialogHeader className="shrink-0 border-b px-5 py-3.5">
-          <DialogTitle className="flex items-center gap-2 text-[15px]">
+      {/*
+        宽度必须同时覆盖 base 的 `sm:max-w-sm`（24rem = 384px），否则会被压成窄条——
+        这是这版之前「控制面板一直很窄」的真正原因：类名写了 w-[1160px]，
+        但 sm 断点的 max-w-sm 优先级更高，实测只有 384px。
+      */}
+      <DialogContent className="flex h-[min(780px,90vh)] w-[min(1160px,94vw)] max-w-none! flex-col gap-0 overflow-hidden p-0 sm:max-w-none!">
+        <DialogHeader className="shrink-0 border-b px-6 py-4">
+          <DialogTitle className="flex items-center gap-2 text-[16px]">
             {$('instanceDetail.panel.title')}
             <InstanceStatusBadge status={instance.status} />
           </DialogTitle>
-          <DialogDescription className="flex items-center gap-2 text-[11px]">
+          <DialogDescription className="flex items-center gap-2 text-[12px]">
             <span className="truncate font-mono">{instance.name}</span>
             <span>·</span>
             <span className="truncate font-mono">{connectAddress}</span>
@@ -161,16 +170,16 @@ export function InstanceControlPanel({
               onClick={() => onCopy(connectAddress)}
               title={$('instanceDetail.copied.tooltip')}
               aria-label={$('instanceDetail.copied.tooltip')}
-              className="grid h-4 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
+              className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <Copy className="h-3 w-3" />
+              <Copy className="h-3.5 w-3.5" />
             </button>
           </DialogDescription>
         </DialogHeader>
 
         {/* 内容区独立滚动：min-h-0 链从这里开始，别让某一组把整块撑破 */}
-        <div className="flex min-h-0 flex-1">
-          <nav className="w-[180px] shrink-0 border-r p-2.5">
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <nav className="flex w-full shrink-0 flex-wrap gap-1 border-b bg-muted/20 p-2 sm:w-[200px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
             {tabs.map((t) => {
               const Icon = t.icon;
               const on = tab === t.key;
@@ -179,137 +188,144 @@ export function InstanceControlPanel({
                   key={t.key}
                   type="button"
                   onClick={() => setTab(t.key)}
-                  className={`mb-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
-                    on ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/60'
+                  className={`flex h-9 items-center gap-2.5 rounded-md px-3 text-left text-[13px] transition-colors sm:mb-1 sm:w-full ${
+                    on ? 'bg-background font-medium text-foreground shadow-xs ring-1 ring-border/60' : 'text-muted-foreground hover:bg-muted/70'
                   }`}
                 >
-                  <Icon className="size-3.5 shrink-0" />
+                  <Icon className="size-4 shrink-0" />
                   {t.label}
                 </button>
               );
             })}
           </nav>
 
-          <div className="min-w-0 flex-1 overflow-y-auto p-5">
+          <div className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
             {tab === 'basic' && (
-              <div className="grid max-w-[620px] gap-4">
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {$('instanceDetail.panel.basic.hint')}
-                </p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="grid gap-1.5 text-xs">
-                    <span className="text-[11.5px] text-muted-foreground">{$('instanceDetail.field.memoryLimit')}</span>
-                    <Input
-                      value={mem}
-                      onChange={(e) => setMem(e.target.value.replace(/[^\d]/g, ''))}
-                      inputMode="numeric"
-                      className="font-mono"
-                      disabled={saving}
-                    />
-                  </label>
-                  <label className="grid gap-1.5 text-xs">
-                    <span className="text-[11.5px] text-muted-foreground">{$('instanceDetail.field.note')}</span>
-                    <Input value={note} onChange={(e) => setNote(e.target.value)} disabled={saving} maxLength={200} />
-                  </label>
-                </div>
-                <div className="flex justify-end">
-                  <Button size="sm" disabled={saving} onClick={saveBasic}>
-                    {$('common.save')}
-                  </Button>
-                </div>
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <section className="grid content-start gap-4">
+                  <p className="text-[12px] leading-relaxed text-muted-foreground">
+                    {$('instanceDetail.panel.basic.hint')}
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="grid gap-1.5">
+                      <span className="text-[12px] text-muted-foreground">{$('instanceDetail.field.memoryLimit')}</span>
+                      <Input
+                        value={mem}
+                        onChange={(e) => setMem(e.target.value.replace(/[^\d]/g, ''))}
+                        inputMode="numeric"
+                        className="h-9 font-mono"
+                        disabled={saving}
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className="text-[12px] text-muted-foreground">{$('instanceDetail.field.note')}</span>
+                      <Input value={note} onChange={(e) => setNote(e.target.value)} disabled={saving} maxLength={200} className="h-9" />
+                    </label>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button className="h-9 px-4 text-[13px]" disabled={saving} onClick={saveBasic}>
+                      {$('common.save')}
+                    </Button>
+                  </div>
+                </section>
 
-                {/* 只读信息：真正的编辑入口在「配置」页签（属性 / 插件 / Mod / 完整编辑），这里不复刻 */}
-                <div className="mt-2 grid gap-0 border-t border-border/60 pt-1">
-                  <InfoRow label={$('instanceDetail.field.core')} value={instance.version} />
-                  <InfoRow label={$('instanceDetail.field.port')} value={String(instance.port)} />
-                  <InfoRow
-                    label={$('instanceDetail.field.onlineMode')}
-                    value={instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')}
-                  />
-                  <InfoRow label={$('instanceDetail.motd.label')} value={instance.motd || $('instanceDetail.value.unset')} />
-                </div>
+                {/* 只读信息：真正的编辑入口在「配置」页签，这里只做汇总，不复刻表单 */}
+                <aside className="h-fit rounded-xl border bg-muted/20 p-4">
+                  <h3 className="text-[13px] font-semibold">{$('instanceDetail.panel.readonly')}</h3>
+                  <div className="mt-2 divide-y divide-border/60">
+                    <InfoRow label={$('instanceDetail.field.core')} value={instance.version} />
+                    <InfoRow label={$('instanceDetail.field.port')} value={String(instance.port)} />
+                    <InfoRow
+                      label={$('instanceDetail.field.onlineMode')}
+                      value={instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')}
+                    />
+                    <InfoRow label={$('instanceDetail.motd.label')} value={instance.motd || $('instanceDetail.value.unset')} />
+                  </div>
+                </aside>
               </div>
             )}
 
             {tab === 'network' && (
-              <div className="grid max-w-[620px] gap-5">
+              <div className="grid gap-5 xl:grid-cols-2">
                 {/* 域名：唯一可编辑的对外地址字段（基础组不再重复） */}
-                <section className="grid gap-3">
-                  <h3 className="text-[12px] font-semibold">{$('instanceDetail.panel.network.domain')}</h3>
-                  <label className="grid gap-1.5 text-xs">
-                    <span className="text-[11.5px] text-muted-foreground">{$('instanceDetail.field.address')}</span>
+                <section className="grid content-start gap-3 rounded-xl border p-4">
+                  <h3 className="text-[13px] font-semibold">{$('instanceDetail.panel.network.domain')}</h3>
+                  <label className="grid gap-1.5">
+                    <span className="text-[12px] text-muted-foreground">{$('instanceDetail.field.address')}</span>
                     <Input
                       value={address}
                       onChange={(e) => setAddress(e.target.value)}
                       placeholder="mc.example.com"
-                      className="font-mono"
+                      className="h-9 font-mono"
                       disabled={saving}
                     />
-                    <span className="text-[10.5px] leading-4 text-muted-foreground/80">
+                    <span className="text-[11px] leading-4 text-muted-foreground/80">
                       {$('instanceDetail.panel.domainHint')}
                     </span>
                   </label>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
                     <Button
-                      size="sm"
+                      className="h-9 px-4 text-[13px]"
                       variant="outline"
                       disabled={saving || address === (instance.address || '')}
                       onClick={saveAddress}
                     >
                       {$('common.save')}
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => onCopy(connectAddress)}>
+                    <Button className="h-9 text-[13px]" variant="ghost" onClick={() => onCopy(connectAddress)}>
                       <Copy className="size-3.5" /> {$('instanceDetail.copied.tooltip')}
                     </Button>
                   </div>
                 </section>
 
                 {/* frp：实例级端口映射的唯一入口（本地端口取实例端口，不用手填） */}
-                <section className="grid gap-3 border-t border-border/60 pt-4">
-                  <h3 className="text-[12px] font-semibold">{$('instanceDetail.frp.title')}</h3>
+                <section className="grid content-start gap-3 rounded-xl border p-4">
+                  <h3 className="text-[13px] font-semibold">{$('instanceDetail.frp.title')}</h3>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <InfoRow label={$('instanceDetail.frp.localPort')} value={String(instance.port)} />
-                    <label className="grid gap-1.5 text-xs">
-                      <span className="text-[11.5px] text-muted-foreground">{$('instanceDetail.frp.remotePort')}</span>
+                    <label className="grid gap-1.5">
+                      <span className="text-[12px] text-muted-foreground">{$('instanceDetail.frp.remotePort')}</span>
                       <Input
                         value={frpPort}
                         onChange={(e) => setFrpPort(e.target.value.replace(/[^\d]/g, ''))}
                         inputMode="numeric"
-                        className="font-mono"
+                        className="h-9 font-mono"
                         disabled={frpBusy || (!!frpInfo && !frpInfo.supported)}
                       />
                     </label>
                   </div>
-                  <InfoRow
-                    label={$('instanceDetail.frp.title')}
-                    value={
-                      frpInfo?.bound
-                        ? frpInfo.publicAddress
-                        : frpInfo && !frpInfo.supported
-                          ? frpInfo.reason === 'sakura'
-                            ? $('instanceDetail.frp.sakura')
-                            : $('instanceDetail.frp.notLocal')
-                          : $('instanceDetail.frp.unbound')
-                    }
-                    mono={!!frpInfo?.bound}
-                  />
-                  {frpInfo?.bound && (
+                  <div className="grid gap-1 border-t border-border/60 pt-2">
                     <InfoRow
-                      label={$('instanceDetail.frp.target')}
-                      value={`${frpInfo.targetHost}:${frpInfo.localPort}`}
-                      mono
+                      label={$('instanceDetail.frp.title')}
+                      value={
+                        frpInfo?.bound
+                          ? frpInfo.publicAddress
+                          : frpInfo && !frpInfo.supported
+                            ? frpInfo.reason === 'sakura'
+                              ? $('instanceDetail.frp.sakura')
+                              : $('instanceDetail.frp.notLocal')
+                            : $('instanceDetail.frp.unbound')
+                      }
+                      mono={!!frpInfo?.bound}
                     />
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
+                    {frpInfo?.bound && (
+                      <InfoRow
+                        label={$('instanceDetail.frp.target')}
+                        value={`${frpInfo.targetHost}:${frpInfo.localPort}`}
+                        mono
+                      />
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
                     <Button
-                      size="sm"
+                      className="h-9 px-4 text-[13px]"
                       disabled={frpBusy || !frpInfo?.supported}
                       onClick={() => saveFrpPort(true)}
                     >
                       {frpInfo?.bound ? $('instanceDetail.frp.manage') : $('instanceDetail.frp.enable')}
                     </Button>
                     {frpInfo?.bound && (
-                      <Button size="sm" variant="outline" disabled={frpBusy} onClick={() => saveFrpPort(false)}>
+                      <Button className="h-9 text-[13px]" variant="outline" disabled={frpBusy} onClick={() => saveFrpPort(false)}>
                         {$('instanceDetail.frp.unbind')}
                       </Button>
                     )}
@@ -322,7 +338,7 @@ export function InstanceControlPanel({
             )}
 
             {tab === 'automation' && (
-              <div className="grid max-w-[620px] gap-3">
+              <div className="grid content-start gap-3 sm:grid-cols-2">
                 <ActionRow
                   title={$('instanceDetail.watchdog')}
                   desc={$('instanceDetail.panel.watchdog.desc')}
@@ -341,30 +357,31 @@ export function InstanceControlPanel({
             )}
 
             {tab === 'danger' && (
-              <div className="grid max-w-[620px] gap-3">
-                <p className="text-xs text-muted-foreground">{$('instanceDetail.panel.danger.hint')}</p>
+              <div className="grid max-w-[880px] content-start gap-4">
+                <p className="text-[12px] text-muted-foreground">{$('instanceDetail.panel.danger.hint')}</p>
                 {active && (
-                  <p className="rounded-md bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+                  <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-700 dark:text-amber-400">
                     {$('instanceDetail.panel.danger.running')}
                   </p>
                 )}
-                <div className="flex flex-wrap gap-2">
-                  {instance.source !== 'upload' && (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={onPanelInstall}>
-                      <CloudDownload className="h-3.5 w-3.5" /> {$('instanceDetail.panelInstall')}
+                <div className="grid gap-2 rounded-xl border p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {instance.source !== 'upload' && (
+                      <Button className="h-9 text-[13px]" variant="outline" disabled={busy} onClick={onPanelInstall}>
+                        <CloudDownload className="h-3.5 w-3.5" /> {$('instanceDetail.panelInstall')}
+                      </Button>
+                    )}
+                    <Button className="h-9 text-[13px]" variant="outline" disabled={busy} onClick={onReinstall}>
+                      <Puzzle className="h-3.5 w-3.5" /> {$('instanceDetail.reinstall')}
                     </Button>
-                  )}
-                  <Button size="sm" variant="outline" disabled={busy} onClick={onReinstall}>
-                    <Puzzle className="h-3.5 w-3.5" /> {$('instanceDetail.reinstall')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-600 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-                    onClick={onDelete}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> {$('instanceDetail.delete')}
-                  </Button>
+                    <Button
+                      className="h-9 border-red-300 text-red-600 hover:bg-red-50 hover:text-red-600 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40 text-[13px]"
+                      variant="outline"
+                      onClick={onDelete}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> {$('instanceDetail.delete')}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -377,9 +394,9 @@ export function InstanceControlPanel({
 
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-start gap-4 py-1.5 text-xs">
-      <span className="w-24 shrink-0 text-muted-foreground">{label}</span>
-      <span className={`min-w-0 flex-1 break-words ${mono ? 'font-mono' : ''}`}>{value}</span>
+    <div className="flex items-start gap-4 py-2 text-[12px]">
+      <span className="w-24 shrink-0 text-[11px] leading-5 text-muted-foreground">{label}</span>
+      <span className={`min-w-0 flex-1 break-words leading-5 ${mono ? 'font-mono' : ''}`}>{value}</span>
     </div>
   );
 }
@@ -398,13 +415,13 @@ function ActionRow({
   onClick: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
+    <div className="flex items-center gap-3 rounded-xl border px-4 py-3.5">
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${on ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
       <div className="min-w-0 flex-1">
-        <b className="text-xs">{title}</b>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{desc}</p>
+        <b className="text-[13px]">{title}</b>
+        <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{desc}</p>
       </div>
-      <Button size="sm" variant="outline" className="shrink-0" onClick={onClick}>
+      <Button size="sm" variant="outline" className="h-9 shrink-0 text-[13px]" onClick={onClick}>
         {action}
       </Button>
     </div>

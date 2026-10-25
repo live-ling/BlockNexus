@@ -706,6 +706,7 @@ export const zh = {
   'instanceDetail.idle.viewLogs': '查看最近日志',
   'instanceDetail.idle.hideLogs': '收起日志',
   'instanceDetail.idle.recentLogs': '最近日志',
+  'instanceDetail.panel.readonly': '只读信息',
   'instanceDetail.value.nodata': '暂无数据',
   'instanceDetail.players.empty.hint': '实例停止时不查询玩家名单，启动后自动恢复实时列表',
   'instanceDetail.players.hint': '点击玩家行可快捷执行 踢出 / 封禁 / OP',

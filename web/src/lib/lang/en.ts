@@ -700,6 +700,7 @@ export const en = {
   'instanceDetail.idle.viewLogs': 'View recent logs',
   'instanceDetail.idle.hideLogs': 'Hide logs',
   'instanceDetail.idle.recentLogs': 'Recent logs',
+  'instanceDetail.panel.readonly': 'Read-only info',
   'instanceDetail.value.nodata': 'No data',
   'instanceDetail.players.empty.hint': 'The player list is not queried while stopped; it resumes automatically after start',
   'instanceDetail.players.hint': 'Click a player for kick / ban / OP',

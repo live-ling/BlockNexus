@@ -46,7 +46,7 @@
 | ban-list-dialog | 150 | 同上 | 封禁目录 | |
 | player-stats-dialog | 199 | `max-h-[calc(100dvh-2rem)] sm:max-w-2xl` | 玩家统计 | |
 | uninstall-dialog | 237 | `max-h-[calc(100dvh-2rem)] sm:max-w-lg` | 卸载 Agent | 破坏性弹层 |
-| instance-control-panel | 444 | `max-w-[860px] min-h-[360px]` | 实例设置 6 组 | **偏小**（已确认） |
+| instance-control-panel | 429 | `min(1160px,94vw) × min(780px,90vh)` | 实例设置 4 组 | 已修：曾因 `sm:max-w-sm` 被压成 384px |
 | StatusBadge / MaskedText / LogViewer / UploadChannel / CardField | 116/39/74/51/37 | — | 通用件 | 复用良好，保留 |
 
 **尺寸事实**：同时存在 `max-w-lg/md/2xl/3xl/4xl/5xl/[420px]/[860px]` 与

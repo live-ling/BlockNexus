@@ -1048,12 +1048,6 @@ export function InstanceDetailPage({
                       <Button variant="outline" className="h-9" onClick={() => setIdleConsoleOpen(true)}>
                         <Terminal className="size-3.5" /> {$('instanceDetail.idle.viewLogs')}
                       </Button>
-                      <Button variant="ghost" className="h-9" onClick={() => openModal('backup')}>
-                        <Archive className="size-3.5" /> {$('instanceDetail.backups')}
-                      </Button>
-                      <Button variant="ghost" className="h-9" onClick={() => openModal('panel')}>
-                        <Settings2 className="size-3.5" /> {$('instanceDetail.panel.open')}
-                      </Button>
                     </div>
                   </div>
                 </div>
