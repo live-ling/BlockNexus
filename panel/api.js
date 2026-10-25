@@ -3312,12 +3312,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   });
 
   // ---------- server-icon：读取（PNG 二进制）/ 设置（前端压缩到 64x64 的 base64） ----------
+  // 没有图标是常态（没上传过），用 204 而不是 404：`<img>` 两种都走 onError 回退到方块图标，
+  // 但 404 会在 DevTools 里每次都留一条红色的「Failed to load resource」，把真正的错误埋掉。
   router.get('/servers/:id/instances/:name/icon', async (req, res, next) => {
     const server = requireServer(req, res);
     if (!server) return;
     try {
       const r = await agentRead(server, 'instance.iconGet', { name: req.params.name });
-      if (!r || !r.ok || !r.b64) return res.status(404).end();
+      if (!r || !r.ok || !r.b64) return res.status(204).end();
       res.setHeader('Content-Type', 'image/png');
       // 图标基本不变，允许浏览器/外壳短缓存
       res.setHeader('Cache-Control', 'public, max-age=300');
@@ -4725,7 +4727,31 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   let frpBusy = false;
 
   function frpStatus() {
-    return { ...frpMgr.status(), config: frp.publicConfig(config.data.settings.frp || {}) };
+    return {
+      ...frpMgr.status(),
+      config: frp.publicConfig(config.data.settings.frp || {}),
+      // 给前端「提前警示」用：保存前就能看到「代理通了面板端口但没开登录保护」
+      exposure: { ...frp.exposureRisk(config.data.settings.frp || {}, frpExposureOpts()), ...frpExposureOpts() },
+    };
+  }
+
+  /**
+   * frp 暴露面板的风险判定参数：面板端口 + 是否可能被外部访问 + 是否已开登录保护。
+   * 判定本身在 panel/frp.js 的 exposureRisk（纯函数，有单测），这里只负责取当前值。
+   */
+  function frpExposureOpts() {
+    const panel = config.data.panel || {};
+    return {
+      panelPort: Number(panel.port) || 0,
+      mayBeExposed: !!opts.mayBeExposed,
+      authEnabled: !!panel.authEnabled,
+    };
+  }
+
+  /** 命中暴露风险时返回 { error, params }，否则 null */
+  function frpExposureError(cfg) {
+    const risk = frp.exposureRisk(cfg, frpExposureOpts());
+    return risk.risky ? { error: 'network.frp-exposes-panel', params: { port: String(risk.port) } } : null;
   }
 
   router.get('/network/frp', (req, res) => {
@@ -4736,6 +4762,11 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (frpBusy) return fail(res, 'network.frp-busy');
     const r = frp.normalizeConfig(req.body || {}, config.data.settings.frp || {});
     if (r.error) return fail(res, r.error, r.params);
+    // 把「面板端口」经 frp 通出去却没开登录保护 = 整台面板交给公网，保存阶段就拦
+    if (r.config.enabled) {
+      const ex = frpExposureError(r.config);
+      if (ex) return fail(res, ex.error, ex.params);
+    }
     frpBusy = true;
     try {
       const wasRunning = frpMgr.running();
@@ -4760,11 +4791,78 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     }
   });
 
+  // ---------- 粘贴樱花「手动配置」导入 ----------
+  //
+  // 樱花后台给的是一段 TOML（user + auth.token + 关 TLS + [[proxies]]）。让用户直接粘贴、
+  // 面板挑字段，比对着表单手抄 6 个值可靠——而且 user / transport.tls 这两项原表单根本没有，
+  // 缺了就会被樱花节点拒绝登录（实测报错 "make sure token and user was set correctly"）。
+  //
+  // 语义：**只覆盖 upstream 段**并把模式切到 upstream；不改 enabled；运行中就重启让新配置生效。
+  router.post('/network/frp/import', async (req, res) => {
+    if (frpBusy) return fail(res, 'network.frp-busy');
+    const parsed = frp.parseSakuraConfig((req.body || {}).text);
+    if (parsed.error) return fail(res, parsed.error, parsed.params);
+
+    const cur = config.data.settings.frp || {};
+    const next = {
+      ...cur,
+      mode: 'upstream',
+      sakura: { ...(cur.sakura || {}) },
+      upstream: {
+        ...(cur.upstream || {}),
+        user: parsed.value.user,
+        authToken: parsed.value.authToken,
+        serverAddr: parsed.value.serverAddr,
+        serverPort: parsed.value.serverPort,
+        // 粘贴内容里写了 transport.tls.enable 就照抄；没写 = null = 不输出，沿用 frpc 默认值
+        tlsEnable: parsed.value.tlsEnable,
+        proxies: parsed.value.proxies,
+      },
+    };
+    if (parsed.value.tunnelIds.length) next.sakura.tunnels = parsed.value.tunnelIds.join(',');
+
+    const r = frp.normalizeConfig(next, cur);
+    if (r.error) return fail(res, r.error, r.params);
+    const ex = r.config.enabled ? frpExposureError(r.config) : null;
+    if (ex) return fail(res, ex.error, ex.params);
+
+    frpBusy = true;
+    try {
+      const wasRunning = frpMgr.running();
+      config.data.settings.frp = r.config;
+      config.save();
+      let restarted = false;
+      let error = '';
+      if (wasRunning && r.config.enabled) {
+        try {
+          await frpMgr.restart(r.config);
+          restarted = true;
+        } catch (e) {
+          error = `${e.message}${e.detail ? '：' + e.detail : ''}`;
+        }
+      }
+      res.json({
+        ok: true,
+        restarted,
+        error,
+        tunnelIds: parsed.value.tunnelIds,
+        config: frp.publicConfig(r.config),
+        status: frpMgr.status(),
+      });
+    } finally {
+      frpBusy = false;
+    }
+  });
+
   /** 启动/停止/重启：共用一把"在途"锁，避免连点造成两个 frpc */
   async function frpAction(action, res) {
     if (frpBusy) return fail(res, 'network.frp-busy');
     const cfg = config.data.settings.frp || {};
     if (!cfg.enabled) return fail(res, 'network.frp-disabled');
+    if (action !== 'stop') {
+      const ex = frpExposureError(cfg);
+      if (ex) return fail(res, ex.error, ex.params);
+    }
     frpBusy = true;
     try {
       if (action === 'stop') {
@@ -4775,7 +4873,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       const r = await frpMgr.start(cfg);
       return res.json({ ok: true, ...r, status: frpMgr.status() });
     } catch (e) {
-      return fail(res, e.code === 'network.frp-binary-missing' ? e.code : 'network.frp-start-failed', {
+      // 保留 frp.js 给出的具体错误码（二进制缺失 / 樱花模式不兼容），其余归为启动失败
+      const code = e.code && String(e.code).startsWith('network.') ? e.code : 'network.frp-start-failed';
+      return fail(res, code, {
         detail: String(e.detail || e.message).slice(0, 500),
       });
     } finally {

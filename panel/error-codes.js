@@ -344,6 +344,48 @@ const ERROR_CODES = {
     zh: 'frpc 启动失败：{detail}',
     en: 'frpc failed to start: {detail}',
   },
+  'network.frp-sakura-needs-custom-build': {
+    status: 400,
+    zh: '这个 frpc 不支持樱花模式（上游 frpc 没有 -f 参数）。请改用「粘贴樱花配置」，或换成樱花官方的 frpc 客户端',
+    en: 'This frpc does not support SakuraFrp mode (upstream frpc has no -f flag). Use "Paste SakuraFrp config" instead, or switch to the SakuraFrp frpc build',
+  },
+  // ---------- SakuraFrp 配置导入（粘贴整段 TOML） ----------
+  'network.sakura-config-empty': {
+    status: 400,
+    zh: '请先粘贴樱花后台「手动配置」里的内容',
+    en: 'Paste the configuration text from the SakuraFrp dashboard first',
+  },
+  'network.sakura-config-invalid': {
+    status: 400,
+    zh: '配置格式无法识别（第 {line} 行）',
+    en: 'Unrecognized configuration format (line: {line})',
+  },
+  'network.sakura-missing-user': {
+    status: 400,
+    zh: '配置里缺少 user（樱花访问密钥）：樱花节点缺它会直接拒绝登录，请从后台重新复制完整配置',
+    en: 'The config has no user (SakuraFrp access key). SakuraFrp nodes refuse login without it — copy the full config from the dashboard again',
+  },
+  'network.sakura-missing-token': {
+    status: 400,
+    zh: '配置里缺少 auth.token（节点 token），请从樱花后台重新复制完整配置',
+    en: 'The config has no auth.token (node token) — copy the full config from the dashboard again',
+  },
+  'network.sakura-no-proxies': {
+    status: 400,
+    zh: '配置里没有任何 [[proxies]] 隧道：请先在樱花后台创建隧道并复制配置',
+    en: 'The config has no [[proxies]] entry: create a tunnel in the SakuraFrp dashboard and copy the config again',
+  },
+  'network.sakura-unsupported-type': {
+    status: 400,
+    zh: '暂不支持 {type} 类型的隧道（目前只支持 tcp / udp）',
+    en: 'Tunnel type {type} is not supported yet (only tcp/udp)',
+  },
+  // ---------- frp 暴露面板 ----------
+  'network.frp-exposes-panel': {
+    status: 400,
+    zh: '代理目标是面板自己的端口 {port}，但面板还没开启登录保护：这会把面板整台交给公网。请先开启登录保护，或改用其它端口',
+    en: 'A proxy forwards to the panel port {port} while login protection is off — that would expose the whole panel to the internet. Enable login protection first, or use another port',
+  },
 
   // ---------- 单实例 frp 端口映射 ----------
   'frp.not-local': {

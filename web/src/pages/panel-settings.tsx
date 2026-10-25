@@ -1,19 +1,27 @@
 import { navigate } from '@/lib/router';
-// 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置 / 版本与更新
+// 面板设置页：登录保护 / 公网访问 / SMTP 邮件 / 通知设置 / AI / 版本与更新 / 外观
 // 路由 #/settings —— 顶栏「设置」进入（替代原设置模态框）
+//
+// 2026-10-25 排版改版（去卡中卡 + 分区重排）：
+//   · 右侧内容列 680，表单 620 封顶——原来 760 宽 + 卡片铺满，控件被拉得又长又空；
+//   · 不再套 SettingsCard 的边框/阴影/彩色图标，靠 13px 区块标题 + 28px 间距分层；
+//   · 7 个分区并成 6 个：「外观」吸收语言与关于，不再出现只有一行内容的空旷分区；
+//   · 低频内容下沉：更新日志进抽屉，DDNS 高级参数折叠，SMTP 高级项折叠。
+//   保存方式不变：每块自己内联保存（不做整页脏检查）。
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Bell, ChevronDown, ChevronRight, ChevronUp, Download, Globe, Info, Languages, Lock, Mail, MailCheck, RefreshCw, RotateCcw, Rocket, Sparkles } from 'lucide-react';
-import { ThemeToggle } from '@/components/motion/theme-toggle';
+import { AlertTriangle, ChevronRight, Download, Info, MailCheck, Moon, RefreshCw, RotateCcw, Sparkles, Sun } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import { Markdown } from '@/components/markdown';
 import { PageHeader } from '@/components/layout/page-header';
 import { SettingsLayout } from '@/components/layout/settings-layout';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { FormActions, FormGrid, SettingsCard, Field, StateChip } from '@/components/settings-card';
 import {
   aiListModels,
   aiTest,
@@ -111,8 +119,6 @@ function severityText(sev: AppVersionRecommendation['severity']): string {
   }
 }
 
-import { SettingsCard, Field, StateChip, ACCENTS, type Accent } from '@/components/settings-card';
-
 export function PanelSettingsPage({
   onBack,
   onAuthChanged,
@@ -173,87 +179,72 @@ export function PanelSettingsPage({
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <PageHeader
-        back={onBack}
-        title={$('panelSettings.title')}
-        subtitle={$('panelSettings.subtitle')}
-        actions={<ThemeToggle variant="circle-blur" />}
-      />
+      <PageHeader back={onBack} title={$('panelSettings.title')} subtitle={$('panelSettings.subtitle')} />
 
-      {/* 左目录 + 右侧全量分区（/proto 的 SettingsLayout）：卡片仍各自管保存，只是排布换了 */}
+      {/*
+        左目录 + 右侧全量分区（SettingsLayout）：各块自己内联保存，只是排布换了。
+        每个分区用 heading:false —— 分区名在左目录里，正文由各块自己的 13px 标题承担，
+        避免「访问」+「登录保护」两级标题叠在一起。
+      */}
       <SettingsLayout
+        contentClassName="max-w-[680px]"
         sections={[
           {
             id: 'access',
             label: $('panelSettings.section.access'),
-            content: (
-              <div className="grid gap-3">
-                <AuthCard
-                  data={data}
-                  onAuthChanged={onAuthChanged}
-                  reload={load}
-                  accent="security"
-                />
-              </div>
-            ),
+            heading: false,
+            content: <AuthCard data={data} onAuthChanged={onAuthChanged} reload={load} />,
           },
           {
             id: 'network',
             label: $('panelSettings.section.network'),
+            heading: false,
             content: (
-              <div className="grid gap-3">
-                <DomainCard data={data} reload={load} accent="network" />
+              <div className="grid gap-7">
+                <DomainCard data={data} reload={load} />
                 {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
-                <DdnsCard accent="network" />
-                <FrpCard accent="network" />
+                <DdnsCard />
+                <FrpCard />
               </div>
             ),
           },
           {
             id: 'notify',
             label: $('panelSettings.section.notify'),
+            heading: false,
             content: (
-              <div className="grid gap-3">
-                <SmtpCard data={data} reload={load} accent="mail" />
-                <NotifyCard data={data} reload={load} accent="notify" />
+              <div className="grid gap-7">
+                <SmtpCard data={data} reload={load} />
+                <NotifyCard data={data} reload={load} />
               </div>
             ),
           },
           {
             id: 'ai',
             label: $('panelSettings.section.ai'),
-            content: (
-              <div className="grid gap-3">
-                <AiCard data={data} reload={load} accent="ai" />
-              </div>
-            ),
+            heading: false,
+            content: <AiCard data={data} reload={load} />,
           },
           {
             id: 'update',
             label: $('panelSettings.section.update'),
+            heading: false,
             content: (
-              <div className="grid gap-3">
-                {/* 策略卡紧随版本卡：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
-                <VersionCard data={data} reload={load} accent="update" />
-                <UpdatePolicyCard data={data} reload={load} accent="info" />
+              <div className="grid gap-7">
+                {/* 策略块紧随版本块：两者是同一件事（先看到「有新版本」，再决定以后怎么处理） */}
+                <VersionCard data={data} reload={load} />
+                <UpdatePolicyCard data={data} reload={load} />
               </div>
             ),
           },
           {
             id: 'appearance',
             label: $('panelSettings.section.appearance'),
+            heading: false,
             content: (
-              <div className="grid gap-3">
-                <LanguageCard accent="language" />
-              </div>
-            ),
-          },
-          {
-            id: 'about',
-            label: $('panelSettings.section.about'),
-            content: (
-              <div className="grid gap-3">
-                <AboutEntryCard accent="info" />
+              <div className="grid gap-7">
+                <LanguageCard />
+                <AboutEntry />
               </div>
             ),
           },
@@ -263,51 +254,46 @@ export function PanelSettingsPage({
   );
 }
 
-/** 设置页底部「关于」入口：跳转 #/about */
-function AboutEntryCard({ accent, className = '' }: { accent: Accent; className?: string }) {
-  const iconClass = ACCENTS[accent];
+/** 设置页底部「关于」入口：跳转 #/about（不再是独立分区，挂在「外观与关于」末尾） */
+function AboutEntry({ className = '' }: { className?: string }) {
   return (
-    <Card className={`ring-1 ring-border ${className}`}>
+    <section className={className}>
       <button
         type="button"
-        onClick={() => (navigate('/about'))}
-        className="flex w-full items-center gap-3 rounded-xl px-5 py-4 text-left transition-colors hover:bg-muted/50"
+        onClick={() => navigate('/about')}
+        className="flex w-full max-w-[620px] items-center gap-2.5 rounded-lg border border-border/60 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
       >
-        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border ${iconClass}`}>
-          <Info className="h-[18px] w-[18px]" />
+        <Info className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1">
+          <b className="text-[12.5px] font-medium">{$('panelSettings.about.title')}</b>
+          <span className="ml-2 text-[11px] text-muted-foreground">{$('panelSettings.about.desc')}</span>
         </span>
-        <span className="grid min-w-0 flex-1 gap-0.5">
-          <b className="text-sm">{$('panelSettings.about.title')}</b>
-          <span className="text-xs text-muted-foreground">
-            {$('panelSettings.about.desc')}
-          </span>
-        </span>
-        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
-    </Card>
+    </section>
   );
 }
 
 /**
- * 语言切换：把原先漂浮在顶栏/登录页的 LanguageToggle 搬进设置页。
+ * 语言与主题：把原先漂浮在顶栏的 LanguageToggle / ThemeToggle 搬进设置页。
  *
- * 为什么仍然 reload：与原组件一致——`$()` 是同步取词，刷新一次即可让所有可见文案
- * 切换到目标语言，无需给所有组件做重渲染订阅。代价是未保存的表单内容会丢，
- * 但设置页通常没有未保存编辑，所以这是合适的。
+ * 为什么语言仍然 reload：`$()` 是同步取词，刷新一次即可让所有可见文案切换到目标语言，
+ * 无需给所有组件做重渲染订阅。代价是未保存的表单内容会丢，但设置页通常没有未保存编辑。
  */
-function LanguageCard({ accent, className = '' }: { accent: Accent; className?: string }) {
+function LanguageCard({ className = '' }: { className?: string }) {
   const current = getLanguage();
   // options 按当前语言展示标签，避免自身翻译抖动（语言名用自家文字写自己是 i18n.ts 的约定）
   const options: LanguageCode[] = ['zh', 'en'];
+  const { theme, setTheme } = useTheme();
+  // 主题首帧可能还没读到（next-themes 在挂载后才给值），先按浅色画，避免闪烁
+  const isDark = theme === 'dark';
   return (
     <SettingsCard
       title={$('panelSettings.language.title')}
       description={$('panelSettings.language.desc')}
-      icon={<Languages className="h-4 w-4" />}
-      accent={accent}
       className={className}
     >
-      <div className="grid gap-3 sm:max-w-xs">
+      <FormGrid>
         <Field label={$('panelSettings.language.current')}>
           <Select
             value={current}
@@ -318,7 +304,7 @@ function LanguageCard({ accent, className = '' }: { accent: Accent; className?: 
               }
             }}
           >
-            <SelectTrigger aria-label={$('panelSettings.language.title')}>
+            <SelectTrigger aria-label={$('panelSettings.language.title')} className="w-full max-w-[220px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -330,7 +316,34 @@ function LanguageCard({ accent, className = '' }: { accent: Accent; className?: 
             </SelectContent>
           </Select>
         </Field>
-      </div>
+        <Field label={$('panelSettings.appearance.theme')} hint={$('panelSettings.appearance.theme.hint')}>
+          <div className="inline-flex w-fit items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
+            {(
+              [
+                { key: 'light', label: $('panelSettings.appearance.theme.light'), icon: Sun },
+                { key: 'dark', label: $('panelSettings.appearance.theme.dark'), icon: Moon },
+              ] as const
+            ).map((o) => {
+              const on = o.key === 'dark' ? isDark : !isDark;
+              const Icon = o.icon;
+              return (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setTheme(o.key)}
+                  aria-pressed={on}
+                  className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11.5px] transition-colors ${
+                    on ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Icon className="size-3.5" />
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+      </FormGrid>
     </SettingsCard>
   );
 }
@@ -346,18 +359,16 @@ function LanguageCard({ accent, className = '' }: { accent: Accent; className?: 
 function VersionCard({
   data,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error: toastError } = useToastHelpers();
   const [info, setInfo] = useState<AppVersion | null>(null);
   const [busy, setBusy] = useState(false);
-  // 更新日志默认折叠，点标题行展开
+  // 更新日志是长文（Markdown），低频但要看 —— 放进右侧抽屉，不占正文高度
   const [logOpen, setLogOpen] = useState(false);
   const [status, setStatus] = useState<PanelUpdateStatus | null>(null);
   const [preflight, setPreflight] = useState<PanelUpdatePreflight | null>(null);
@@ -544,19 +555,17 @@ function VersionCard({
     <SettingsCard
       title={$('panelSettings.version.title')}
       description={$('panelSettings.version.desc')}
-      icon={<Rocket className="h-[18px] w-[18px]" />}
-      accent={accent}
       className={className}
       status={
         info && !busy ? (
           hasUpdate ? (
-            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${severityChip(rec?.severity ?? 'optional')}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${severityDot(rec?.severity ?? 'optional')}`} />
+            <span className={`inline-flex h-[18px] items-center gap-1.5 rounded border px-1.5 text-[10.5px] leading-none font-medium ${severityChip(rec?.severity ?? 'optional')}`}>
+              <span className={`size-1.5 rounded-full ${severityDot(rec?.severity ?? 'optional')}`} />
               {$('panelSettings.version.hasNew')}
             </span>
           ) : failedNow ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">
-              <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+            <span className="inline-flex h-[18px] items-center gap-1.5 rounded border border-destructive/30 bg-destructive/10 px-1.5 text-[10.5px] leading-none font-medium text-destructive">
+              <span className="size-1.5 rounded-full bg-destructive" />
               {$('panelSettings.update.failed')}
             </span>
           ) : (
@@ -565,7 +574,7 @@ function VersionCard({
         ) : undefined
       }
     >
-      <div className="grid gap-x-6 gap-y-1.5 text-xs">
+      <div className="grid max-w-[620px] gap-x-6 gap-y-1.5 text-[12px]">
         <div className="flex justify-between gap-3">
           <span className="text-muted-foreground">{$('panelSettings.version.current')}</span>
           <span className="font-mono">v{info?.version ?? '…'}</span>
@@ -580,26 +589,40 @@ function VersionCard({
             href={info?.repoUrl}
             target="_blank"
             rel="noreferrer"
-            className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+            className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
           >
             <span className="truncate">github.com/live-ling/BlockNexus</span>
           </a>
         </div>
+        {/* 更新日志是长文：只在抽屉里看，正文只留一行入口（没有日志时整行不出现） */}
+        {info?.changelog && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{$('panelSettings.version.changelogLabel')}</span>
+            <button
+              type="button"
+              onClick={() => setLogOpen(true)}
+              className="inline-flex items-center gap-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {$('panelSettings.version.changelog', info.latest)}
+              <ChevronRight className="size-3" />
+            </button>
+          </div>
+        )}
         {info?.error && (
-          <p className="text-xs leading-snug text-muted-foreground">
+          <p className="text-[11px] leading-snug text-muted-foreground">
             {$('panelSettings.version.checkFailed', info.error)}
           </p>
         )}
         {/* 不能自更新时只说明原因（后端已本地化），不给按钮——点了也只会得到一个错误 */}
         {info && !selfUpdate && info.updateDisabledText && (
-          <p className="leading-snug text-muted-foreground">{$('panelSettings.update.disabledPrefix')}{info.updateDisabledText}</p>
+          <p className="text-[11px] leading-snug text-muted-foreground">{$('panelSettings.update.disabledPrefix')}{info.updateDisabledText}</p>
         )}
         {hasUpdate && info?.releaseUrl && (
           <a
             href={info.releaseUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-xs text-cyan-600 underline underline-offset-2 hover:text-cyan-500 dark:text-cyan-400"
+            className="text-[11px] text-cyan-600 underline underline-offset-2 hover:text-cyan-500 dark:text-cyan-400"
           >
             {$('panelSettings.version.goto')}
           </a>
@@ -825,35 +848,26 @@ function VersionCard({
         </div>
       )}
 
-      {/* 更新日志：默认折叠；最新 Release 的正文（Markdown 渲染），无内容时不占位 */}
-      {info?.changelog ? (
-        <div className="rounded-lg border bg-muted/30">
-          <button
-            type="button"
-            onClick={() => setLogOpen((v) => !v)}
-            className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
-          >
-            <span className="text-xs font-medium text-muted-foreground">
-              {$('panelSettings.version.changelog', info.latest)}
-            </span>
-            <span className="ml-auto text-muted-foreground">
-              {logOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            </span>
-          </button>
-          {logOpen && (
-            <div className="max-h-64 overflow-y-auto border-t px-3 py-2.5 text-xs">
-              <Markdown content={info.changelog} />
-            </div>
-          )}
-        </div>
-      ) : null}
+      {/* 更新日志抽屉：低频长文，右侧滑出，读完即走，不占正文高度 */}
+      <Sheet open={logOpen} onOpenChange={setLogOpen}>
+        <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[520px]">
+          <SheetHeader className="border-b px-5 py-4">
+            <SheetTitle className="text-[13px]">
+              {$('panelSettings.version.changelog', info?.latest ?? '')}
+            </SheetTitle>
+          </SheetHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <Markdown content={info?.changelog ?? ''} />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/*
         操作区。更新进行中一律禁用：换包（staging/applying/restarting）期间面板的文件正在被替换，
         此时再点一次更新、或触发别的会写配置的操作，后果都是半成品状态——前端这一层必须关掉入口。
         回滚按钮只在后端说 available 时出现（不可逆更新成功后它会被关掉）。
       */}
-      <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-1">
+      <FormActions className="pt-1">
         {status?.rollback?.available && !running && (
           <Button variant="outline" size="sm" disabled={rollbackBusy} onClick={() => void rollback()}>
             <RotateCcw className="h-3.5 w-3.5" />
@@ -886,7 +900,7 @@ function VersionCard({
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
           {busy ? $('panelSettings.version.checking') : $('panelSettings.version.check')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }
@@ -903,12 +917,10 @@ function VersionCard({
 function UpdatePolicyCard({
   data,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error } = useToastHelpers();
@@ -943,23 +955,21 @@ function UpdatePolicyCard({
     <SettingsCard
       title={$('panelSettings.update.policy.title')}
       description={$('panelSettings.update.policy.desc')}
-      icon={<RefreshCw className="h-4 w-4" />}
-      accent={accent}
       className={className}
     >
-      <div className="grid gap-3 sm:grid-cols-2">
+      <FormGrid>
         {/* 三选一：用按钮组而不是下拉，选项只有三个且说明文字要随选择变化 */}
         <Field label={$('panelSettings.update.auto.title')} hint={modeHint[auto]}>
-          <div className="inline-flex w-fit rounded-lg border border-border bg-muted/40 p-0.5">
+          <div className="inline-flex w-fit rounded-md border border-border bg-muted/40 p-0.5">
             {modes.map((m) => (
               <button
                 key={m}
                 type="button"
                 disabled={saving}
                 onClick={() => setAuto(m)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60 ${
+                className={`h-6 rounded px-2 text-[11.5px] transition-colors disabled:opacity-60 ${
                   auto === m
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background font-medium text-foreground shadow-xs'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
@@ -981,8 +991,8 @@ function UpdatePolicyCard({
             placeholder={$('panelSettings.update.source.placeholder')}
           />
         </Field>
-      </div>
-      <div className="mt-auto flex justify-end">
+      </FormGrid>
+      <FormActions>
         <Button
           size="sm"
           disabled={saving || sourceInvalid || nothingChanged}
@@ -1002,35 +1012,30 @@ function UpdatePolicyCard({
         >
           {$('panelSettings.update.policy.save')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }
 
-/** 开关行：图标 + 标题 + 说明 + 右侧开关 */
+/** 开关行：标题 + 说明 + 右侧开关（无边框，用一条发丝线分隔） */
 function ToggleRow({
   title,
   description,
-  icon,
   checked,
   onCheckedChange,
   className = '',
 }: {
   title: string;
   description?: string;
-  icon?: React.ReactNode;
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
   className?: string;
 }) {
   return (
-    <label
-      className={`flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2.5 ${className}`}
-    >
-      {icon && <span className="shrink-0 text-muted-foreground">{icon}</span>}
+    <label className={`flex items-center gap-3 border-t border-border/60 py-2.5 ${className}`}>
       <span className="grid min-w-0 flex-1 gap-0.5">
-        <span className="text-sm font-medium">{title}</span>
-        {description && <span className="text-xs text-muted-foreground">{description}</span>}
+        <span className="text-[12.5px] font-medium">{title}</span>
+        {description && <span className="text-[11px] leading-4 text-muted-foreground">{description}</span>}
       </span>
       <Switch
         className="ml-auto shrink-0"
@@ -1046,13 +1051,11 @@ function AuthCard({
   data,
   onAuthChanged,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   onAuthChanged: (authEnabled: boolean) => void;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error } = useToastHelpers();
@@ -1105,8 +1108,6 @@ function AuthCard({
     <SettingsCard
       title={$('panelSettings.auth.title')}
       description={$('panelSettings.auth.desc')}
-      icon={<Lock className="h-4 w-4" />}
-      accent={accent}
       className={className}
       status={
         <div className="flex items-center gap-2">
@@ -1119,13 +1120,9 @@ function AuthCard({
         </div>
       }
     >
-      {/* 表单区常驻渲染：开关只切换可用性，卡片高度不随开/关变化。
-          关闭时整体置灰并禁用，配合头部「未启用」状态章表达不可用状态。 */}
-      <div
-        className={`grid gap-3 transition-opacity sm:grid-cols-2 ${
-          authOn ? '' : 'pointer-events-none opacity-60'
-        }`}
-      >
+      {/* 表单区常驻渲染：开关只切换可用性，区块高度不随开/关变化。
+          关闭时整体置灰并禁用，配合右上角「未启用」状态章表达不可用状态。 */}
+      <FormGrid className={authOn ? '' : 'pointer-events-none opacity-60 transition-opacity'}>
         {/* 用户名跨整行：下方密码/确认才是稳定双列，避免长短行混排错位 */}
         <Field
           htmlFor="ps-user"
@@ -1137,7 +1134,7 @@ function AuthCard({
           <Input
             id="ps-user"
             autoComplete="username"
-            className="sm:max-w-sm"
+            className="sm:max-w-[280px]"
             disabled={!authOn}
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -1174,8 +1171,8 @@ function AuthCard({
             onChange={(e) => setPw2(e.target.value)}
           />
         </Field>
-      </div>
-      <div className="mt-auto flex justify-end">
+      </FormGrid>
+      <FormActions>
         <Button
           size="sm"
           disabled={busy || nothingChanged || userInvalid || userEmpty || pwTooShort || pwMissing || pw2Mismatch}
@@ -1183,7 +1180,7 @@ function AuthCard({
         >
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }
@@ -1192,12 +1189,10 @@ function AuthCard({
 function DomainCard({
   data,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error } = useToastHelpers();
@@ -1209,29 +1204,30 @@ function DomainCard({
     <SettingsCard
       title={$('panelSettings.domain.title')}
       description={$('panelSettings.domain.desc')}
-      icon={<Globe className="h-4 w-4" />}
-      accent={accent}
       className={className}
       status={<StateChip ok={!!domain.trim()} okText={$('panelSettings.domain.bound')} badText={$('panelSettings.domain.unbound')} />}
     >
-      <Field
-        htmlFor="ps-domain"
-        label={$('panelSettings.domain.label')}
-        hint={$('panelSettings.domain.hint')}
-      >
-        <Input
-          id="ps-domain"
-          value={domain}
-          onChange={(e) => setDomain(e.target.value)}
-          placeholder="panel.example.com"
-        />
-      </Field>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        {$('panelSettings.domain.sslHint.pre')}
-        <code className="font-mono">--host 0.0.0.0</code>
-        {$('panelSettings.domain.sslHint.post')}
-      </p>
-      <div className="mt-auto flex justify-end">
+      <div className="grid max-w-[620px] gap-1.5">
+        <Field
+          htmlFor="ps-domain"
+          label={$('panelSettings.domain.label')}
+          hint={$('panelSettings.domain.hint')}
+        >
+          <Input
+            id="ps-domain"
+            className="sm:max-w-[320px]"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder="panel.example.com"
+          />
+        </Field>
+        <p className="text-[10.5px] leading-4 text-muted-foreground/80">
+          {$('panelSettings.domain.sslHint.pre')}
+          <code className="font-mono">--host 0.0.0.0</code>
+          {$('panelSettings.domain.sslHint.post')}
+        </p>
+      </div>
+      <FormActions>
         <Button
           size="sm"
           disabled={busy}
@@ -1250,7 +1246,7 @@ function DomainCard({
         >
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }
@@ -1259,12 +1255,10 @@ function DomainCard({
 function SmtpCard({
   data,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error } = useToastHelpers();
@@ -1305,82 +1299,72 @@ function SmtpCard({
     <SettingsCard
       title={$('panelSettings.smtp.title')}
       description={$('panelSettings.smtp.desc')}
-      icon={<Mail className="h-4 w-4" />}
       status={<StateChip ok={data.smtpReady} okText={$('panelSettings.smtp.ready')} badText={$('panelSettings.smtp.notConfigured')} />}
-      accent={accent}
       className={className}
     >
-      <div className="grid gap-3">
-        {/* 与其它卡片一致用等宽双列：非对称模板会让不同卡片的控件左边界对不齐 */}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field htmlFor="ps-smtp-host" label={$('panelSettings.smtp.host')} hint={$('panelSettings.smtp.host.hint')}>
-            <Input
-              id="ps-smtp-host"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="smtp.qq.com"
-            />
-          </Field>
-          <Field htmlFor="ps-smtp-port" label={$('panelSettings.smtp.port')} hint={$('panelSettings.smtp.port.hint')}>
-            <Input
-              id="ps-smtp-port"
-              inputMode="numeric"
-              value={port}
-              onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, ''))}
-              placeholder="465"
-            />
-          </Field>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field htmlFor="ps-smtp-user" label={$('panelSettings.smtp.user')} hint={$('panelSettings.smtp.user.hint')}>
-            <Input
-              id="ps-smtp-user"
-              value={user}
-              onChange={(e) => setUser(e.target.value)}
-              placeholder="you@qq.com"
-            />
-          </Field>
-          <Field
-            htmlFor="ps-smtp-pass"
-            label={$('panelSettings.smtp.pass')}
-            hint={data.smtp.hasPass ? $('panelSettings.smtp.pass.hintSaved') : undefined}
-          >
-            <Input
-              id="ps-smtp-pass"
-              type="password"
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              placeholder="••••••"
-            />
-          </Field>
-        </div>
-        <div className="grid content-start gap-3 sm:grid-cols-2">
-          <Field
-            htmlFor="ps-smtp-from"
-            label={$('panelSettings.smtp.from')}
-            hint={$('panelSettings.smtp.from.hint')}
-            error={fromInvalid ? $('panelSettings.smtp.from.invalid') : undefined}
-          >
-            <Input
-              id="ps-smtp-from"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              placeholder={$('panelSettings.smtp.from.placeholder')}
-            />
-          </Field>
-          {/* items-stretch 让开关块与左侧输入框等高，基线不再错位 */}
-          <div className="flex">
-            <ToggleRow
-              title={$('panelSettings.smtp.tls')}
-              description={secure ? $('panelSettings.smtp.secureOn') : $('panelSettings.smtp.secureOff')}
-              checked={secure}
-              onCheckedChange={setSecure}
-              className="w-full"
-            />
-          </div>
-        </div>
-      </div>
-      <div className="mt-auto flex flex-wrap justify-end gap-2">
+      <FormGrid>
+        <Field htmlFor="ps-smtp-host" label={$('panelSettings.smtp.host')} hint={$('panelSettings.smtp.host.hint')}>
+          <Input
+            id="ps-smtp-host"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            placeholder="smtp.qq.com"
+          />
+        </Field>
+        <Field htmlFor="ps-smtp-port" label={$('panelSettings.smtp.port')} hint={$('panelSettings.smtp.port.hint')}>
+          <Input
+            id="ps-smtp-port"
+            inputMode="numeric"
+            value={port}
+            onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="465"
+          />
+        </Field>
+        <Field htmlFor="ps-smtp-user" label={$('panelSettings.smtp.user')} hint={$('panelSettings.smtp.user.hint')}>
+          <Input
+            id="ps-smtp-user"
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            placeholder="you@qq.com"
+          />
+        </Field>
+        <Field
+          htmlFor="ps-smtp-pass"
+          label={$('panelSettings.smtp.pass')}
+          hint={data.smtp.hasPass ? $('panelSettings.smtp.pass.hintSaved') : undefined}
+        >
+          <Input
+            id="ps-smtp-pass"
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder="••••••"
+          />
+        </Field>
+        <Field
+          htmlFor="ps-smtp-from"
+          label={$('panelSettings.smtp.from')}
+          hint={$('panelSettings.smtp.from.hint')}
+          error={fromInvalid ? $('panelSettings.smtp.from.invalid') : undefined}
+          className="sm:col-span-2"
+        >
+          <Input
+            id="ps-smtp-from"
+            className="sm:max-w-[380px]"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            placeholder={$('panelSettings.smtp.from.placeholder')}
+          />
+        </Field>
+      </FormGrid>
+      <ToggleRow
+        title={$('panelSettings.smtp.tls')}
+        description={secure ? $('panelSettings.smtp.secureOn') : $('panelSettings.smtp.secureOff')}
+        checked={secure}
+        onCheckedChange={setSecure}
+        className="max-w-[620px]"
+      />
+      <FormActions>
         <Button
           variant="outline"
           size="sm"
@@ -1419,7 +1403,7 @@ function SmtpCard({
         >
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }
@@ -1479,12 +1463,10 @@ function AiTestSummary({ result }: { result: AiTestResult }) {
 function NotifyCard({
   data,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error } = useToastHelpers();
@@ -1504,8 +1486,6 @@ function NotifyCard({
     <SettingsCard
       title={$('panelSettings.notify.title')}
       description={$('panelSettings.notify.desc')}
-      icon={<Bell className="h-4 w-4" />}
-      accent={accent}
       className={className}
     >
       <Field
@@ -1513,17 +1493,17 @@ function NotifyCard({
         label={$('panelSettings.notify.email')}
         hint={$('panelSettings.notify.email.hint')}
         error={emailInvalid ? $('panelSettings.notify.email.invalid') : undefined}
+        className="max-w-[320px]"
       >
         <Input
           id="ps-admin-email"
-          className="sm:max-w-sm"
           value={adminEmail}
           onChange={(e) => setAdminEmail(e.target.value)}
           placeholder="you@qq.com"
         />
       </Field>
       {/* 两个开关各占一行（面板宽度必然触发 sm，不能用 sm:flex-row 并排） */}
-      <div className="flex flex-col gap-3">
+      <div className="grid max-w-[620px]">
         <ToggleRow
           title={$('panelSettings.notify.offline')}
           description={$('panelSettings.notify.offline.desc')}
@@ -1537,7 +1517,7 @@ function NotifyCard({
           onCheckedChange={setRecovery}
         />
       </div>
-      <div className="mt-auto flex justify-end">
+      <FormActions>
         <Button
           size="sm"
           disabled={busy || emailInvalid}
@@ -1559,7 +1539,7 @@ function NotifyCard({
         >
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }
@@ -1568,12 +1548,10 @@ function NotifyCard({
 function AiCard({
   data,
   reload,
-  accent,
   className = '',
 }: {
   data: PanelSettings;
   reload: () => void;
-  accent?: Accent;
   className?: string;
 }) {
   const { success, error } = useToastHelpers();
@@ -1641,8 +1619,6 @@ function AiCard({
     <SettingsCard
       title={$('panelSettings.ai.title')}
       description={$('panelSettings.ai.desc')}
-      icon={<Sparkles className="h-4 w-4" />}
-      accent={accent}
       className={className}
       status={
         <div className="flex items-center gap-2">
@@ -1657,7 +1633,7 @@ function AiCard({
     >
       {/* 配置区始终可编辑：开关只决定「是否启用分析」，不锁配置。
           否则未启用时既填不了地址密钥、也点不了「查询模型」，形成先有蛋后有鸡的死结。 */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <FormGrid>
         <Field
           htmlFor="ps-ai-base"
           label={$('panelSettings.ai.base')}
@@ -1666,7 +1642,6 @@ function AiCard({
         >
           <Input
             id="ps-ai-base"
-            className="sm:max-w-sm"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="https://api.deepseek.com"
@@ -1694,7 +1669,6 @@ function AiCard({
             ) : (
               <Input
                 id="ps-ai-model"
-                className="sm:max-w-sm"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder="deepseek-flash"
@@ -1721,18 +1695,18 @@ function AiCard({
           <Input
             id="ps-ai-key"
             type="password"
-            className="sm:max-w-sm"
+            className="sm:max-w-[320px]"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={data.ai.hasKey ? $('panelSettings.ai.key.hintSaved') : 'sk-…'}
           />
         </Field>
-      </div>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      </FormGrid>
+      <p className="max-w-[620px] text-[10.5px] leading-4 text-muted-foreground/80">
         {$('panelSettings.ai.privacy')}
       </p>
       {testResult && <AiTestSummary result={testResult} />}
-      <div className="mt-auto flex flex-wrap justify-end gap-2">
+      <FormActions>
         <Button
           variant="outline"
           size="sm"
@@ -1776,7 +1750,7 @@ function AiCard({
         >
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
     </SettingsCard>
   );
 }

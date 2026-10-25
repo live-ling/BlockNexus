@@ -233,6 +233,147 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // ---------- 樱花兼容：user / transport.tls ----------
+  const tomlSakura = frp.buildUpstreamToml({
+    upstream: {
+      user: 's-demo',
+      serverAddr: 'frp-top.com',
+      serverPort: 8088,
+      authToken: 'demo-token',
+      tlsEnable: false,
+      proxies: [{ name: 'aaa', type: 'tcp', localIP: 'localhost', localPort: 25565, remotePort: 42399 }],
+    },
+  });
+  ok('TOML 输出 user（樱花必需）', tomlSakura.includes('user = "s-demo"'));
+  ok('TOML 输出 transport.tls.enable = false', tomlSakura.includes('transport.tls.enable = false'));
+  ok('TOML 仍输出代理端口', tomlSakura.includes('remotePort = 42399'));
+  ok('tlsEnable=null 时不写 tls 行（老配置行为不变）', !frp.buildUpstreamToml({ upstream: { serverAddr: 'x' } }).includes('transport.tls'));
+
+  // ---------- 粘贴樱花配置：解析 ----------
+  const SAKURA_SAMPLE = [
+    'user = "s-demo"',
+    'auth.token = "demo-token"',
+    '',
+    'serverAddr = "frp-top.com"',
+    'serverPort = 8088',
+    '',
+    'transport.tls.enable = false',
+    'transport.tls.disableCustomTLSFirstByte = false',
+    '',
+    '[[proxies]]',
+    '# id = 29662979',
+    'name = "aaa"',
+    'type = "tcp"',
+    '',
+    'localIP = "localhost"',
+    'localPort = 25565',
+    'remotePort = 42399',
+  ].join('\r\n'); // 顺带覆盖 CRLF
+
+  const p = frp.parseSakuraConfig(SAKURA_SAMPLE);
+  eq('樱花配置：user', p.value.user, 's-demo');
+  eq('樱花配置：auth.token', p.value.authToken, 'demo-token');
+  eq('樱花配置：serverAddr', p.value.serverAddr, 'frp-top.com');
+  eq('樱花配置：serverPort', p.value.serverPort, 8088);
+  eq('樱花配置：tls 透传', p.value.tlsEnable, false);
+  eq('樱花配置：代理条目', p.value.proxies, [
+    { name: 'aaa', type: 'tcp', localIP: 'localhost', localPort: 25565, remotePort: 42399 },
+  ]);
+  eq('樱花配置：注释里的隧道 ID', p.value.tunnelIds, ['29662979']);
+
+  // 解析结果能直接喂给 TOML 生成器（闭环）
+  const roundTrip = frp.buildUpstreamToml({ upstream: p.value });
+  ok('解析 → TOML 闭环：user', roundTrip.includes('user = "s-demo"'));
+  ok('解析 → TOML 闭环：tls 关闭', roundTrip.includes('transport.tls.enable = false'));
+  ok('解析 → TOML 闭环：远程端口', roundTrip.includes('remotePort = 42399'));
+
+  // 与 POST /network/frp/import 同一条链路：解析结果必须能通过 normalizeConfig
+  const imported = frp.normalizeConfig(
+    {
+      enabled: true,
+      mode: 'upstream',
+      binaryPath: 'frpc.exe',
+      upstream: {
+        user: p.value.user,
+        authToken: p.value.authToken,
+        serverAddr: p.value.serverAddr,
+        serverPort: p.value.serverPort,
+        tlsEnable: p.value.tlsEnable,
+        proxies: p.value.proxies,
+      },
+    },
+    {},
+  );
+  ok('导入链路：解析结果能通过 normalizeConfig', !imported.error && imported.config.upstream.proxies.length === 1);
+  eq('导入链路：tls 关闭被保留', imported.config.upstream.tlsEnable, false);
+  eq('导入链路：user 被保存', imported.config.upstream.user, 's-demo');
+
+  // ---------- 粘贴樱花配置：错误路径 ----------
+  eq('空文本', frp.parseSakuraConfig('   ').error, 'network.sakura-config-empty');
+  eq('缺 user 被拦（樱花会拒绝登录）', frp.parseSakuraConfig(SAKURA_SAMPLE.replace(/^user = .*$/m, '')).error, 'network.sakura-missing-user');
+  eq('缺 token', frp.parseSakuraConfig(SAKURA_SAMPLE.replace(/^auth\.token = .*$/m, '')).error, 'network.sakura-missing-token');
+  eq('无 proxies', frp.parseSakuraConfig(SAKURA_SAMPLE.split('[[proxies]]')[0]).error, 'network.sakura-no-proxies');
+  eq('坏行', frp.parseSakuraConfig('user = "u"\nthis is not toml').error, 'network.sakura-config-invalid');
+  eq(
+    '重复远程端口',
+    frp.parseSakuraConfig(`${SAKURA_SAMPLE}\n[[proxies]]\nname = "bbb"\ntype = "tcp"\nlocalPort = 25566\nremotePort = 42399\n`).error,
+    'frp.port-in-use',
+  );
+  eq(
+    '非法代理名',
+    frp.parseSakuraConfig(`${SAKURA_SAMPLE}\n[[proxies]]\nname = "-bad-"\ntype = "tcp"\nlocalPort = 1\nremotePort = 2\n`).error,
+    'network.frp-proxy-name-invalid',
+  );
+  eq(
+    '不支持的隧道类型（不能被静默当成 tcp）',
+    frp.parseSakuraConfig(`${SAKURA_SAMPLE}\n[[proxies]]\nname = "web"\ntype = "http"\nlocalPort = 8080\nremotePort = 2\n`).error,
+    'network.sakura-unsupported-type',
+  );
+
+  // ---------- 暴露面板风险 ----------
+  const expCfg = { upstream: { proxies: [{ name: 'panel', localPort: 3080, remotePort: 38080 }] } };
+  const riskOf = (o) => frp.exposureRisk(expCfg, Object.assign({ panelPort: 3080, mayBeExposed: true, authEnabled: false }, o));
+  ok('对外可访问 + 未开登录 + 通了面板端口 → 有风险', riskOf({}).risky === true);
+  ok('已开登录保护 → 不告警', riskOf({ authEnabled: true }).risky === false);
+  ok('面板只听回环 → 不告警', riskOf({ mayBeExposed: false }).risky === false);
+  ok('代理端口不是面板端口 → 不告警', riskOf({ panelPort: 3000 }).risky === false);
+  ok('没有代理 → 不告警', frp.exposureRisk({}, { panelPort: 3080, mayBeExposed: true, authEnabled: false }).risky === false);
+  eq('风险返回命中的端口', riskOf({}).port, 3080);
+  eq('风险返回代理名', riskOf({}).proxy, 'panel');
+
+  // ---------- 二进制能力探测（樱花模式需要定制 frpc） ----------
+  ok('识别上游 frpc 的 -f 报错', frp.sakuraBinaryUnsupported("Error: unknown shorthand flag: 'f' in -f"));
+  ok('识别 Go flag 风格报错', frp.sakuraBinaryUnsupported('flag provided but not defined: -f'));
+  ok('识别 -n 报错', frp.sakuraBinaryUnsupported("unknown shorthand flag: 'n' in -n"));
+  ok('普通登录失败不误判', !frp.sakuraBinaryUnsupported('login to the server failed: token invalid'));
+
+  // ---------- 状态三态 ----------
+  {
+    const stDir = path.join(os.tmpdir(), 'bn-frp-status-' + Date.now());
+    const stMgr = new frp.FrpManager({ dir: stDir });
+    const st = stMgr.status();
+    eq('状态：未运行 → stopped', st.state, 'stopped');
+    eq('状态：带重连计数', st.restarts, 0);
+    eq('状态：带 lastExit', st.lastExit, null);
+    eq('状态：没有 pid', st.pid, 0);
+    fs.rmSync(stDir, { recursive: true, force: true });
+  }
+
+  // ---------- 凭据掩码 / 合并语义 ----------
+  const pub = frp.publicConfig({ upstream: { user: 's-secret-user', authToken: 'secret-token-xyz', serverAddr: 'a', proxies: [] } });
+  ok('publicConfig 不回 user 原文', pub.upstream.hasUser === true && !JSON.stringify(pub).includes('s-secret-user'));
+  ok('publicConfig 不回 token 原文', !JSON.stringify(pub).includes('secret-token-xyz'));
+  eq(
+    '空 user 字符串 = 保留原值',
+    frp.normalizeConfig({ upstream: { user: '' } }, { upstream: { user: 'keep-me' } }).config.upstream.user,
+    'keep-me',
+  );
+  eq(
+    'tlsEnable=null = 显式清除',
+    frp.normalizeConfig({ upstream: { tlsEnable: null } }, { upstream: { tlsEnable: false } }).config.upstream.tlsEnable,
+    null,
+  );
+
   console.log(`\n${pass}/${total} passed`);
   process.exit(pass === total ? 0 : 1);
 }

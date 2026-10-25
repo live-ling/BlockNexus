@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, agentOutdated, agentVersionText, api, errText, osLabel } from './api'
+import { ApiError, agentOutdated, agentVersionText, api, consoleLines, errText, osLabel } from './api'
 import { $, __resetLanguageForTest, setLanguage } from './i18n'
 
 /**
@@ -155,6 +155,37 @@ describe('agentVersionText / agentOutdated（版本号展示契约）', () => {
     expect(agentOutdated({ info: { agentVersion: '0.5.0' }, agentBundled: '0.5.0' } as never)).toBe(false)
     expect(agentOutdated({ info: null, agentBundled: '0.5.0' } as never)).toBe(true)
     expect(agentOutdated({ info: { agentVersion: '0.4.5' }, agentBundled: '' } as never)).toBe(false)
+  })
+})
+
+/**
+ * 回归背景：Agent 的 `instance.console` 回的是 `{ ts, text }[]`（老 Agent 是 `string[]`），
+ * 实例详情页曾把原始数组当 `string[]` 直接渲染 → React #31 白屏
+ * （Minified React error #31 … object with keys {ts, text}），
+ * 同时「最近事件」的正则过滤 / ERROR 计数对着对象也永远不命中。
+ */
+describe('consoleLines：/console 的 lines 归一化', () => {
+  it('{ ts, text }[] 取 text（这就是线上崩溃的那种形态）', () => {
+    expect(consoleLines({ lines: [{ ts: 1, text: 'Done (1.234s)!' }, { ts: 2, text: 'Stopping server' }] })).toEqual([
+      'Done (1.234s)!',
+      'Stopping server',
+    ])
+  })
+
+  it('老 Agent 的 string[] 原样保留', () => {
+    expect(consoleLines({ lines: ['a', 'b'] })).toEqual(['a', 'b'])
+  })
+
+  it('缺字段 / 非数组 / null 一律给空数组（不抛、不返回对象）', () => {
+    expect(consoleLines(null)).toEqual([])
+    expect(consoleLines(undefined)).toEqual([])
+    expect(consoleLines({})).toEqual([])
+    expect(consoleLines({ lines: 'oops' as never })).toEqual([])
+    expect(consoleLines({ lines: [null, 42, { ts: 1 }, { text: 'ok' }] })).toEqual(['', '', '', 'ok'])
+  })
+
+  it('结果里不可能出现对象（渲染前的最后一道闸）', () => {
+    for (const l of consoleLines({ lines: [{ ts: 1, text: 'x' }, 'y'] })) expect(typeof l).toBe('string')
   })
 })
 

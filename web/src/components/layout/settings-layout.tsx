@@ -27,7 +27,14 @@ export type SettingsSection = {
   heading?: boolean;
 };
 
-export function SettingsLayout({ sections }: { sections: SettingsSection[] }) {
+export function SettingsLayout({
+  sections,
+  contentClassName = 'max-w-[760px]',
+}: {
+  sections: SettingsSection[];
+  /** 右侧内容列宽：面板设置用 680（表单 620 + 呼吸），服务器设置保持 760 */
+  contentClassName?: string;
+}) {
   const [active, setActive] = useState(sections[0]?.id ?? '');
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -74,7 +81,7 @@ export function SettingsLayout({ sections }: { sections: SettingsSection[] }) {
           ))}
         </nav>
 
-        <div className="min-w-0 max-w-[760px] flex-1 px-5 pt-5 pb-24 md:px-6">
+        <div className={cn('min-w-0 flex-1 px-5 pt-5 pb-24 md:px-6', contentClassName)}>
           {sections.map((s, i) => (
             <section key={s.id} id={`settings-${s.id}`} className={cn('scroll-mt-2', i > 0 && 'mt-7')}>
               {s.heading !== false && <h2 className="text-[13px] font-semibold">{s.label}</h2>}

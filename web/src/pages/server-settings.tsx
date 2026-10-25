@@ -19,18 +19,14 @@ import { useCallback, useEffect, useRef, useSyncExternalStore, useState } from '
 import {
   AlertTriangle,
   ArrowRight,
-  Bot,
   ChevronRight,
   CircleCheck,
   CircleQuestionMark,
-  Coffee,
-  Cpu,
   Download,
   Ellipsis,
   FileText,
   KeyRound,
   Lock,
-  Network,
   Pencil,
   Play,
   RefreshCw,
@@ -41,6 +37,7 @@ import {
 import { PageHeader } from '@/components/layout/page-header';
 import { SettingsLayout } from '@/components/layout/settings-layout';
 import { AgentStatusPill } from '@/components/layout/status';
+import { SettingsCard, StateChip } from '@/components/settings-card';
 import { Button } from '@/components/ui/button';
 
 import {
@@ -339,7 +336,6 @@ export function ServerSettingsPage({
             heading: false,
             content: (
               <SettingsCard
-        icon={<Network className="h-3.5 w-3.5" />}
         title={$('serverSettings.connection.title')}
         actions={
           <>
@@ -407,8 +403,6 @@ export function ServerSettingsPage({
             heading: false,
             content: (
               <SettingsCard
-        icon={<Bot className="h-3.5 w-3.5" />}
-        iconTone={agentRunning ? 'ok' : 'muted'}
         title={$('serverSettings.agent.title')}
         // 装上了就讲「它是干什么的」，没装上就讲「它会怎么被装上」
         description={
@@ -418,7 +412,7 @@ export function ServerSettingsPage({
               ? $('serverSettings.agent.descLocal')
               : $('serverSettings.agent.descRemote')
         }
-        badge={<AgentStatePill server={server} />}
+        status={<AgentStatePill server={server} />}
       >
         {/* 版本现状：落后时由下面的对照区接管——两者占同一个位置、只显示一处，
             所以同一组版本号永远不会在同一张卡里说两遍 */}
@@ -656,12 +650,11 @@ export function ServerSettingsPage({
             heading: false,
             content: (
               <SettingsCard
-        icon={<Cpu className="h-3.5 w-3.5" />}
         title={$('serverSettings.sys.title')}
         description={server.info ? undefined : $('serverSettings.sys.locked.hint')}
-        badge={
+        status={
           server.info ? undefined : (
-            <StatePill tone="idle">{$('serverSettings.java.locked.badge')}</StatePill>
+            <StateChip ok={false} okText="" badText={$('serverSettings.java.locked.badge')} />
           )
         }
       >
@@ -701,10 +694,10 @@ export function ServerSettingsPage({
             label: $('serverSettings.danger.title'),
             heading: false,
             content: (
-              <section className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-card p-4 shadow-xs">
+              <section className="flex flex-wrap items-center gap-3 border-t border-destructive/30 pt-4">
         <AlertTriangle className="size-4 shrink-0 text-destructive" />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold">{$('serverSettings.danger.title')}</div>
+          <div className="text-[13px] font-semibold text-destructive">{$('serverSettings.danger.title')}</div>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             {$('serverSettings.danger.desc')}
           </p>
@@ -859,11 +852,9 @@ export function JavaCard({
 
   return (
     <SettingsCard
-      icon={<Coffee className="h-3.5 w-3.5" />}
-      iconTone={locked ? 'muted' : 'ok'}
       title={$('serverSettings.java.title')}
       description={locked ? $('serverSettings.java.locked.hint') : $('serverSettings.java.desc')}
-      badge={
+      status={
         locked ? (
           <StatePill tone="idle">{$('serverSettings.java.locked.badge')}</StatePill>
         ) : liveJava?.installed ? (
@@ -1208,59 +1199,6 @@ function RadioDot({ checked }: { checked: boolean }) {
     >
       {checked && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
     </span>
-  );
-}
-
-/** 统一卡片：图标 + 标题行（右侧徽章或操作）+ 说明 + 内容 */
-function SettingsCard({
-  icon,
-  iconTone = 'muted',
-  title,
-  description,
-  badge,
-  actions,
-  children,
-}: {
-  icon?: React.ReactNode;
-  iconTone?: 'ok' | 'muted';
-  title: string;
-  description?: string;
-  badge?: React.ReactNode;
-  actions?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="mt-3 rounded-xl border border-border/70 bg-card shadow-xs">
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-start gap-2.5">
-          {icon && (
-            <span
-              className={cn(
-                'grid size-7 shrink-0 place-items-center rounded-lg [&_svg]:size-4',
-                // 运行中才用绿底，其余一律灰底（颜色本身也是一种状态）
-                iconTone === 'ok'
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                  : 'bg-muted text-muted-foreground',
-              )}
-            >
-              {icon}
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <b className="text-[13px] font-semibold">{title}</b>
-              {(badge || actions) && (
-                <div className="ml-auto flex shrink-0 items-center gap-2">{badge ?? actions}</div>
-              )}
-            </div>
-            {description && (
-              <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{description}</p>
-            )}
-          </div>
-        </div>
-        {children}
-      </div>
-    </section>
   );
 }
 

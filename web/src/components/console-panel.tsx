@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { Eraser, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { api, errText, type ServerSummary } from '@/lib/api';
+import { api, consoleLines, errText, type ServerSummary } from '@/lib/api';
 import { $, type TranslationKey } from '@/lib/i18n';
 import { subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
@@ -136,13 +136,14 @@ export function ConsolePanel({
   useEffect(() => {
     let alive = true;
     followingRef.current = true;
-    api<{ lines: { ts: number; text: string }[]; status: string }>(
+    api<{ lines?: unknown; status: string }>(
       `/servers/${server.id}/instances/${encodeURIComponent(instance)}/console?tail=300`,
     )
       .then((data) => {
         if (!alive) return;
         setStatus(data.status);
-        setLines(data.lines.map((l) => l.text));
+        // 历史行是 { ts, text }[]（老 Agent 是 string[]）：统一取 text，别把对象塞进 JSX
+        setLines(consoleLines(data));
       })
       .catch((e) => toastError($('console.error.load'), errText(e)));
     return () => {
@@ -156,7 +157,8 @@ export function ConsolePanel({
     return subscribeSSE((e) => {
       if (e.type !== 'agent-event' || e.serverId !== server.id) return;
       if (e.event === 'console' && e.data?.instance === instance) {
-        const incoming = (e.data.lines as string[]) || [];
+        // 实时行目前是 string[]，但同样走归一化：老/新 Agent 混用时不至于整块空白
+        const incoming = consoleLines({ lines: e.data.lines });
         if (!incoming.length) return;
         setLines((cur) => {
           const next = [...cur, ...incoming];
@@ -276,7 +278,7 @@ export function ConsolePanel({
           const el = e.currentTarget;
           followingRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
         }}
-        className={`console-scroll no-scrollbar ${heightClass} overflow-y-auto font-mono ${
+        className={`console-scroll no-scrollbar ${heightClass} min-h-0 overflow-y-auto font-mono ${
           embedded
             ? 'px-3.5 py-2.5 text-[12.5px] leading-5 text-zinc-400'
             : 'p-3 text-xs leading-relaxed text-zinc-300'

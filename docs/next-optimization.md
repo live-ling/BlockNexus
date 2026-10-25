@@ -8,9 +8,18 @@
 ### 1. frp 安全闭环
 
 - **暴露面板前强制登录保护**：代理目标端口 = 面板端口且 `authEnabled=false` 时，拒绝保存/启动（或强警告 + 一键设密码）。frp 让「把面板交给公网」只差一个端口号。
+  ⚠️ **后端已完成（2026-10-25）**：`frp.exposureRisk()` 纯函数 + `PUT /network/frp`、`start`/`restart`、`import` 三处拦截（错误码 `network.frp-exposes-panel`，附 6 例测试）。**前端「一键开登录保护」入口仍待做**。
 - **frp 配置收口**：设置页只保留 server / token / 二进制路径；代理列表只由实例页维护，避免两处改同一份 `settings.frp.upstream.proxies` 互相覆盖。
 - **远程 / 异地实例的 frp**：面板托管的 frpc 只能转发面板本机端口。正确做法是 **Agent 侧托管 frpc**（面板下发配置，Agent 在本机 spawn、回传日志与状态），实例页的「绑定端口」对远程实例才可用。
-- **SakuraFrp 模式真机验证**：现在只做了参数托管（`-f token:ids -n`），需要用真实账号跑一次登录 + 隧道连通。
+- **SakuraFrp 模式真机验证**：⚠️ 已用真实账号实测（2026-10-25，上游 frpc 0.71.1）——**登录 / 隧道注册 / 端到端转发均通过**，但同时证明面板现有两种模式都接不上樱花：upstream 模式缺 `user` 字段（樱花节点拒绝登录），sakura 模式的 `-f`/`-n` 是樱花定制 frpc 私有参数（上游 frpc 报 `unknown shorthand flag`）。**真机验证不再需要，改成「SakuraFrp 引导」实现**，方案与实测证据见 [frp-sakurafrp-onboarding.md](./frp-sakurafrp-onboarding.md)。
+
+### 3. 樱花 frp 引导（粘贴配置 → 自动加载客户端）
+
+- **一句话**：用户从樱花后台复制整段手动配置粘贴进面板，面板/Agent 自动准备 frpc、生成配置、启动并显示「隧道在线 + 公网地址」。
+- ✅ **已落地（2026-10-25）**：`user` + `transport.tls` 透传、`parseSakuraConfig()` 纯函数（含 80 例回归）、`POST /network/frp/import`、设置页「粘贴樱花配置」弹窗（`web/src/components/frp-import-dialog.tsx`）。生成配置已用真机验证可登录 `frp-top.com`。
+- ⬜ **待做**：二进制按需下载（推翻「不下载二进制」旧约束，需固定版本 + SHA256 校验）、远程实例走 Agent 侧托管。
+- ✅ **补充落地（2026-10-25 第二轮）**：sakura 模式能力探测（上游 frpc 的 `-f` 报错翻译成 `network.frp-sakura-needs-custom-build`）、状态三态/重连次数/上次退出码、设置页 8 秒轮询 + 刷新、暴露风险提前横幅。
+- 完整设计、解析规则、测试与排期见 [frp-sakurafrp-onboarding.md](./frp-sakurafrp-onboarding.md)。
 
 ### 2. 家用 Linux 拓扑适配
 
@@ -46,7 +55,14 @@
 
 - ✅ **`localIP` 支持**：代理条目带 `localIP`；实例页按服务器地址自动推导转发目标——本机 `127.0.0.1`，同一局域网（私有 IP）/主机名用服务器内网地址，公网 IP 仍拒绝（应由那台机器自己跑 frpc）。设置页的代理行格式扩展为 `名称,本地端口,远程端口[,tcp|udp[,转发地址]]`。
 
+## 已完成（2026-10-25）
+
+- ✅ **frp 安全闭环 + 面板交互体验方案已定型**（盘点与排期见本文 P0-1 与本轮计划）：暴露面板强制登录、配置收口、状态三态/轮询/日志抽屉、保存-重启联动、`restarts` 清零与日志轮转。
+- ✅ **SakuraFrp 真机连通性验证**：`user` + `auth.token` + `transport.tls.enable=false` 配置下登录/隧道注册/端到端转发全部通过；同时定位「两种模式都接不上」的两个缺陷，详见 [frp-sakurafrp-onboarding.md](./frp-sakurafrp-onboarding.md) §1。
+
 ## 建议的下一步顺序
 
-1. Agent 侧 frpc（远程/异地实例的通用解）；
-2. frp 暴露强制登录 + 配置收口（安全兜底）。
+1. **SakuraFrp 最小修复**：`buildUpstreamToml` 加 `user`（半天，立刻让樱花「手动配置」可用）；
+2. **frp 暴露强制登录 + 配置收口**（安全兜底）；
+3. **樱花粘贴导入 + 客户端自动加载**（含推翻「不下载二进制」的护栏：固定版本 + SHA256）；
+4. Agent 侧 frpc（远程/异地实例的通用解，与樱花引导的远程分支合并做）。

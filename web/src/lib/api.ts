@@ -329,6 +329,27 @@ export interface ConsoleLine {
   text: string;
 }
 
+/**
+ * 把 `/console` 的 `lines` 统一成 `string[]`。
+ *
+ * 两种形态都真实存在：老 Agent 直接回 `string[]`，现在的 Agent（见
+ * `agent/src/instance/manager.js` 的 `rec.buf`）回 `{ ts, text }[]`。
+ * **绝不能把原始数组直接交给 React**：渲染对象会触发 React #31
+ * （objects are not valid as a React child），而 `String(obj)` 又会把整页日志
+ * 变成 `[object Object]`。所以两种形态都在这里显式取文本。
+ */
+export function consoleLines(res: { lines?: unknown } | null | undefined): string[] {
+  const raw = res && Array.isArray(res.lines) ? (res.lines as unknown[]) : [];
+  return raw.map((l) => {
+    if (typeof l === 'string') return l;
+    if (l && typeof l === 'object' && 'text' in l) {
+      const t = (l as { text?: unknown }).text;
+      return typeof t === 'string' ? t : String(t ?? '');
+    }
+    return '';
+  });
+}
+
 export interface Me {
   port: number;
   authEnabled: boolean;
@@ -1099,7 +1120,16 @@ export interface FrpConfig {
   mode: FrpMode;
   binaryPath: string;
   sakura: { hasToken: boolean; tunnels: string };
-  upstream: { serverAddr: string; serverPort: number; hasToken: boolean; proxies: FrpProxy[] };
+  upstream: {
+    serverAddr: string;
+    serverPort: number;
+    hasToken: boolean;
+    /** 樱花访问密钥是否已设置（不回原文） */
+    hasUser: boolean;
+    /** null = 未显式设置（沿用 frpc 默认 true）；false = 生成配置里写死关 TLS（樱花节点要求） */
+    tlsEnable: boolean | null;
+    proxies: FrpProxy[];
+  };
 }
 
 export interface FrpStatus {
@@ -1109,6 +1139,20 @@ export interface FrpStatus {
   mode: string;
   log: string[];
   config: FrpConfig;
+  /** running / restarting（退避重连中）/ stopped */
+  state: 'running' | 'restarting' | 'stopped';
+  /** 本次生命周期内的异常重连次数（稳定运行 30 秒后清零） */
+  restarts: number;
+  /** 最近一次异常退出（面板重启后仍能说清上次为什么挂的） */
+  lastExit: { code: number; signal: string; at: number } | null;
+  /** 保存前的提前警示：代理通了面板端口但没开登录保护。PUT/POST 的 status 字段可能不带它 */
+  exposure?: {
+    panelPort: number;
+    mayBeExposed: boolean;
+    authEnabled: boolean;
+    risky: boolean;
+    proxy?: string;
+  };
 }
 
 export function getFrp(): Promise<FrpStatus> {
@@ -1127,6 +1171,21 @@ export function saveFrp(body: Record<string, unknown>): Promise<{
 
 export function frpAction(action: 'start' | 'stop' | 'restart'): Promise<{ ok: boolean }> {
   return api(`/network/frp/${action}`, { method: 'POST', body: {} });
+}
+
+/**
+ * 粘贴樱花后台「手动配置」的整段 TOML → 解析并保存进 upstream 段。
+ * 只覆盖 upstream，不改 enabled；frpc 正在运行时后端会自动重启应用新配置。
+ */
+export function importSakuraFrp(text: string): Promise<{
+  ok: boolean;
+  restarted: boolean;
+  error: string;
+  tunnelIds: string[];
+  config: FrpConfig;
+  status: Omit<FrpStatus, 'config'>;
+}> {
+  return api('/network/frp/import', { method: 'POST', body: { text } });
 }
 
 /**

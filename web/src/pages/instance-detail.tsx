@@ -33,7 +33,6 @@ import {
   Puzzle,
   RotateCw,
   Search,
-  Server,
   Settings2,
   ShieldCheck,
   ShieldOff,
@@ -41,6 +40,7 @@ import {
   Square,
   Terminal,
   Users,
+  X,
 } from 'lucide-react';
 import { AiLogPanel } from '@/components/ai-log-panel';
 import { BackupDialog, BackupPanel } from '@/components/backup-dialog';
@@ -59,7 +59,7 @@ import { PropertiesDialog } from '@/components/properties-dialog';
 import { PluginConfigDialog } from '@/components/plugin-config-dialog';
 import { SparkPanel } from '@/components/spark-panel';
 import { InstanceControlPanel } from '@/components/instance-control-panel';
-import { KV, SectionHeading, Surface } from '@/components/layout/primitives';
+import { SectionHeading, Surface } from '@/components/layout/primitives';
 import { LatencyBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -85,6 +85,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   api,
+  consoleLines,
   CORE_LABEL,
   errText,
   fmtMB,
@@ -92,7 +93,6 @@ import {
   getInstanceFrp,
   getPlayersStats,
   instanceIconUrl,
-  saveInstanceFrp,
   type Instance,
   type InstanceFrpInfo,
   type PlayersSnapshot,
@@ -149,8 +149,6 @@ export function InstanceDetailPage({
   // 终端日志关键字（页签栏右侧搜索框；只影响显示，不动缓冲区）
   const [logQuery, setLogQuery] = useState('');
   const consoleRef = useRef<ConsolePanelHandle>(null);
-  // 中区容器：终端拖拽高度用它算上限，避免把整块内容顶出视口
-  const centerRef = useRef<HTMLElement | null>(null);
   // 玩家快捷管理：待确认的操作（踢出/封禁/封禁 IP 统一走模态框，原因可选）
   const [playerAction, setPlayerAction] = useState<{ name: string; kind: 'kick' | 'ban' | 'ban-ip' } | null>(null);
   // 域名连通检测状态
@@ -159,23 +157,10 @@ export function InstanceDetailPage({
   >(null);
   const [bansOpen, setBansOpen] = useState(false);
   // frp 端口映射（仅本机实例；远程实例的 frpc 不在面板这台机器上）
-  const [frpOpen, setFrpOpen] = useState(false);
+  // 入口只在控制面板「网络」组 —— 页面里不再有第二个 frp 对话框（旧的 InstanceFrpDialog 已删）
   const [frpInfo, setFrpInfo] = useState<InstanceFrpInfo | null>(null);
-  // 概览/底部终端共用：控制台尾部（最近事件、最后一行、错误计数）
+  // 概览终端与「最近事件」共用：控制台尾部（错误计数、事件筛选）
   const [tailLines, setTailLines] = useState<string[]>([]);
-  // 底部终端面板：收起时只占一行，可展开为半屏/全屏
-  // 底部终端面板：高度可拖拽，并记住上次高度（localStorage，按浏览器保存）
-  const [dockOpen, setDockOpen] = useState(false);
-  const [dockHeight, setDockHeight] = useState(() => {
-    try {
-      const saved = Number(localStorage.getItem('bn:instance-dock-height'));
-      if (Number.isFinite(saved) && saved >= 140) return Math.min(saved, Math.round(window.innerHeight * 0.85));
-    } catch {}
-    return Math.round(window.innerHeight * 0.32);
-  });
-  const dockDragRef = useRef<{ startY: number; startH: number } | null>(null);
-  // 错误自动展开的基准：只对「新增」错误自动弹，避免一直打断
-  const lastErrCountRef = useRef(0);
   // 实例控制面板：设置/自动化/备份/危险操作的唯一入口
   const [panelOpen, setPanelOpen] = useState(false);
   // 玩家统计（在线时长）与聊天记录页签
@@ -252,17 +237,18 @@ export function InstanceDetailPage({
     return () => {
       alive = false;
     };
-  }, [server?.isLocal, serverId, instanceName, frpOpen]);
+  }, [server?.isLocal, serverId, instanceName]);
 
-  // 控制台尾部：每 5 秒拉一次（概览的「最近事件」与底部终端共用；收起时也靠它做错误提醒）
+  // 控制台尾部：每 5 秒拉一次（概览的「最近事件」与终端头部的 ERROR 计数共用）
   useEffect(() => {
     let alive = true;
     const load = () => {
-      api<{ lines?: string[] }>(
+      api<{ lines?: unknown }>(
         `/servers/${serverId}/instances/${encodeURIComponent(instanceName)}/console?tail=200`,
       )
         .then((r) => {
-          if (alive) setTailLines(Array.isArray(r.lines) ? r.lines : []);
+          // 必须归一化：Agent 回的是 { ts, text }[]，直接渲染对象会整页白屏（React #31）
+          if (alive) setTailLines(consoleLines(r));
         })
         .catch(() => {});
     };
@@ -273,61 +259,6 @@ export function InstanceDetailPage({
       clearInterval(timer);
     };
   }, [serverId, instanceName]);
-
-  // 出现新的 ERROR 时自动展开底部终端（只对「新增」错误生效，避免一直弹）
-  useEffect(() => {
-    const errors = tailLines.filter((l) => /ERROR|Exception|Caused by/.test(l)).length;
-    if (errors > lastErrCountRef.current && !dockOpen) setDockOpen(true);
-    lastErrCountRef.current = errors;
-  }, [tailLines, dockOpen]);
-
-  // Ctrl+` 展开/收起终端（与编辑器习惯一致）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && (e.key === '`' || e.code === 'Backquote')) {
-        e.preventDefault();
-        setDockOpen((v) => !v);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  // 记住终端高度（拖动或预设切换后写回；下次打开同一浏览器沿用）
-  useEffect(() => {
-    try {
-      localStorage.setItem('bn:instance-dock-height', String(dockHeight));
-    } catch {}
-  }, [dockHeight]);
-
-  const startDockDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    dockDragRef.current = { startY: e.clientY, startH: dockHeight };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  /** 终端最大高度：不超过中区容器高度减 90px（页签 + 一行内容），也不超过 85vh */
-  const dockMaxHeight = () =>
-    Math.min(
-      Math.round(window.innerHeight * 0.85),
-      Math.max(140, (centerRef.current?.clientHeight || window.innerHeight) - 90),
-    );
-  const moveDockDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dockDragRef.current;
-    if (!d) return;
-    const next = Math.min(
-      Math.max(d.startH + (d.startY - e.clientY), 140),
-      dockMaxHeight(),
-    );
-    setDockHeight(next);
-  };
-  const endDockDrag = () => {
-    dockDragRef.current = null;
-  };
-
-  // 展开时把记住的高度夹回当前窗口能容纳的范围（换显示器/改窗口大小后仍合理）
-  useEffect(() => {
-    if (dockOpen) setDockHeight((h) => Math.min(h, dockMaxHeight()));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dockOpen]);
 
   // 探测实例根目录有没有 plugins/ / config/（静默失败，只是入口显隐）
   useEffect(() => {
@@ -549,9 +480,8 @@ export function InstanceDetailPage({
     .filter((l) => /ERROR|Exception|Caused by|joined the game|left the game|Done \(|备份|Backup/i.test(l))
     .slice(-8)
     .reverse();
-  // 底部终端收起时的摘要：最后一行 + 错误数
+  // 终端头部的 ERROR 计数（概览终端卡片 + 事件卡底部共用）
   const dockErrCount = tailLines.filter((l) => /ERROR|Exception|Caused by/.test(l)).length;
-  const dockLastLine = tailLines[tailLines.length - 1] || '';
 
   const onlineReason = !active
     ? $('instanceDetail.metric.idle')
@@ -757,80 +687,6 @@ export function InstanceDetailPage({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* ---------- 驾驶舱：3 项大数字，固定在页签上方 ---------- */}
-        <div className="grid shrink-0 grid-cols-1 gap-3 px-4 pt-4 pb-3 sm:grid-cols-3">
-          <MetricCard icon={<Users />} label={$('instanceDetail.field.players')}>
-            {playersOnline != null ? (
-              <>
-                <MetricValue value={String(playersOnline)} suffix={`/ ${playersMax}`} />
-                <MetricBar ratio={playersMax > 0 ? playersOnline / playersMax : 0} tone={playersTone} />
-              </>
-            ) : (
-              <>
-                <MetricValue value="—" />
-                <MetricHelper>
-                  <span className="min-w-0 truncate">{onlineReason}</span>
-                </MetricHelper>
-              </>
-            )}
-          </MetricCard>
-
-          <MetricCard
-            icon={<Activity />}
-            label={active ? $('instanceDetail.metric.uptime') : $('instanceDetail.idle.lastRun')}
-          >
-            {uptimeText ? (
-              <>
-                <MetricValue value={uptimeText} />
-                <MetricHelper>
-                  <MetricTrend>{$('console.status.running')}</MetricTrend>
-                </MetricHelper>
-              </>
-            ) : (
-              <>
-                <MetricValue value="—" />
-                <MetricHelper>
-                  {starting ? (
-                    <span className="min-w-0 truncate">{$('server.detail.starting')}</span>
-                  ) : isFailed && instance.error ? (
-                    <span className="min-w-0 truncate text-destructive" title={instance.error}>
-                      {instance.error}
-                    </span>
-                  ) : (
-                    <span className="min-w-0 truncate">{$('instanceDetail.idle.normalStop')}</span>
-                  )}
-                </MetricHelper>
-              </>
-            )}
-          </MetricCard>
-
-          <MetricCard icon={<HardDrive />} label={$('instanceDetail.field.memoryLimit')}>
-            <MetricValue value={active ? fmtMB(instance.memoryMB) : '—'} />
-            {!active ? (
-              <MetricHelper>
-                <span className="min-w-0 truncate">
-                  {$('instanceDetail.memory.limit', fmtMB(instance.memoryMB))} · {$('instanceDetail.idle.released')}
-                </span>
-              </MetricHelper>
-            ) : hostTotalMB ? (
-              <MetricBar
-                ratio={hostUsedMB != null ? hostUsedMB / hostTotalMB : 0}
-                tone="bg-muted-foreground/40"
-                trailing={hostUsedMB != null ? `${fmtMB(hostUsedMB)} / ${fmtMB(hostTotalMB)}` : undefined}
-                title={$(
-                  'instanceDetail.memory.host',
-                  hostUsedMB != null ? fmtMB(hostUsedMB) : '—',
-                  fmtMB(hostTotalMB),
-                )}
-              />
-            ) : (
-              <MetricHelper>
-                <span className="min-w-0 truncate">{$('instanceDetail.value.nodata')}</span>
-              </MetricHelper>
-            )}
-          </MetricCard>
-        </div>
-
         {/* ---------- 页签：概览 / 玩家 / 文件 / 配置 / 维护（/proto 的 5 Tab） ---------- */}
         <div className="flex h-10 shrink-0 items-stretch gap-0.5 border-b border-border/60 px-4">
           {tabs.map((t) => (
@@ -840,131 +696,210 @@ export function InstanceDetailPage({
 
         <div className="min-h-0 flex-1 overflow-hidden">
           {/* ============ 概览 ============ */}
-          <div className={tab === 'overview' ? 'h-full overflow-y-auto p-4' : 'hidden'}>
-            <div className="grid gap-3.5 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-              <div className="flex min-w-0 flex-col gap-3.5">
-                {/* 状态与环境：地址、参数、快捷操作都在这一张卡里 */}
-                <Surface className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Server className="size-4 shrink-0 text-muted-foreground" />
-                      <h3 className="text-[15px] font-semibold tracking-tight">
-                        {$('instanceDetail.overview.env')}
-                      </h3>
-                    </div>
-                    <span className="inline-flex h-5 shrink-0 items-center rounded-full border border-border/70 bg-muted/40 px-2 text-[11px] font-medium text-muted-foreground">
-                      {coreText}
-                    </span>
-                  </div>
+          <div className={tab === 'overview' ? 'h-full min-h-0 p-4' : 'hidden'}>
+            {/*
+              整页固定高（不滚）：终端日志区 flex-1 需要一条**定值**高度链才能被约束住。
+              之前这里是 overflow-y-auto + min-h-full，日志内容把 flex-1 撑成内容高（7500px+），
+              看起来就是「终端无限加载」。滚动交给终端/事件自己的内部滚动区。
+            */}
+            <div className="flex h-full min-h-0 flex-col gap-3.5">
+              {/*
+                指标条：只属于概览（玩家/时长/内存是「这个实例现在怎么样」的答案，
+                切到文件/配置页签时没有理由继续占一整条）。72px 分段 strip，
+                高度写死防跳动；不再常驻页签上方，其它页签的内容区整体多出 96px。
+              */}
+              <MetricStrip>
+                <MetricCell icon={<Users />} label={$('instanceDetail.field.players')}>
+                  {playersOnline != null ? (
+                    <>
+                      <MetricValue value={String(playersOnline)} suffix={`/ ${playersMax}`} />
+                      <MetricBar ratio={playersMax > 0 ? playersOnline / playersMax : 0} tone={playersTone} />
+                    </>
+                  ) : (
+                    <>
+                      <MetricValue value="—" />
+                      <MetricHelper>
+                        <span className="min-w-0 truncate">{onlineReason}</span>
+                      </MetricHelper>
+                    </>
+                  )}
+                </MetricCell>
 
-                  {isFailed && instance.error ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px]">
-                      <AlertCircle className="size-3.5 shrink-0 text-destructive" />
-                      <span className="font-medium text-destructive">{$('console.status.failed')}</span>
-                      <span className="min-w-0 truncate text-muted-foreground" title={instance.error}>
-                        {instance.error}
+                <MetricCell
+                  icon={<Activity />}
+                  label={active ? $('instanceDetail.metric.uptime') : $('instanceDetail.idle.lastRun')}
+                >
+                  {uptimeText ? (
+                    <>
+                      <MetricValue value={uptimeText} />
+                      <MetricHelper>
+                        <MetricTrend>{$('console.status.running')}</MetricTrend>
+                      </MetricHelper>
+                    </>
+                  ) : (
+                    <>
+                      <MetricValue value="—" />
+                      <MetricHelper>
+                        {starting ? (
+                          <span className="min-w-0 truncate">{$('server.detail.starting')}</span>
+                        ) : isFailed && instance.error ? (
+                          <span className="min-w-0 truncate text-destructive" title={instance.error}>
+                            {instance.error}
+                          </span>
+                        ) : (
+                          <span className="min-w-0 truncate">{$('instanceDetail.idle.normalStop')}</span>
+                        )}
+                      </MetricHelper>
+                    </>
+                  )}
+                </MetricCell>
+
+                <MetricCell icon={<HardDrive />} label={$('instanceDetail.field.memoryLimit')}>
+                  <MetricValue value={active ? fmtMB(instance.memoryMB) : '—'} />
+                  {!active ? (
+                    <MetricHelper>
+                      <span className="min-w-0 truncate">
+                        {$('instanceDetail.memory.limit', fmtMB(instance.memoryMB))} · {$('instanceDetail.idle.released')}
                       </span>
+                    </MetricHelper>
+                  ) : hostTotalMB ? (
+                    <MetricBar
+                      ratio={hostUsedMB != null ? hostUsedMB / hostTotalMB : 0}
+                      tone="bg-muted-foreground/40"
+                      trailing={hostUsedMB != null ? `${fmtMB(hostUsedMB)} / ${fmtMB(hostTotalMB)}` : undefined}
+                      title={$(
+                        'instanceDetail.memory.host',
+                        hostUsedMB != null ? fmtMB(hostUsedMB) : '—',
+                        fmtMB(hostTotalMB),
+                      )}
+                    />
+                  ) : (
+                    <MetricHelper>
+                      <span className="min-w-0 truncate">{$('instanceDetail.value.nodata')}</span>
+                    </MetricHelper>
+                  )}
+                </MetricCell>
+              </MetricStrip>
+
+              {/* 条件条：失败 / Java 缺失才出现，正常时零高度（不再和地址抢同一张卡） */}
+              {isFailed && instance.error && (
+                <div className="flex shrink-0 items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[12px]">
+                  <AlertCircle className="size-3.5 shrink-0 text-destructive" />
+                  <span className="shrink-0 font-medium text-destructive">{$('console.status.failed')}</span>
+                  <span className="min-w-0 truncate text-muted-foreground" title={instance.error}>
+                    {instance.error}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTab('overview')}
+                    className="ml-auto shrink-0 text-[12px] font-medium text-destructive hover:underline"
+                  >
+                    {$('console.title')}
+                  </button>
+                </div>
+              )}
+              {server.online &&
+                server.info &&
+                (!server.info.java.installed || (server.info.java.major ?? 0) < 21) && (
+                  <JavaInstallRow serverId={server.id} onDone={loadServer} />
+                )}
+
+              {/* 连接地址：概览第一高频信息，独占一行；核心/时长/Java/端口降为下方 caption */}
+              <Surface className="flex shrink-0 flex-col gap-1 px-3.5 py-2.5">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate font-mono text-[12.5px] font-medium" title={connectAddress}>
+                    {connectAddress}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(connectAddress)}
+                    title={$('instanceDetail.copied.tooltip')}
+                    aria-label={$('instanceDetail.copied.tooltip')}
+                    className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Copy className="size-3.5" />
+                  </button>
+                  {frpInfo?.bound && (
+                    <span
+                      className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-[1px] text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+                      title={frpInfo.publicAddress}
+                    >
+                      frp
+                    </span>
+                  )}
+                  <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                    {!instance.address ? (
+                      <span className="truncate">{$('instanceDetail.domain.none')}</span>
+                    ) : !active ? (
+                      <span className="truncate">{$('instanceDetail.domain.notRunning')}</span>
+                    ) : domainCheck?.state === 'checking' ? (
+                      <span className="truncate">{$('instanceDetail.domain.checking')}</span>
+                    ) : domainCheck?.result?.error ? (
+                      <span className="max-w-[180px] truncate text-destructive" title={domainCheck.result.error}>
+                        {domainCheck.result.error}
+                      </span>
+                    ) : domainCheck?.result ? (
+                      <>
+                        <Dot />
+                        <span
+                          className="max-w-[180px] truncate font-mono text-emerald-600 dark:text-emerald-400"
+                          title={`${domainCheck.result.ip}:${domainCheck.result.port}`}
+                        >
+                          {domainCheck.result.ip}:{domainCheck.result.port}
+                          {domainCheck.result.latencyMs != null ? ` · TCP ${domainCheck.result.latencyMs}ms` : ''}
+                          {domainCheck.result.srv ? ' · SRV' : ''}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="truncate">{$('instanceDetail.domain.unchecked')}</span>
+                    )}
+                    {instance.address && active && (
                       <button
                         type="button"
-                        onClick={() => setDockOpen(true)}
-                        className="ml-auto shrink-0 text-[12px] font-medium text-destructive hover:underline"
+                        onClick={runDomainCheck}
+                        title={$('instanceDetail.domain.check')}
+                        aria-label={$('instanceDetail.domain.recheck')}
+                        className="grid size-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
                       >
-                        {$('console.title')}
+                        <Globe className="size-3" />
                       </button>
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                      {instanceStatusText} · {$('instanceDetail.field.players')} {playersOnline ?? '—'}/
-                      {playersMax}
-                      {instance.note ? ` · ${instance.note}` : ''}
-                    </p>
-                  )}
-
-                  {/* 连接地址：玩家最常复制的信息 */}
-                  <div className="mt-3 flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
-                    <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 truncate font-mono text-[12.5px] font-medium" title={connectAddress}>
-                      {connectAddress}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(connectAddress)}
-                      title={$('instanceDetail.copied.tooltip')}
-                      aria-label={$('instanceDetail.copied.tooltip')}
-                      className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <Copy className="size-3.5" />
-                    </button>
-                    {frpInfo?.bound && (
-                      <span
-                        className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-[1px] text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-                        title={frpInfo.publicAddress}
-                      >
-                        frp
+                    )}
+                  </div>
+                </div>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-muted-foreground">
+                  <span className="truncate">{coreText}</span>
+                  <span aria-hidden>·</span>
+                  <span className="truncate">
+                    {$('instanceDetail.metric.uptime')} {uptimeText ?? '—'}
+                  </span>
+                  <span aria-hidden>·</span>
+                  <span className="truncate">
+                    Java{' '}
+                    {server.info?.java.installed
+                      ? String(server.info.java.major ?? '—')
+                      : $('servers.java.notInstalled')}
+                  </span>
+                  <span aria-hidden>·</span>
+                  <span className="truncate">
+                    {$('instanceDetail.field.port')} {instance.port}
+                  </span>
+                  {instance.note && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="min-w-0 truncate" title={instance.note}>
+                        {instance.note}
                       </span>
-                    )}
-                    <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-                      {!instance.address ? (
-                        <span className="truncate">{$('instanceDetail.domain.none')}</span>
-                      ) : !active ? (
-                        <span className="truncate">{$('instanceDetail.domain.notRunning')}</span>
-                      ) : domainCheck?.state === 'checking' ? (
-                        <span className="truncate">{$('instanceDetail.domain.checking')}</span>
-                      ) : domainCheck?.result?.error ? (
-                        <span className="max-w-[180px] truncate text-destructive" title={domainCheck.result.error}>
-                          {domainCheck.result.error}
-                        </span>
-                      ) : domainCheck?.result ? (
-                        <>
-                          <Dot />
-                          <span
-                            className="max-w-[180px] truncate font-mono text-emerald-600 dark:text-emerald-400"
-                            title={`${domainCheck.result.ip}:${domainCheck.result.port}`}
-                          >
-                            {domainCheck.result.ip}:{domainCheck.result.port}
-                            {domainCheck.result.latencyMs != null ? ` · TCP ${domainCheck.result.latencyMs}ms` : ''}
-                            {domainCheck.result.srv ? ' · SRV' : ''}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="truncate">{$('instanceDetail.domain.unchecked')}</span>
-                      )}
-                      {instance.address && active && (
-                        <button
-                          type="button"
-                          onClick={runDomainCheck}
-                          title={$('instanceDetail.domain.check')}
-                          aria-label={$('instanceDetail.domain.recheck')}
-                          className="grid size-4 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
-                        >
-                          <Globe className="size-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                    </>
+                  )}
+                </div>
+              </Surface>
 
-                  {/* Java 缺失/过低时的安装入口（原本在左栏，现在并进状态卡） */}
-                  {server.online &&
-                    server.info &&
-                    (!server.info.java.installed || (server.info.java.major ?? 0) < 21) && (
-                      <div className="mt-3">
-                        <JavaInstallRow serverId={server.id} onDone={loadServer} />
-                      </div>
-                    )}
-
-                  <div className="mt-3 grid grid-cols-3 gap-4 border-t border-border/60 pt-3">
-                    <Meta label={$('instanceDetail.metric.uptime')} value={uptimeText ?? '—'} />
-                    <Meta
-                      label="Java"
-                      value={
-                        server.info?.java.installed ? String(server.info.java.major ?? '—') : $('servers.java.notInstalled')
-                      }
-                    />
-                    <Meta label={$('instanceDetail.field.port')} value={String(instance.port)} />
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-x-0.5 gap-y-1 border-t border-border/60 pt-2">
-                    <span className="mr-1.5 px-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              <div className="grid min-h-0 flex-1 gap-3.5 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                <div className="flex min-h-0 min-w-0 flex-col gap-3.5">
+                  {/* 快捷操作：只留 4 个高频动作（备份/终端/文件/重启），低频的进 ⋮ */}
+                  <div className="flex shrink-0 flex-wrap items-center gap-0.5">
+                    <span className="mr-1.5 px-1 text-[10.5px] font-medium tracking-wider text-muted-foreground uppercase">
                       {$('instanceDetail.overview.actions')}
                     </span>
                     {[
@@ -974,24 +909,9 @@ export function InstanceDetailPage({
                         onClick: () => setBackupOpen(true),
                       },
                       {
-                        icon: Terminal,
-                        label: $('instanceDetail.overview.openConsole'),
-                        onClick: () => setDockOpen(true),
-                      },
-                      {
                         icon: FolderOpen,
                         label: $('instanceDetail.tools.files'),
                         onClick: () => setTab('files'),
-                      },
-                      {
-                        icon: Settings2,
-                        label: $('instanceDetail.serverProperties'),
-                        onClick: () => setPropsOpen(true),
-                      },
-                      {
-                        icon: MapIcon,
-                        label: $('instanceDetail.tab.map'),
-                        onClick: () => setMapOpen((v) => !v),
                       },
                       {
                         icon: RotateCw,
@@ -1003,59 +923,87 @@ export function InstanceDetailPage({
                         key={q.label}
                         type="button"
                         onClick={q.onClick}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                       >
                         <q.icon className="size-3.5 text-muted-foreground/70" />
                         {q.label}
                       </button>
                     ))}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={$('ui.action.more')}
+                          title={$('ui.action.more')}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <MoreVertical />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-44">
+                        <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setMapOpen(true)}>
+                          <MapIcon className="size-3.5" />
+                          {$('instanceDetail.tab.map')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="gap-2 text-[13px]" onSelect={() => setPropsOpen(true)}>
+                          <Settings2 className="size-3.5" />
+                          {$('instanceDetail.serverProperties')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                </Surface>
 
-                {/* MOTD：整页唯一一块深色内容面，和底部终端呼应 */}
-                <Surface className="flex flex-1 flex-col p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-[15px] font-semibold tracking-tight">{$('instanceDetail.overview.motd')}</h3>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">{$('instanceDetail.motd.label')}</p>
+                {/* 终端：概览的主内容面（原 MOTD 预览块 + 底部 Dock 合并于此）。
+                    深色卡片自带轻头部（状态 + ERROR + 清空 + 搜索），日志区 flex-1 填满。 */}
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-[#0B0B0F] shadow-xs">
+                  <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[11px] text-zinc-400">
+                    <Terminal className="size-3.5 shrink-0" />
+                    <span className="shrink-0">{$('instanceDetail.dock.title')}</span>
+                    <span className="shrink-0 text-zinc-500">{instanceStatusText}</span>
+                    {dockErrCount > 0 && (
+                      <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-[1px] text-[10px] font-medium text-red-400">
+                        {dockErrCount} ERROR
+                      </span>
+                    )}
+                    <div className="relative ml-auto hidden shrink-0 sm:block">
+                      <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-zinc-500" />
+                      <input
+                        value={logQuery}
+                        onChange={(e) => setLogQuery(e.target.value)}
+                        placeholder={$('console.search')}
+                        aria-label={$('console.search')}
+                        spellCheck={false}
+                        className="h-6 w-[130px] rounded border border-zinc-800 bg-[#1C1C21] pr-2 pl-6 font-mono text-[10.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
+                      />
                     </div>
                     <button
                       type="button"
-                      title={$('instanceDetail.copied.tooltip')}
-                      aria-label={$('instanceDetail.copied.tooltip')}
-                      onClick={() => handleCopy(instance.motd || '')}
-                      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      title={$('console.clear')}
+                      aria-label={$('console.clear')}
+                      onClick={() => consoleRef.current?.clear()}
+                      className="grid size-6 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200"
                     >
-                      <Copy className="size-3.5" />
+                      <Eraser className="size-3" />
                     </button>
                   </div>
-                  <div className="mt-3 flex min-h-14 flex-1 items-center rounded-lg border border-zinc-800 bg-[#0B0B0F] px-3 py-2.5 font-mono text-[12.5px] leading-relaxed">
-                    <span className="break-words text-zinc-200">
-                      {instance.motd || $('instanceDetail.value.unset')}
-                    </span>
-                  </div>
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <span className="text-[11px] text-muted-foreground">
-                      {$('instanceDetail.field.onlineMode')} ·{' '}
-                      {instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-[12.5px] text-muted-foreground"
-                      onClick={() => setPropsOpen(true)}
-                    >
-                      <Settings2 className="size-3.5" /> {$('instanceDetail.edit')}
-                    </Button>
-                  </div>
-                </Surface>
+                  <ConsolePanel
+                    ref={consoleRef}
+                    server={server}
+                    instance={instance.name}
+                    instanceStatus={instance.status}
+                    embedded
+                    query={logQuery}
+                    heightClass="flex-1"
+                  />
+                </div>
               </div>
 
               {/* 最近事件：极简时间轴，不放边框表格 */}
-              <Surface className="flex min-h-0 flex-col p-4">
+              <Surface className="flex min-h-[220px] flex-col p-3.5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-[15px] font-semibold tracking-tight">{$('instanceDetail.overview.events')}</h3>
+                    <h3 className="text-[13px] font-semibold tracking-tight">{$('instanceDetail.overview.events')}</h3>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">{$('instanceDetail.overview.eventsHint')}</p>
                   </div>
                   <span className="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full bg-muted/60 px-2 text-[11px] text-muted-foreground">
@@ -1064,10 +1012,10 @@ export function InstanceDetailPage({
                   </span>
                 </div>
 
-                <div className="mt-3 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
+                <div className="mt-2.5 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                   {overviewEvents.length ? (
                     overviewEvents.map((line, i) => (
-                      <div key={i} className="flex items-start gap-2 text-[12.5px] leading-snug">
+                      <div key={i} className="flex items-start gap-2 text-[12px] leading-snug">
                         <span
                           className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
                             /ERROR|Exception|Caused by/.test(line) ? 'bg-destructive' : 'bg-muted-foreground/40'
@@ -1090,30 +1038,17 @@ export function InstanceDetailPage({
                   )}
                 </div>
 
-                <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-border/60 pt-2.5">
                   <span className="text-[11px] text-muted-foreground">
                     {dockErrCount > 0 ? `${dockErrCount} ERROR` : '—'}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setDockOpen(true)}
-                    className="inline-flex items-center gap-1 text-[12.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {$('instanceDetail.overview.openConsole')}
-                    <ChevronRight className="size-3.5" />
-                  </button>
+                  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70">
+                    {$('instanceDetail.dock.title')}
+                    <ChevronRight className="size-3" />
+                  </span>
                 </div>
               </Surface>
-            </div>
-
-            {/* 世界地图：默认收起，点「地图」就地展开 */}
-            <div className={mapOpen ? 'mt-3.5' : 'hidden'}>
-              <MapPanel
-                serverId={server.id}
-                instance={instance.name}
-                visible={mapOpen && tab === 'overview'}
-                heightClass="h-[46vh]"
-              />
+              </div>
             </div>
           </div>
 
@@ -1268,88 +1203,50 @@ export function InstanceDetailPage({
 
           {/* ============ 配置 ============ */}
           <div className={tab === 'config' ? 'h-full overflow-y-auto p-4' : 'hidden'}>
-            <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-3">
-              <Surface className="flex flex-col gap-3 p-4">
-                <SectionHeading
-                  title={$('instanceDetail.serverProperties')}
-                  hint={$('instanceDetail.config.propsDesc')}
-                />
-                <div className="grid gap-1.5 text-[11.5px]">
-                  <KV label={$('instanceDetail.field.port')} mono>
-                    {instance.port}
-                  </KV>
-                  <KV label={$('instanceDetail.config.maxPlayers')} mono>
-                    {instance.maxPlayers}
-                  </KV>
-                  <KV label={$('instanceDetail.field.onlineMode')}>
-                    {instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')}
-                  </KV>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-auto self-start"
-                  onClick={() => setPropsOpen(true)}
-                >
-                  <Settings2 className="size-3.5" /> {$('instanceDetail.config.open')}
-                </Button>
-              </Surface>
-
-              <Surface className="flex flex-col gap-3 p-4">
-                <SectionHeading title={$('instanceDetail.pluginConfig')} hint={$('instanceDetail.config.pluginsDesc')} />
-                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-                  {hasConfigDirs ? $('instanceDetail.config.pluginsHint') : $('instanceDetail.config.noPlugins')}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-auto self-start"
-                  disabled={!hasConfigDirs}
-                  onClick={() => setPlugCfgOpen(true)}
-                >
-                  <Puzzle className="size-3.5" /> {$('instanceDetail.config.open')}
-                </Button>
-              </Surface>
-
-              <Surface className="flex flex-col gap-3 p-4">
-                <SectionHeading title={$('instanceDetail.mods')} hint={$('instanceDetail.config.modsDesc')} />
-                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-                  {$('instanceDetail.config.modsHint')}
-                  {sparkInstalled ? ` · Spark ${$('instanceDetail.value.installed')}` : ''}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-auto self-start"
-                  onClick={() => setModsOpen(true)}
-                >
-                  <Puzzle className="size-3.5" /> {$('instanceDetail.config.open')}
-                </Button>
-              </Surface>
-
-              <Surface className="flex flex-col gap-3 p-4 xl:col-span-3">
-                <SectionHeading title={$('instanceDetail.edit')} hint={$('instanceDetail.config.instanceDesc')} />
-                <div className="grid gap-3 text-[11.5px] md:grid-cols-3">
-                  <Meta label={$('instanceDetail.field.core')} value={coreText} />
-                  <Meta label={$('instanceDetail.field.memoryLimit')} value={fmtMB(instance.memoryMB)} />
-                  <Meta label={$('instanceDetail.field.note')} value={instance.note || $('instanceDetail.value.unset')} />
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-auto self-start"
-                  onClick={() => setEditOpen(true)}
-                >
-                  <Pencil className="size-3.5" /> {$('instanceDetail.edit')}
-                </Button>
-              </Surface>
-            </div>
+            {/* 行式列表：每行一个入口，比 2×2 卡片网格省一半高度，加条目也不挤 */}
+            <Surface flush className="max-w-[820px] divide-y divide-border/60">
+              <ConfigRow
+                icon={Settings2}
+                title={$('instanceDetail.serverProperties')}
+                hint={$('instanceDetail.config.propsDesc')}
+                value={`${instance.port} · ${instance.maxPlayers} · ${
+                  instance.onlineMode ? $('instanceDetail.value.on') : $('instanceDetail.value.off')
+                }`}
+                action={$('instanceDetail.config.open')}
+                onOpen={() => setPropsOpen(true)}
+              />
+              <ConfigRow
+                icon={Puzzle}
+                title={$('instanceDetail.pluginConfig')}
+                hint={hasConfigDirs ? $('instanceDetail.config.pluginsHint') : $('instanceDetail.config.noPlugins')}
+                action={$('instanceDetail.config.open')}
+                disabled={!hasConfigDirs}
+                onOpen={() => setPlugCfgOpen(true)}
+              />
+              <ConfigRow
+                icon={Puzzle}
+                title={$('instanceDetail.mods')}
+                hint={`${$('instanceDetail.config.modsHint')}${
+                  sparkInstalled ? ` · Spark ${$('instanceDetail.value.installed')}` : ''
+                }`}
+                action={$('instanceDetail.config.open')}
+                onOpen={() => setModsOpen(true)}
+              />
+              <ConfigRow
+                icon={Pencil}
+                title={$('instanceDetail.edit')}
+                hint={$('instanceDetail.config.instanceDesc')}
+                value={`${coreText} · ${fmtMB(instance.memoryMB)}`}
+                action={$('instanceDetail.edit')}
+                onOpen={() => setEditOpen(true)}
+              />
+            </Surface>
           </div>
 
           {/* ============ 维护 ============ */}
           <div className={tab === 'maintenance' ? 'h-full overflow-y-auto p-4' : 'hidden'}>
-            <div className="grid gap-3.5 xl:grid-cols-2">
-              <Surface className="flex flex-col gap-3 p-4">
+            <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+              <Surface className="flex flex-col gap-3 p-3.5">
                 <SectionHeading
                   title={$('instanceDetail.panel.tab.automation')}
                   hint={$('instanceDetail.panel.watchdog.desc')}
@@ -1388,7 +1285,7 @@ export function InstanceDetailPage({
                 </div>
               </Surface>
 
-              <Surface className="flex min-h-[280px] flex-col gap-3 p-4">
+              <Surface className="flex min-h-[280px] flex-col gap-3 p-3.5">
                 <SectionHeading
                   title={$('instanceDetail.backups')}
                   hint={$('instanceDetail.maintenance.backupHint')}
@@ -1396,142 +1293,53 @@ export function InstanceDetailPage({
                 <BackupPanel server={server} instance={instance.name} active={tab === 'maintenance'} />
               </Surface>
 
-              <Surface className="flex flex-col gap-3 p-4 xl:col-span-2">
+              {/* 诊断：只是两个入口，结果在全屏浮层里看（46vh 就地展开会把备份列表挤没） */}
+              <Surface className="flex flex-col gap-2 p-3.5 xl:col-span-2">
                 <SectionHeading
                   title={$('instanceDetail.maintenance.diagnostics')}
                   hint={$('instanceDetail.maintenance.diagnosticsHint')}
                 />
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    variant={diag === 'ai' ? 'default' : 'outline'}
+                <div className="divide-y divide-border/60">
+                  <DiagRow
+                    icon={Sparkles}
+                    title={$('instanceDetail.tab.ai')}
+                    desc={$('instanceDetail.maintenance.diagnosticsReady')}
                     disabled={!active}
-                    onClick={() => setDiag((d) => (d === 'ai' ? 'none' : 'ai'))}
-                  >
-                    <Sparkles className="size-3.5" /> {$('instanceDetail.tab.ai')}
-                  </Button>
+                    onOpen={() => setDiag('ai')}
+                  />
                   {sparkInstalled && (
-                    <Button
-                      size="sm"
-                      variant={diag === 'spark' ? 'default' : 'outline'}
+                    <DiagRow
+                      icon={Activity}
+                      title="Spark"
+                      desc={$('instanceDetail.maintenance.diagnosticsReady')}
                       disabled={!active}
-                      onClick={() => setDiag((d) => (d === 'spark' ? 'none' : 'spark'))}
-                    >
-                      <Activity className="size-3.5" /> Spark
-                    </Button>
+                      onOpen={() => setDiag('spark')}
+                    />
                   )}
-                  <span className="text-[11px] text-muted-foreground">
-                    {active ? $('instanceDetail.maintenance.diagnosticsReady') : $('instanceDetail.metric.idle')}
-                  </span>
                 </div>
               </Surface>
             </div>
-
-            <div className={diag === 'ai' ? 'mt-3.5' : 'hidden'}>
-              <AiLogPanel serverId={server.id} instanceName={instance.name} heightClass="h-[46vh]" />
-            </div>
-            <div className={diag === 'spark' ? 'mt-3.5' : 'hidden'}>
-              <SparkPanel
-                serverId={server.id}
-                instance={instance.name}
-                running={running}
-                visible={diag === 'spark'}
-                heightClass="h-[46vh]"
-                onOpenMods={() => setModsOpen(true)}
-              />
-            </div>
           </div>
         </div>
 
-        {/* ---------- 底部终端：收起一行 / 展开半屏或全屏；出现新 ERROR 自动展开 ---------- */}
-        <div className="mt-auto flex shrink-0 flex-col border-t border-zinc-800 bg-[#0B0B0F]">
-          {dockOpen && (
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              title={$('instanceDetail.dock.dragHint')}
-              onPointerDown={startDockDrag}
-              onPointerMove={moveDockDrag}
-              onPointerUp={endDockDrag}
-              onPointerCancel={endDockDrag}
-              className="h-1 shrink-0 cursor-row-resize bg-zinc-800/70 transition-colors hover:bg-zinc-600"
-            />
-          )}
-          <div className="flex h-9 items-center gap-2 px-4 text-[11px] text-zinc-400">
-            <Terminal className="size-3.5 shrink-0" />
-            <span className="shrink-0">{$('instanceDetail.dock.title')}</span>
-            {dockErrCount > 0 && (
-              <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-[1px] text-[10px] font-medium text-red-400">
-                {dockErrCount} ERROR
-              </span>
-            )}
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500" title={dockLastLine}>
-              {dockLastLine || '—'}
-            </span>
-            {dockOpen && (
-              <div className="relative hidden shrink-0 sm:block">
-                <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-zinc-500" />
-                <input
-                  value={logQuery}
-                  onChange={(e) => setLogQuery(e.target.value)}
-                  placeholder={$('console.search')}
-                  aria-label={$('console.search')}
-                  spellCheck={false}
-                  className="h-6 w-[130px] rounded border border-zinc-800 bg-[#1C1C21] pr-2 pl-6 font-mono text-[10.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
-                />
-              </div>
-            )}
-            {dockOpen && (
-              <button
-                type="button"
-                title={$('console.clear')}
-                aria-label={$('console.clear')}
-                onClick={() => consoleRef.current?.clear()}
-                className="grid size-6 shrink-0 place-items-center rounded text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-200"
-              >
-                <Eraser className="size-3" />
-              </button>
-            )}
-            {dockOpen && (
-              <button
-                type="button"
-                onClick={() => {
-                  const max = dockMaxHeight();
-                  setDockHeight((h) =>
-                    h < max * 0.75
-                      ? Math.min(Math.round(window.innerHeight * 0.7), max)
-                      : Math.min(Math.round(window.innerHeight * 0.35), max),
-                  );
-                }}
-                className="shrink-0 rounded px-1.5 py-[2px] text-[10.5px] text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
-              >
-                {dockHeight >= window.innerHeight * 0.5
-                  ? $('instanceDetail.dock.half')
-                  : $('instanceDetail.dock.full')}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setDockOpen((v) => !v)}
-              className="shrink-0 rounded px-1.5 py-[2px] text-[10.5px] text-zinc-300 hover:bg-zinc-800/60 hover:text-zinc-100"
-            >
-              {dockOpen ? $('instanceDetail.dock.collapse') : $('instanceDetail.dock.expand')}
-            </button>
-          </div>
-          {dockOpen && (
-            <div className="min-h-[140px] shrink-0" style={{ height: dockHeight }}>
-              <ConsolePanel
-                ref={consoleRef}
-                server={server}
-                instance={instance.name}
-                instanceStatus={instance.status}
-                embedded
-                query={logQuery}
-                heightClass="h-full"
-              />
-            </div>
-          )}
-        </div>
+        {/* 全屏浮层：地图 / 诊断结果这类重内容，盖住页面专注看，Esc 关闭（不挤压当前页签） */}
+        <FullScreenOverlay open={mapOpen} title={$('instanceDetail.tab.map')} onClose={() => setMapOpen(false)}>
+          <MapPanel serverId={server.id} instance={instance.name} visible={mapOpen} heightClass="h-full" />
+        </FullScreenOverlay>
+        <FullScreenOverlay open={diag === 'ai'} title={$('instanceDetail.tab.ai')} onClose={() => setDiag('none')}>
+          <AiLogPanel serverId={server.id} instanceName={instance.name} heightClass="h-full" />
+        </FullScreenOverlay>
+        <FullScreenOverlay open={diag === 'spark'} title="Spark" onClose={() => setDiag('none')}>
+          <SparkPanel
+            serverId={server.id}
+            instance={instance.name}
+            running={running}
+            visible={diag === 'spark'}
+            heightClass="h-full"
+            onOpenMods={() => setModsOpen(true)}
+          />
+        </FullScreenOverlay>
+
       </div>
 
       <InstanceControlPanel
@@ -1542,18 +1350,11 @@ export function InstanceDetailPage({
         active={active}
         busy={busy}
         frpInfo={frpInfo}
-        hasConfigDirs={hasConfigDirs}
         watchdogOn={watchdogOn}
         backupOn={backupOn}
         onCopy={handleCopy}
-        onEdit={() => openFromPanel(() => setEditOpen(true))}
-        onProps={() => openFromPanel(() => setPropsOpen(true))}
-        onPluginConfig={() => openFromPanel(() => setPlugCfgOpen(true))}
         onWatchdog={() => openFromPanel(() => setWatchdogOpen(true))}
         onBackupSchedule={() => openFromPanel(() => setBackupScheduleOpen(true))}
-        onBackup={() => openFromPanel(() => setBackupOpen(true))}
-        onStats={() => openFromPanel(() => setStatsOpen(true))}
-        onBans={() => openFromPanel(() => setBansOpen(true))}
         onReinstall={() => openFromPanel(() => setReinstallOpen(true))}
         onPanelInstall={() => openFromPanel(() => void panelInstall())}
         onDelete={() => openFromPanel(() => setDeleteOpen(true))}
@@ -1674,15 +1475,6 @@ export function InstanceDetailPage({
           onOpenChange={setBansOpen}
         />
       )}
-      {server?.isLocal && (
-        <InstanceFrpDialog
-          open={frpOpen}
-          onOpenChange={setFrpOpen}
-          serverId={serverId}
-          instanceName={instanceName}
-          onSaved={setFrpInfo}
-        />
-      )}
     </div>
   );
 }
@@ -1690,10 +1482,22 @@ export function InstanceDetailPage({
 /* ---------------- 局部组件（只服务本页，不改动通用组件） ---------------- */
 
 /**
- * 指标卡外壳（/proto 第六版驾驶舱）：11px 大写标签 + 右上图标胶囊 + 24px 大数字 + 底部辅助行。
- * 高度写死 104px 是为了运行态/停止态切换时卡片不跳动。
+ * 指标条：一条 72px 的分段 strip，取代三张各自带卡壳的 104px 卡——
+ * 省掉卡与卡之间的间距/圆角空耗，把 36px 竖向空间还给内容区。
+ * 高度写死仍然是为了防跳动；分段之间用 1px 发丝线，不用分割卡片。
  */
-function MetricCard({
+function MetricStrip({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="shrink-0 px-4 pt-3 pb-3">
+      <div className="grid h-[72px] grid-cols-3 overflow-hidden rounded-lg border border-border/70 bg-card shadow-xs sm:divide-x sm:divide-border/60">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** 指标条的一格：10.5px 大写标签 + 20px 大数字 + 辅助行 */
+function MetricCell({
   icon,
   label,
   children,
@@ -1703,25 +1507,21 @@ function MetricCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-[104px] flex-col justify-between rounded-xl border border-border/70 bg-card p-4 shadow-xs">
-      <div className="flex items-start justify-between gap-2">
-        <p className="truncate text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
-        {icon && (
-          <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-muted/50 text-muted-foreground ring-1 ring-border/60 [&_svg]:size-4">
-            {icon}
-          </span>
-        )}
+    <div className="flex min-w-0 flex-col justify-center gap-1.5 px-3.5">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <p className="truncate text-[10.5px] font-medium tracking-wider text-muted-foreground uppercase">{label}</p>
+        {icon && <span className="ml-auto shrink-0 text-muted-foreground/60 [&_svg]:size-3">{icon}</span>}
       </div>
-      <div className="flex min-w-0 flex-col gap-1.5">{children}</div>
+      <div className="flex min-w-0 flex-col gap-1">{children}</div>
     </div>
   );
 }
 
-/** 数值行：24px mono + 小字号后缀 */
+/** 数值行：20px mono + 小字号后缀（strip 里没有卡壳撑场，字号略收一档） */
 function MetricValue({ value, suffix }: { value: string; suffix?: string }) {
   return (
-    <div className="flex h-6 shrink-0 items-baseline gap-1 overflow-hidden">
-      <span className="truncate text-[24px] leading-none font-semibold tracking-tight tabular-nums">{value}</span>
+    <div className="flex h-5 shrink-0 items-baseline gap-1 overflow-hidden">
+      <span className="truncate text-[20px] leading-none font-semibold tracking-tight tabular-nums">{value}</span>
       {suffix && <span className="shrink-0 text-[11px] text-muted-foreground">{suffix}</span>}
     </div>
   );
@@ -1772,14 +1572,115 @@ function Dot({ tone = 'bg-emerald-500' }: { tone?: string }) {
   return <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone}`} />;
 }
 
-/** 状态卡里的一格元数据：11px 大写标签 + 13px 值 */
-function Meta({ label, value }: { label: string; value: React.ReactNode }) {
+/** 配置页的一行入口：icon + 标题 + 说明 + 当前值摘要 + 打开按钮 */
+function ConfigRow({
+  icon: Icon,
+  title,
+  hint,
+  value,
+  action,
+  disabled,
+  onOpen,
+}: {
+  icon: typeof Settings2;
+  title: string;
+  hint: string;
+  value?: string;
+  action: string;
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
   return (
-    <div className="min-w-0">
-      <span className="mb-1 block text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-        {label}
+    <div className="flex items-center gap-3 px-4 py-2.5">
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted/50 text-muted-foreground">
+        <Icon className="size-3.5" />
       </span>
-      <span className="block truncate text-[13px] font-medium">{value}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-medium">{title}</p>
+        <p className="truncate text-[11px] text-muted-foreground">{hint}</p>
+      </div>
+      {value && (
+        <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground sm:block">{value}</span>
+      )}
+      <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={disabled} onClick={onOpen}>
+        {action}
+      </Button>
+    </div>
+  );
+}
+
+/** 维护页诊断的一行入口 */
+function DiagRow({
+  icon: Icon,
+  title,
+  desc,
+  disabled,
+  onOpen,
+}: {
+  icon: typeof Sparkles;
+  title: string;
+  desc: string;
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 py-2.5">
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted/50 text-muted-foreground">
+        <Icon className="size-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-medium">{title}</p>
+        <p className="truncate text-[11px] text-muted-foreground">{desc}</p>
+      </div>
+      <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={disabled} onClick={onOpen}>
+        {$('instanceDetail.config.open')}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * 全屏浮层：地图 / AI 分析 / Spark 这类重内容的家。
+ * 为什么是全屏而不是 46vh 就地展开：就地展开会把当前页签挤成残废；
+ * 为什么不是抽屉：这些内容本身就占满一屏（地图/长文结果），抽屉反而窄。
+ * Esc / 右上角关闭；fixed 定位不受页面 overflow-hidden 影响。
+ */
+function FullScreenOverlay({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-50 flex flex-col bg-background">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/70 px-4">
+        <h2 className="truncate text-[13px] font-semibold">{title}</h2>
+        <button
+          type="button"
+          onClick={onClose}
+          title={$('common.close')}
+          aria-label={$('common.close')}
+          className="ml-auto grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-4" />
+        </button>
+      </header>
+      <div className="min-h-0 flex-1 p-3">{children}</div>
     </div>
   );
 }
@@ -1994,162 +1895,6 @@ function PlayerActionDialog({
           >
             {busy ? $('instanceDetail.busy') : $('confirm.ok')}
           </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-/**
- * 单实例 frp 端口映射对话框。
- *
- * 为什么要做成实例级：面板设置里的「代理列表」要求手填 `名称,本地端口,远程端口`，
- * 本地端口写错/远程端口撞车都只能等 frpc 启动失败才发现。这里本地端口直接取实例端口，
- * 远程端口在保存前做冲突检查，保存后自动重启 frpc 应用。
- */
-function InstanceFrpDialog({
-  open,
-  onOpenChange,
-  serverId,
-  instanceName,
-  onSaved,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  serverId: string;
-  instanceName: string;
-  onSaved: (info: InstanceFrpInfo) => void;
-}) {
-  const { success, error } = useToastHelpers();
-  const [info, setInfo] = useState<InstanceFrpInfo | null>(null);
-  const [port, setPort] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setInfo(null);
-    getInstanceFrp(serverId, instanceName)
-      .then((r) => {
-        setInfo(r);
-        setPort(String(r.remotePort || r.localPort || ''));
-      })
-      .catch((e) => error($('instanceDetail.frp.title'), errText(e)));
-  }, [open, serverId, instanceName]);
-
-  const save = async (enabled: boolean) => {
-    if (!info) return;
-    setBusy(true);
-    try {
-      const r = await saveInstanceFrp(serverId, instanceName, {
-        enabled,
-        remotePort: Number(port) || 0,
-      });
-      if (r.error) {
-        error($('instanceDetail.frp.title'), r.error);
-      } else {
-        success(enabled ? $('instanceDetail.frp.saved') : $('instanceDetail.frp.unboundToast'));
-      }
-      setInfo(r);
-      onSaved(r);
-      if (enabled) onOpenChange(false);
-    } catch (e) {
-      error($('instanceDetail.frp.title'), errText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{$('instanceDetail.frp.title')}</AlertDialogTitle>
-          <AlertDialogDescription>{$('instanceDetail.frp.desc')}</AlertDialogDescription>
-        </AlertDialogHeader>
-
-        {!info ? (
-          <p className="text-xs text-muted-foreground">{$('common.loading')}</p>
-        ) : !info.supported ? (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {info.reason === 'sakura' ? $('instanceDetail.frp.sakura') : $('instanceDetail.frp.notLocal')}
-          </p>
-        ) : !info.frpEnabled ? (
-          <div className="grid gap-2">
-            <p className="text-xs leading-relaxed text-muted-foreground">{$('instanceDetail.frp.notEnabled')}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-fit"
-              onClick={() => {
-                onOpenChange(false);
-                navigate('/settings');
-              }}
-            >
-              {$('instanceDetail.frp.goSettings')}
-            </Button>
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">{$('instanceDetail.frp.localPort')}</span>
-              <Input value={String(info.localPort)} disabled readOnly className="font-mono" />
-            </label>
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">{$('instanceDetail.frp.target')}</span>
-              <Input
-                value={`${info.targetHost}:${info.localPort}`}
-                disabled
-                readOnly
-                className="font-mono"
-              />
-              {info.targetHost !== '127.0.0.1' && (
-                <span className="text-[11px] leading-relaxed text-muted-foreground">
-                  {$('instanceDetail.frp.lanHint', info.targetHost, String(info.localPort))}
-                </span>
-              )}
-            </label>
-            <label className="grid gap-1 text-xs">
-              <span className="text-muted-foreground">{$('instanceDetail.frp.remotePort')}</span>
-              <Input
-                inputMode="numeric"
-                value={port}
-                onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, ''))}
-                placeholder={String(info.localPort)}
-                disabled={busy}
-                className="font-mono"
-              />
-              <span className="text-[11px] text-muted-foreground">{$('instanceDetail.frp.remotePortHint')}</span>
-            </label>
-            <div className="rounded-md bg-muted px-3 py-2 text-xs">
-              <span className="text-muted-foreground">{$('instanceDetail.frp.publicAddress')}：</span>
-              <span className="font-mono">
-                {info.serverAddr ? `${info.serverAddr}:${port || info.localPort}` : '—'}
-              </span>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              {info.frpcRunning ? $('instanceDetail.frp.frpcRunning') : $('instanceDetail.frp.frpcStopped')}
-            </p>
-          </div>
-        )}
-
-        <AlertDialogFooter>
-          {info?.supported && info.frpEnabled && info.bound && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => save(false)}>
-              {$('instanceDetail.frp.unbind')}
-            </Button>
-          )}
-          <AlertDialogCancel disabled={busy}>{$('common.cancel')}</AlertDialogCancel>
-          {info?.supported && info.frpEnabled && (
-            <AlertDialogAction
-              disabled={busy || !port}
-              onClick={(e) => {
-                e.preventDefault();
-                void save(true);
-              }}
-            >
-              {$('common.save')}
-            </AlertDialogAction>
-          )}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

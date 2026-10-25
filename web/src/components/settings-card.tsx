@@ -1,66 +1,51 @@
-// 设置页通用卡片与表单原语：面板设置与「网络助手」两张卡共用。
+// 设置页通用原语：分区块 + 字段行 + 状态胶囊，面板设置与「网络助手」共用。
 //
-// 为什么单独抽出来：DDNS / frp 卡片放在独立文件里（panel-settings-network.tsx），
-// 如果直接反向 import panel-settings.tsx 会形成循环依赖；这几个原语本身也没有
-// 任何状态，抽成无依赖组件最干净。
+// 2026-10-25 改版（去卡中卡）：设置页的分区骨架是「左目录 + 右侧全量分区」，
+// 分区内部**不再套卡片**——原来每块都是 rounded-xl + border + shadow + 彩色图标，
+// 一个分区里叠三四张卡，既挤又和新版灰阶视觉冲突。
+// 现在靠层级分组：13px 区块标题 → 11.5px 字段标签 → 13px 控件值，
+// 颜色只留给状态（StateChip / 错误文字）。
+//
+// 为什么原语单独成文件：DDNS / frp 在 panel-settings-network.tsx 里，
+// 直接反向 import panel-settings.tsx 会形成循环依赖。
 
 import { Label } from '@/components/ui/label';
+import { cn } from 'cn';
 
-// 卡片主题色：图标底色 + 描边，让各设置分区一眼可辨（Tailwind 需静态类名，故用查表）
-export const ACCENTS = {
-  security: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
-  network: 'border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400',
-  mail: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  notify: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  ai: 'border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  update: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
-  language: 'border-pink-500/25 bg-pink-500/10 text-pink-600 dark:text-pink-400',
-  info: 'border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-400',
-} as const;
-
-export type Accent = keyof typeof ACCENTS;
-
-/** 统一卡片：图标 + 标题 + 说明 + 右上角状态 + 内容 */
+/** 设置分块：13px 标题 + 11px 说明 + 右上状态/操作；内容不套卡片壳 */
 export function SettingsCard({
   title,
   description,
-  icon,
   status,
-  accent,
+  actions,
   children,
   className = '',
 }: {
   title: string;
   description?: string;
-  icon: React.ReactNode;
   status?: React.ReactNode;
-  accent?: Accent;
+  /** 标题行右侧的操作按钮（与状态互斥使用，谁重要放谁） */
+  actions?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }) {
-  const iconClass = accent ? ACCENTS[accent] : 'bg-muted/60 text-foreground';
   return (
-    <section className={`rounded-xl border border-border/70 bg-card shadow-xs ${className}`}>
-      <div className="flex flex-col gap-3.5 p-4">
-        {/* 头部（固定）：28px 图标胶囊 + 13px 标题 + 11px 说明 */}
-        <div className="flex items-start gap-2.5">
-          <span className={`grid size-7 shrink-0 place-items-center rounded-lg border [&_svg]:size-4 ${iconClass}`}>
-            {icon}
-          </span>
-          <div className="min-w-0 flex-1">
-            <b className="text-[13px] font-semibold">{title}</b>
-            {description && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{description}</p>}
-          </div>
-          {status && <div className="shrink-0 self-start">{status}</div>}
+    <section className={cn('grid gap-3', className)}>
+      <header className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[13px] font-semibold tracking-tight">{title}</h3>
+          {description && (
+            <p className="mt-0.5 max-w-[560px] text-[11px] leading-relaxed text-muted-foreground">{description}</p>
+          )}
         </div>
-        {/* 内容区拉伸，按钮沉底 */}
-        <div className="flex flex-1 flex-col gap-3.5">{children}</div>
-      </div>
+        {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : status ? <div className="shrink-0 pt-0.5">{status}</div> : null}
+      </header>
+      <div className="grid gap-3">{children}</div>
     </section>
   );
 }
 
-/** 字段：标签 + 可选提示/错误 + 控件 */
+/** 字段：11.5px 标签 + 控件 + 提示/错误在控件下方（保证同一排的输入框顶边对齐） */
 export function Field({
   htmlFor,
   label,
@@ -78,28 +63,42 @@ export function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className={`grid content-start gap-1.5 ${className}`}>
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <Label htmlFor={htmlFor}>{label}</Label>
-        {hint && !error && <span className="text-[11px] text-muted-foreground">{hint}</span>}
-        {error && <span className="text-[11px] text-destructive">{error}</span>}
-      </div>
+    <div className={cn('grid content-start gap-1.5', className)}>
+      <Label htmlFor={htmlFor} className="text-[11.5px] font-normal text-muted-foreground">
+        {label}
+      </Label>
       {children}
+      {error ? (
+        <span className="text-[10.5px] leading-4 text-destructive">{error}</span>
+      ) : hint ? (
+        <span className="text-[10.5px] leading-4 text-muted-foreground/70">{hint}</span>
+      ) : null}
     </div>
   );
 }
 
-/** 卡片右上角的配置状态小标 */
+/** 表单双列：620 上限，短字段不会被拉成整行宽 */
+export function FormGrid({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn('grid max-w-[620px] gap-x-4 gap-y-3 sm:grid-cols-2', className)}>{children}</div>;
+}
+
+/** 字段行的操作条：按钮靠右、与字段同宽 */
+export function FormActions({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn('flex max-w-[620px] flex-wrap items-center justify-end gap-2', className)}>{children}</div>;
+}
+
+/** 区块右上角的配置状态小标 */
 export function StateChip({ ok, okText, badText }: { ok: boolean; okText: string; badText: string }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+      className={cn(
+        'inline-flex h-[18px] items-center gap-1.5 rounded border px-1.5 text-[10.5px] leading-none font-medium',
         ok
-          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-          : 'border-border bg-muted/50 text-muted-foreground'
-      }`}
+          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+          : 'border-border bg-muted/50 text-muted-foreground',
+      )}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-muted-foreground/60'}`} />
+      <span className={cn('size-1.5 rounded-full', ok ? 'bg-emerald-500' : 'bg-muted-foreground/60')} />
       {ok ? okText : badText}
     </span>
   );

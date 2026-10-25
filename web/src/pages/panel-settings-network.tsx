@@ -1,16 +1,20 @@
-// 面板设置里的「网络助手」两张卡：动态 DNS 与 frp 客户端托管（实验功能）。
+// 面板设置里的「网络助手」两块：动态 DNS 与 frp 客户端托管（实验功能）。
 //
-// 单独成文件的原因：这两块的状态（表单、密钥、运行状态）比其它设置卡多得多，
+// 单独成文件的原因：这两块的状态（表单、密钥、运行状态）比其它设置块多得多，
 // 塞进 panel-settings.tsx 会让那个文件更难读。共用原语见 components/settings-card.tsx。
+//
+// 2026-10-25：跟随设置页去卡中卡——不再画边框/阴影/彩色图标；
+// DDNS 的 TTL / 同步间隔 / 取址方式属于低频调参，收进「高级」折叠，首屏只留服务商、域名与凭据。
 
 import { useCallback, useEffect, useState } from 'react';
-import { RadioTower, Waypoints } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Field, SettingsCard, StateChip, type Accent } from '@/components/settings-card';
+import { Field, FormActions, FormGrid, SettingsCard, StateChip } from '@/components/settings-card';
+import { FrpImportDialog } from '@/components/frp-import-dialog';
 import {
   checkDdnsIp,
   errText,
@@ -30,13 +34,15 @@ import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
 
 // ---------- 动态 DNS ----------
-export function DdnsCard({ accent, className = '' }: { accent?: Accent; className?: string }) {
+export function DdnsCard({ className = '' }: { className?: string }) {
   const { success, error } = useToastHelpers();
   const [cfg, setCfg] = useState<DdnsConfig | null>(null);
   const [status, setStatus] = useState<DdnsStatus | null>(null);
   const [loadErr, setLoadErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [checkMsg, setCheckMsg] = useState('');
+  // 低频调参（TTL / 间隔 / 取址方式）默认折叠：首屏只留服务商、域名与凭据
+  const [advanced, setAdvanced] = useState(false);
   // 密钥字段：留空 = 保留后端已保存的值（与 SMTP 密码同一约定）
   const [cfToken, setCfToken] = useState('');
   const [dpToken, setDpToken] = useState('');
@@ -98,8 +104,6 @@ export function DdnsCard({ accent, className = '' }: { accent?: Accent; classNam
     <SettingsCard
       title={$('panelSettings.ddns.title')}
       description={$('panelSettings.ddns.desc')}
-      icon={<Waypoints className="h-4 w-4" />}
-      accent={accent}
       className={className}
       status={
         <StateChip
@@ -113,17 +117,17 @@ export function DdnsCard({ accent, className = '' }: { accent?: Accent; classNam
     </SettingsCard>
   );
 
-  if (loadErr) return wrap(<p className="text-xs text-destructive">{loadErr}</p>);
-  if (!cfg) return wrap(<p className="text-xs text-muted-foreground">{$('common.loading')}</p>);
+  if (loadErr) return wrap(<p className="text-[12px] text-destructive">{loadErr}</p>);
+  if (!cfg) return wrap(<p className="text-[12px] text-muted-foreground">{$('common.loading')}</p>);
 
   return wrap(
     <>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex max-w-[620px] items-center gap-2 border-b border-border/60 pb-2.5 text-[12.5px]">
         <Switch checked={cfg.enabled} onCheckedChange={(v) => patch({ enabled: v })} />
         <span>{$('panelSettings.ddns.enabled')}</span>
       </label>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <FormGrid>
         <Field label={$('panelSettings.ddns.provider')}>
           <Select value={cfg.provider} onValueChange={(v) => patch({ provider: v as DdnsConfig['provider'] })}>
             <SelectTrigger className="w-full">
@@ -149,160 +153,183 @@ export function DdnsCard({ accent, className = '' }: { accent?: Accent; classNam
             placeholder="mc.example.com"
           />
         </Field>
-        <Field label={$('panelSettings.ddns.ttl')} htmlFor="ddns-ttl">
-          <Input
-            id="ddns-ttl"
-            inputMode="numeric"
-            value={String(cfg.ttl)}
-            onChange={(e) => patch({ ttl: Number(e.target.value.replace(/[^\d]/g, '')) || 0 })}
-          />
-        </Field>
-        <Field
-          label={$('panelSettings.ddns.interval')}
-          hint={$('panelSettings.ddns.intervalHint')}
-          htmlFor="ddns-interval"
-        >
-          <Input
-            id="ddns-interval"
-            inputMode="numeric"
-            value={String(cfg.intervalSec)}
-            onChange={(e) => patch({ intervalSec: Number(e.target.value.replace(/[^\d]/g, '')) || 0 })}
-          />
-        </Field>
-      </div>
 
-      <div className="grid gap-3 rounded-lg bg-muted/40 px-3 py-2.5">
-        <div className="flex flex-wrap items-center gap-5 text-sm">
-          <label className="flex items-center gap-2">
-            <Checkbox checked={cfg.ipv4} onCheckedChange={(v) => patch({ ipv4: v === true })} />
-            {$('panelSettings.ddns.ipv4')}
-          </label>
-          <label className="flex items-center gap-2">
-            <Checkbox checked={cfg.ipv6} onCheckedChange={(v) => patch({ ipv6: v === true })} />
-            {$('panelSettings.ddns.ipv6')}
-          </label>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label={$('panelSettings.ddns.source')}>
-            <Select value={cfg.source} onValueChange={(v) => patch({ source: v as DdnsConfig['source'] })}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="api">{$('panelSettings.ddns.source.api')}</SelectItem>
-                <SelectItem value="nic">{$('panelSettings.ddns.source.nic')}</SelectItem>
-                <SelectItem value="command">{$('panelSettings.ddns.source.command')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          {cfg.source === 'api' && (
-            <Field label={$('panelSettings.ddns.sourceUrl')} htmlFor="ddns-src-url">
+        {cfg.provider === 'cloudflare' && (
+          <>
+            <Field
+              label={$('panelSettings.ddns.token')}
+              hint={cfg.cloudflare.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
+              htmlFor="ddns-cf-token"
+            >
+              <Input id="ddns-cf-token" type="password" value={cfToken} onChange={(e) => setCfToken(e.target.value)} />
+            </Field>
+            <Field label={$('panelSettings.ddns.zoneId')} htmlFor="ddns-cf-zone">
               <Input
-                id="ddns-src-url"
-                value={cfg.sourceUrl}
-                onChange={(e) => patch({ sourceUrl: e.target.value })}
-                placeholder="https://api.ipify.org"
+                id="ddns-cf-zone"
+                value={cfg.cloudflare.zoneId}
+                onChange={(e) => patch({ cloudflare: { ...cfg.cloudflare, zoneId: e.target.value } })}
               />
             </Field>
-          )}
-          {cfg.source === 'command' && (
-            <Field label={$('panelSettings.ddns.command')} htmlFor="ddns-src-cmd">
+          </>
+        )}
+
+        {cfg.provider === 'dnspod' && (
+          <>
+            <Field label={$('panelSettings.ddns.dnspodId')} htmlFor="ddns-dp-id">
               <Input
-                id="ddns-src-cmd"
-                value={cfg.command}
-                onChange={(e) => patch({ command: e.target.value })}
-                placeholder="curl -4 -s ifconfig.me"
+                id="ddns-dp-id"
+                value={cfg.dnspod.id}
+                onChange={(e) => patch({ dnspod: { ...cfg.dnspod, id: e.target.value } })}
               />
             </Field>
-          )}
-        </div>
-      </div>
+            <Field
+              label={$('panelSettings.ddns.dnspodToken')}
+              hint={cfg.dnspod.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
+              htmlFor="ddns-dp-token"
+            >
+              <Input id="ddns-dp-token" type="password" value={dpToken} onChange={(e) => setDpToken(e.target.value)} />
+            </Field>
+            <Field label={$('panelSettings.ddns.root')} htmlFor="ddns-dp-root">
+              <Input
+                id="ddns-dp-root"
+                value={cfg.dnspod.root}
+                onChange={(e) => patch({ dnspod: { ...cfg.dnspod, root: e.target.value } })}
+                placeholder="example.com"
+              />
+            </Field>
+            <Field label={$('panelSettings.ddns.line')} htmlFor="ddns-dp-line">
+              <Input
+                id="ddns-dp-line"
+                value={cfg.dnspod.line}
+                onChange={(e) => patch({ dnspod: { ...cfg.dnspod, line: e.target.value } })}
+              />
+            </Field>
+          </>
+        )}
 
-      {cfg.provider === 'cloudflare' && (
-        <div className="grid gap-3 md:grid-cols-2">
+        {cfg.provider === 'duckdns' && (
           <Field
             label={$('panelSettings.ddns.token')}
-            hint={cfg.cloudflare.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
-            htmlFor="ddns-cf-token"
+            hint={cfg.duckdns.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
+            htmlFor="ddns-dd-token"
+            className="sm:col-span-2"
           >
-            <Input id="ddns-cf-token" type="password" value={cfToken} onChange={(e) => setCfToken(e.target.value)} />
-          </Field>
-          <Field label={$('panelSettings.ddns.zoneId')} htmlFor="ddns-cf-zone">
             <Input
-              id="ddns-cf-zone"
-              value={cfg.cloudflare.zoneId}
-              onChange={(e) => patch({ cloudflare: { ...cfg.cloudflare, zoneId: e.target.value } })}
+              id="ddns-dd-token"
+              type="password"
+              className="sm:max-w-[320px]"
+              value={ddToken}
+              onChange={(e) => setDdToken(e.target.value)}
             />
           </Field>
+        )}
+
+        {cfg.provider === 'callback' && (
+          <>
+            <Field label={$('panelSettings.ddns.callbackUrl')} htmlFor="ddns-cb-url">
+              <Input
+                id="ddns-cb-url"
+                value={cfg.callback.url}
+                onChange={(e) => patch({ callback: { ...cfg.callback, url: e.target.value } })}
+                placeholder="https://example.com/ddns?ip=#{ip}"
+              />
+            </Field>
+            <Field label={$('panelSettings.ddns.callbackBody')} htmlFor="ddns-cb-body">
+              <Input
+                id="ddns-cb-body"
+                value={cfg.callback.body}
+                onChange={(e) => patch({ callback: { ...cfg.callback, body: e.target.value } })}
+                placeholder='{"ip":"#{ip}"}'
+              />
+            </Field>
+          </>
+        )}
+      </FormGrid>
+
+      {/* 低频调参收进「高级」：TTL / 间隔 / 协议 / 取址方式都不是日常要改的 */}
+      <button
+        type="button"
+        onClick={() => setAdvanced((v) => !v)}
+        aria-expanded={advanced}
+        className="flex w-fit items-center gap-1 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {$('panelSettings.common.advanced')}
+        <ChevronDown className={`size-3 transition-transform ${advanced ? 'rotate-180' : ''}`} />
+      </button>
+      {advanced && (
+        <div className="grid max-w-[620px] gap-3 border-l border-border/60 pl-3">
+          <FormGrid className="max-w-none">
+            <Field label={$('panelSettings.ddns.ttl')} htmlFor="ddns-ttl">
+              <Input
+                id="ddns-ttl"
+                inputMode="numeric"
+                value={String(cfg.ttl)}
+                onChange={(e) => patch({ ttl: Number(e.target.value.replace(/[^\d]/g, '')) || 0 })}
+              />
+            </Field>
+            <Field
+              label={$('panelSettings.ddns.interval')}
+              hint={$('panelSettings.ddns.intervalHint')}
+              htmlFor="ddns-interval"
+            >
+              <Input
+                id="ddns-interval"
+                inputMode="numeric"
+                value={String(cfg.intervalSec)}
+                onChange={(e) => patch({ intervalSec: Number(e.target.value.replace(/[^\d]/g, '')) || 0 })}
+              />
+            </Field>
+            <Field label={$('panelSettings.ddns.source')}>
+              <Select value={cfg.source} onValueChange={(v) => patch({ source: v as DdnsConfig['source'] })}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="api">{$('panelSettings.ddns.source.api')}</SelectItem>
+                  <SelectItem value="nic">{$('panelSettings.ddns.source.nic')}</SelectItem>
+                  <SelectItem value="command">{$('panelSettings.ddns.source.command')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11.5px] text-muted-foreground">{$('panelSettings.ddns.ipv4')} / IPv6</span>
+              <div className="flex flex-wrap items-center gap-5 pt-1 text-[12px]">
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={cfg.ipv4} onCheckedChange={(v) => patch({ ipv4: v === true })} />
+                  {$('panelSettings.ddns.ipv4')}
+                </label>
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={cfg.ipv6} onCheckedChange={(v) => patch({ ipv6: v === true })} />
+                  {$('panelSettings.ddns.ipv6')}
+                </label>
+              </div>
+            </div>
+            {cfg.source === 'api' && (
+              <Field label={$('panelSettings.ddns.sourceUrl')} htmlFor="ddns-src-url" className="sm:col-span-2">
+                <Input
+                  id="ddns-src-url"
+                  value={cfg.sourceUrl}
+                  onChange={(e) => patch({ sourceUrl: e.target.value })}
+                  placeholder="https://api.ipify.org"
+                />
+              </Field>
+            )}
+            {cfg.source === 'command' && (
+              <Field label={$('panelSettings.ddns.command')} htmlFor="ddns-src-cmd" className="sm:col-span-2">
+                <Input
+                  id="ddns-src-cmd"
+                  value={cfg.command}
+                  onChange={(e) => patch({ command: e.target.value })}
+                  placeholder="curl -4 -s ifconfig.me"
+                />
+              </Field>
+            )}
+          </FormGrid>
         </div>
       )}
 
-      {cfg.provider === 'dnspod' && (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label={$('panelSettings.ddns.dnspodId')} htmlFor="ddns-dp-id">
-            <Input
-              id="ddns-dp-id"
-              value={cfg.dnspod.id}
-              onChange={(e) => patch({ dnspod: { ...cfg.dnspod, id: e.target.value } })}
-            />
-          </Field>
-          <Field
-            label={$('panelSettings.ddns.dnspodToken')}
-            hint={cfg.dnspod.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
-            htmlFor="ddns-dp-token"
-          >
-            <Input id="ddns-dp-token" type="password" value={dpToken} onChange={(e) => setDpToken(e.target.value)} />
-          </Field>
-          <Field label={$('panelSettings.ddns.root')} htmlFor="ddns-dp-root">
-            <Input
-              id="ddns-dp-root"
-              value={cfg.dnspod.root}
-              onChange={(e) => patch({ dnspod: { ...cfg.dnspod, root: e.target.value } })}
-              placeholder="example.com"
-            />
-          </Field>
-          <Field label={$('panelSettings.ddns.line')} htmlFor="ddns-dp-line">
-            <Input
-              id="ddns-dp-line"
-              value={cfg.dnspod.line}
-              onChange={(e) => patch({ dnspod: { ...cfg.dnspod, line: e.target.value } })}
-            />
-          </Field>
-        </div>
-      )}
-
-      {cfg.provider === 'duckdns' && (
-        <Field
-          label={$('panelSettings.ddns.token')}
-          hint={cfg.duckdns.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
-          htmlFor="ddns-dd-token"
-        >
-          <Input id="ddns-dd-token" type="password" value={ddToken} onChange={(e) => setDdToken(e.target.value)} />
-        </Field>
-      )}
-
-      {cfg.provider === 'callback' && (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label={$('panelSettings.ddns.callbackUrl')} htmlFor="ddns-cb-url">
-            <Input
-              id="ddns-cb-url"
-              value={cfg.callback.url}
-              onChange={(e) => patch({ callback: { ...cfg.callback, url: e.target.value } })}
-              placeholder="https://example.com/ddns?ip=#{ip}"
-            />
-          </Field>
-          <Field label={$('panelSettings.ddns.callbackBody')} htmlFor="ddns-cb-body">
-            <Input
-              id="ddns-cb-body"
-              value={cfg.callback.body}
-              onChange={(e) => patch({ callback: { ...cfg.callback, body: e.target.value } })}
-              placeholder='{"ip":"#{ip}"}'
-            />
-          </Field>
-        </div>
-      )}
-
-      <div className="grid gap-1 rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+      {/* 同步状态：一行摘要 + 最近几行日志，不再用带边框的灰块 */}
+      <div className="grid max-w-[620px] gap-0.5 text-[10.5px] leading-4 text-muted-foreground">
         {checkMsg && <span className="text-foreground">{checkMsg}</span>}
         <span>
           {$('panelSettings.ddns.status')}：
@@ -317,17 +344,17 @@ export function DdnsCard({ accent, className = '' }: { accent?: Accent; classNam
           </span>
         )}
         {!!status?.log?.length && (
-          <span className="whitespace-pre-wrap break-all font-mono opacity-80">
+          <span className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono opacity-80">
             {status.log
               .slice(-5)
               .map((l) => l.text)
               .join('\n')}
           </span>
         )}
+        <span className="mt-1">{$('panelSettings.ddns.natHint')}</span>
       </div>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">{$('panelSettings.ddns.natHint')}</p>
 
-      <div className="mt-auto flex flex-wrap justify-end gap-2">
+      <FormActions>
         <Button
           variant="outline"
           size="sm"
@@ -390,7 +417,7 @@ export function DdnsCard({ accent, className = '' }: { accent?: Accent; classNam
         <Button size="sm" disabled={busy} onClick={save}>
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
     </>,
   );
 }
@@ -431,7 +458,7 @@ function parseProxies(
   return out;
 }
 
-export function FrpCard({ accent, className = '' }: { accent?: Accent; className?: string }) {
+export function FrpCard({ className = '' }: { className?: string }) {
   const { success, error } = useToastHelpers();
   const [cfg, setCfg] = useState<FrpConfig | null>(null);
   const [status, setStatus] = useState<FrpStatus | null>(null);
@@ -440,6 +467,7 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
   const [sakuraToken, setSakuraToken] = useState('');
   const [authToken, setAuthToken] = useState('');
   const [proxiesText, setProxiesText] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -455,6 +483,23 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // 8 秒轮询：frpc 是后台进程，崩溃/重连成功/端口换绑都不会让页面自己知道。
+  // 页面隐藏时停止轮询、切回来立刻补拉一次（与实例页 task-log 的做法一致，不额外上 SSE）。
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    const timer = window.setInterval(tick, 8000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [load]);
 
   const patch = (p: Partial<FrpConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -505,14 +550,16 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
     <SettingsCard
       title={$('panelSettings.frp.title')}
       description={$('panelSettings.frp.desc')}
-      icon={<RadioTower className="h-4 w-4" />}
-      accent={accent}
       className={className}
       status={
         <StateChip
-          ok={!!status?.running}
+          ok={status?.state === 'running'}
           okText={$('panelSettings.frp.running')}
-          badText={$('panelSettings.frp.stopped')}
+          badText={
+            status?.state === 'restarting'
+              ? $('panelSettings.frp.restarting', String(status.restarts))
+              : $('panelSettings.frp.stopped')
+          }
         />
       }
     >
@@ -520,17 +567,17 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
     </SettingsCard>
   );
 
-  if (loadErr) return wrap(<p className="text-xs text-destructive">{loadErr}</p>);
-  if (!cfg) return wrap(<p className="text-xs text-muted-foreground">{$('common.loading')}</p>);
+  if (loadErr) return wrap(<p className="text-[12px] text-destructive">{loadErr}</p>);
+  if (!cfg) return wrap(<p className="text-[12px] text-muted-foreground">{$('common.loading')}</p>);
 
   return wrap(
     <>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex max-w-[620px] items-center gap-2 border-b border-border/60 pb-2.5 text-[12.5px]">
         <Switch checked={cfg.enabled} onCheckedChange={(v) => patch({ enabled: v })} />
         <span>{$('panelSettings.frp.enabled')}</span>
       </label>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <FormGrid>
         <Field label={$('panelSettings.frp.mode')}>
           <Select value={cfg.mode} onValueChange={(v) => patch({ mode: v as FrpConfig['mode'] })}>
             <SelectTrigger className="w-full">
@@ -550,34 +597,32 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
             placeholder="C:\\frp\\frpc.exe"
           />
         </Field>
-      </div>
 
-      {cfg.mode === 'sakura' ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field
-            label={$('panelSettings.frp.sakuraToken')}
-            hint={cfg.sakura.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
-            htmlFor="frp-sakura-token"
-          >
-            <Input
-              id="frp-sakura-token"
-              type="password"
-              value={sakuraToken}
-              onChange={(e) => setSakuraToken(e.target.value)}
-            />
-          </Field>
-          <Field label={$('panelSettings.frp.tunnels')} htmlFor="frp-tunnels">
-            <Input
-              id="frp-tunnels"
-              value={cfg.sakura.tunnels}
-              onChange={(e) => patch({ sakura: { ...cfg.sakura, tunnels: e.target.value } })}
-              placeholder="12345,67890"
-            />
-          </Field>
-        </div>
-      ) : (
-        <>
-          <div className="grid gap-3 md:grid-cols-3">
+        {cfg.mode === 'sakura' ? (
+          <>
+            <Field
+              label={$('panelSettings.frp.sakuraToken')}
+              hint={cfg.sakura.hasToken ? $('panelSettings.ddns.tokenSaved') : undefined}
+              htmlFor="frp-sakura-token"
+            >
+              <Input
+                id="frp-sakura-token"
+                type="password"
+                value={sakuraToken}
+                onChange={(e) => setSakuraToken(e.target.value)}
+              />
+            </Field>
+            <Field label={$('panelSettings.frp.tunnels')} htmlFor="frp-tunnels">
+              <Input
+                id="frp-tunnels"
+                value={cfg.sakura.tunnels}
+                onChange={(e) => patch({ sakura: { ...cfg.sakura, tunnels: e.target.value } })}
+                placeholder="12345,67890"
+              />
+            </Field>
+          </>
+        ) : (
+          <>
             <Field label={$('panelSettings.frp.serverAddr')} htmlFor="frp-server">
               <Input
                 id="frp-server"
@@ -605,27 +650,46 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
             >
               <Input id="frp-auth" type="password" value={authToken} onChange={(e) => setAuthToken(e.target.value)} />
             </Field>
-          </div>
-          <Field
-            label={$('panelSettings.frp.proxies')}
-            hint={$('panelSettings.frp.proxiesHint')}
-            htmlFor="frp-proxies"
-          >
-            <textarea
-              id="frp-proxies"
-              rows={3}
-              value={proxiesText}
-              onChange={(e) => setProxiesText(e.target.value)}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="survival,25565,30001"
-            />
-          </Field>
-        </>
+            <Field
+              label={$('panelSettings.frp.proxies')}
+              hint={$('panelSettings.frp.proxiesHint')}
+              htmlFor="frp-proxies"
+              className="sm:col-span-2"
+            >
+              <textarea
+                id="frp-proxies"
+                rows={3}
+                value={proxiesText}
+                onChange={(e) => setProxiesText(e.target.value)}
+                className="w-full rounded-md border border-input bg-background px-2.5 py-2 font-mono text-[12px] outline-none focus-visible:border-ring"
+                placeholder="survival,25565,30001"
+              />
+            </Field>
+          </>
+        )}
+      </FormGrid>
+
+      {status?.exposure?.risky && (
+        <p className="max-w-[620px] rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11.5px] leading-5 text-destructive">
+          {$('panelSettings.frp.exposureWarning', String(status.exposure.panelPort))}
+        </p>
       )}
 
-      <div className="grid gap-1 rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-        <span>
-          {$('panelSettings.frp.running')}：{status?.running ? `pid ${status.pid}` : $('panelSettings.frp.stopped')}
+      <div className="grid max-w-[620px] gap-0.5 text-[10.5px] leading-4 text-muted-foreground">
+        <span className="flex items-center gap-2">
+          <span>
+            {status?.state === 'running'
+              ? `pid ${status.pid}`
+              : status?.state === 'restarting'
+                ? $('panelSettings.frp.restarting', String(status.restarts))
+                : $('panelSettings.frp.stopped')}
+          </span>
+          {!!status?.lastExit && status?.state !== 'running' && (
+            <span>{$('panelSettings.frp.lastExit', String(status.lastExit.code))}</span>
+          )}
+          <button type="button" className="underline underline-offset-2" onClick={() => void load()}>
+            {$('common.refresh')}
+          </button>
         </span>
         {!!status?.log?.length && (
           <span className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono opacity-80">
@@ -634,7 +698,10 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
         )}
       </div>
 
-      <div className="mt-auto flex flex-wrap justify-end gap-2">
+      <FormActions>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => setImportOpen(true)}>
+          {$('panelSettings.frp.import')}
+        </Button>
         <Button variant="outline" size="sm" disabled={busy || status?.running} onClick={() => act('start')}>
           {$('panelSettings.frp.start')}
         </Button>
@@ -647,7 +714,15 @@ export function FrpCard({ accent, className = '' }: { accent?: Accent; className
         <Button size="sm" disabled={busy} onClick={save}>
           {$('common.save')}
         </Button>
-      </div>
+      </FormActions>
+
+      <FrpImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={() => {
+          void load();
+        }}
+      />
     </>,
   );
 }
