@@ -315,11 +315,7 @@ function ServerCard({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1">
             <b className="truncate text-[13px] font-medium">{s.name}</b>
-            {s.region && (
-              <span className="shrink-0" title={regionLabel(s.region)}>
-                <RegionFlag region={s.region} />
-              </span>
-            )}
+            {s.region && <RegionFlag region={s.region} title={regionLabel(s.region)} />}
             <span
               className="shrink-0 cursor-grab text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
               title={$('servers.drag.tooltip')}

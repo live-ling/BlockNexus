@@ -5,7 +5,7 @@
 | 文件 | 来源 | 说明 |
 |---|---|---|
 | `ubuntu.svg` | worldvectorlogo（`ubuntu-icon`） | 方形官方图标 |
-| `debian.svg` | worldvectorlogo（`debian`） | 方形官方 logo（已去掉整块白底） |
+| `debian.svg` | Simple Icons（品牌色 `#A81D33`） | 24×24 方形（worldvectorlogo 版是 2019×2500 竖版、有效图形仅 17%，28px 框里明显偏小） |
 | `alpine.svg` | worldvectorlogo（`alpine-linux`） | 24×24 方形 |
 | `rocky.svg` | worldvectorlogo（`rocky-linux`） | 方形 |
 | `windows.svg` | worldvectorlogo（`windows-11`） | 方形四格 |

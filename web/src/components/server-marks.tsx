@@ -17,6 +17,9 @@ import { cn } from 'cn';
 import type { ServerInfo } from '@/lib/api';
 import { REGIONS } from '@/lib/regions';
 
+/** 资源版本：改动 /public 下的 svg 时递增，避免浏览器沿用旧缓存（文件名无 hash） */
+const ASSET_V = '20261026';
+
 /** distro.id → 资源文件名；没有对应方图标的一律回退终端图标（不猜品牌） */
 const OS_SRC: Record<string, string> = {
   ubuntu: '/os/ubuntu.svg',
@@ -58,13 +61,13 @@ export function OsMark({
       title={title}
       aria-label={title}
       className={cn(
-        'grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border border-border/70 bg-white p-[3px]',
+        'grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border border-border/70 bg-white p-[2px]',
         className,
       )}
     >
       {src && !broken ? (
         <img
-          src={src}
+          src={`${src}?v=${ASSET_V}`}
           alt=""
           className="size-full object-contain"
           draggable={false}
@@ -78,30 +81,40 @@ export function OsMark({
 }
 
 /** 地区旗帜：3:2 小旗，圆角裁切；未设置返回 null，other 用地球占位 */
-export function RegionFlag({ region, className }: { region?: string; className?: string }) {
+export function RegionFlag({
+  region,
+  title,
+  className,
+}: {
+  region?: string;
+  title?: string;
+  className?: string;
+}) {
   const code = String(region || '').toLowerCase();
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [code]);
 
   if (!code || !(REGIONS as readonly string[]).includes(code)) return null;
 
+  // self-center：作为 flex 子项时直接以自身盒子居中，不再被父级行盒/基线往下推
   const box = cn(
-    'inline-flex h-[14px] w-5 shrink-0 items-center justify-center overflow-hidden rounded-[2px] bg-muted ring-1 ring-black/10 dark:ring-white/15',
+    'inline-flex h-[14px] w-5 shrink-0 self-center items-center justify-center overflow-hidden rounded-[2px] bg-muted ring-1 ring-black/10 dark:ring-white/15',
     className,
   );
+  const a11y = title ? { title, role: 'img' as const, 'aria-label': title } : { 'aria-hidden': true };
 
   if (code === 'other' || broken) {
     return (
-      <span className={box} aria-hidden>
+      <span className={box} {...a11y}>
         <Globe className="size-2.5 text-muted-foreground" />
       </span>
     );
   }
 
   return (
-    <span className={box} aria-hidden>
+    <span className={box} {...a11y}>
       <img
-        src={`/flags/${code}.svg`}
+        src={`/flags/${code}.svg?v=${ASSET_V}`}
         alt=""
         className="size-full object-cover"
         draggable={false}
