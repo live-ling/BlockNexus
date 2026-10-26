@@ -32,7 +32,9 @@ const REQUEST_TIMEOUT_MS = 5000;
 
 const DEFAULTS = {
   enabled: false,
-  endpoint: '',
+  // 默认端点：项目官方接收端（自建 VPS，经 EO + 反代）。
+  // 用户仍然可以改——这里只是「不填就用这个」，不是锁死。
+  endpoint: 'https://api-blocknexus.liveling.top/telemetry',
   intervalSec: DEFAULT_INTERVAL_SEC,
   // 匿名统计 ID：首次启用时生成，关闭时**删除**（不只是置 enabled=false）。
   // 它不是机器指纹——不用 MAC / 硬盘序列号 / 用户名哈希，重装即换新。

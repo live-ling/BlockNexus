@@ -910,7 +910,7 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
             onBlur={() => {
               if (endpointDirty) void patch({ endpoint: endpointTrim });
             }}
-            placeholder="https://…/telemetry"
+            placeholder={$('panelSettings.telemetry.endpointPlaceholder')}
           />
         </Field>
       </FormGrid>

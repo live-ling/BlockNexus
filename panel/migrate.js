@@ -15,7 +15,12 @@
 //
 // 版本语义：SCHEMA_FIELD 记录「磁盘数据是按哪一版结构写的」；字段缺失或非法一律当成 1
 // （本模块出生之前的所有配置都是 1）。MIGRATIONS 的键 = 源 schema，值 = 纯函数，负责把它
-// 升到「源 + 1」。生产链当前为空（CURRENT_SCHEMA = 1，还没有真正的结构变更）。
+// 升到「源 + 1」。生产链当前为 1→2→3（3 = 新增 settings.telemetry）。
+//
+// 引入 panel/telemetry.js 只取 DEFAULTS.endpoint 常量：它是零依赖纯逻辑模块，
+// 不破坏本文件「零 IO、零副作用」的约定。
+
+const { DEFAULTS: TELEMETRY_DEFAULTS } = require('./telemetry');
 
 // ---------- 契约常量 ----------
 
@@ -48,12 +53,14 @@ const MIGRATIONS = {
   // 3：新增 settings.telemetry（合规遥测，默认关闭）。
   // 只保证键存在且是对象，且**强制 enabled=false / instanceId=''**——老配置里不存在遥测
   // 这个东西，迁移绝不替用户打开一个会外发数据的开关（opt-in 是硬约定）。
+  // 端点用 panel/telemetry.js 的默认值（官方接收端）：用户开开关即可用，不必再抄地址。
   2: (data) => {
     const out = { ...data };
     const settings = { ...(data.settings && typeof data.settings === 'object' ? data.settings : {}) };
     if (!settings.telemetry || typeof settings.telemetry !== 'object' || Array.isArray(settings.telemetry)) {
-      settings.telemetry = { enabled: false, endpoint: '', intervalSec: 24 * 3600, instanceId: '' };
+      settings.telemetry = { enabled: false, endpoint: TELEMETRY_DEFAULTS.endpoint, intervalSec: 24 * 3600, instanceId: '' };
     } else {
+      // 已有配置不动端点（用户可能改过），只强制复位开关与 ID
       settings.telemetry = { ...settings.telemetry, enabled: false, instanceId: '' };
     }
     out.settings = settings;

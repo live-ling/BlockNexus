@@ -27,11 +27,17 @@ function eq(name, got, want) {
   console.log(`${good ? 'PASS' : 'FAIL'} | ${name} → ${g}（期望 ${w}）`);
 }
 
-// ---------- 1. 默认值：必须 opt-in ----------
+// ---------- 1. 默认值：必须 opt-in（开关默认关；端点默认官方接收端，无需手填） ----------
 ok('默认关闭（opt-in 是硬约定）', T.DEFAULTS.enabled === false);
-ok('默认没有端点', T.DEFAULTS.endpoint === '');
+ok('默认端点是官方接收端（用户开开关即可用）',
+  T.DEFAULTS.endpoint === 'https://api-blocknexus.liveling.top/telemetry', T.DEFAULTS.endpoint);
+ok('默认端点本身必须通过端点校验（否则开关打开也发不出去）',
+  T.normalizeEndpoint(T.DEFAULTS.endpoint) === T.DEFAULTS.endpoint);
 ok('默认没有 instanceId', T.DEFAULTS.instanceId === '');
 ok('默认间隔 24 小时', T.DEFAULTS.intervalSec === 24 * 3600);
+// 隐私核心不变：默认关闭时 shouldSend 必须拒绝
+ok('默认设置下 shouldSend 拒绝发送（enabled=false）',
+  T.shouldSend(T.DEFAULTS, { now: Date.now(), lastSentAt: 0, failures: 0 }).reason === 'disabled');
 
 // ---------- 2. 分桶（不上报精确值） ----------
 eq('bucket: 0 / 负数 / 非数字 → "0"', [T.bucket(0), T.bucket(-1), T.bucket('x'), T.bucket(undefined)], ['0', '0', '0', '0']);
