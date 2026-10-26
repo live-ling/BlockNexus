@@ -1730,15 +1730,6 @@ export const zh = {
   'panelSettings.telemetry.enabled': '已开启匿名遥测（统计 ID 已生成）',
   'panelSettings.telemetry.disabled': '已关闭匿名遥测（统计 ID 已删除）',
   'panelSettings.telemetry.region': '数据存储在中国境内的服务器',
-  // 端点默认隐藏：绝大多数用户不需要知道，也不该看到一串地址产生「被上传到哪」的不安。
-  // 需要自建的人点「自定义」展开输入框。
-  'panelSettings.telemetry.endpoint': '接收端点',
-  'panelSettings.telemetry.endpointDefault': '官方接收端（默认）',
-  'panelSettings.telemetry.endpointEdit': '自定义',
-  'panelSettings.telemetry.endpointEditHint': '仅自建接收端时需要；只接受 https 公网地址',
-  'panelSettings.telemetry.endpointReset': '恢复默认',
-  'panelSettings.telemetry.endpointCustom': '自定义端点',
-  'panelSettings.telemetry.endpointPlaceholder': 'https://your-server/telemetry',
   'panelSettings.telemetry.lastSent': '上次发送：{0}',
   'panelSettings.telemetry.neverSent': '尚未发送过',
   'panelSettings.telemetry.fails': '连续失败 {0} 次（将自动退避重试）',

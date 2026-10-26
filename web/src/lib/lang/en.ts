@@ -1725,15 +1725,6 @@ export const en = {
   'panelSettings.telemetry.enabled': 'Telemetry enabled (stats ID generated)',
   'panelSettings.telemetry.disabled': 'Telemetry disabled (stats ID deleted)',
   'panelSettings.telemetry.region': 'Data is stored on servers located in mainland China',
-  // Endpoint hidden by default: most users never need it, and a bare URL invites
-  // "where exactly is my data going?" unease. Self-hosters click "Custom" to expand.
-  'panelSettings.telemetry.endpoint': 'Endpoint',
-  'panelSettings.telemetry.endpointDefault': 'Official endpoint (default)',
-  'panelSettings.telemetry.endpointEdit': 'Custom',
-  'panelSettings.telemetry.endpointEditHint': 'Only needed when self-hosting a receiver; public https addresses only',
-  'panelSettings.telemetry.endpointCustom': 'Custom endpoint',
-  'panelSettings.telemetry.endpointReset': 'Use default',
-  'panelSettings.telemetry.endpointPlaceholder': 'https://your-server/telemetry',
   'panelSettings.telemetry.lastSent': 'Last sent: {0}',
   'panelSettings.telemetry.neverSent': 'Never sent',
   'panelSettings.telemetry.fails': '{0} consecutive failures (backing off automatically)',

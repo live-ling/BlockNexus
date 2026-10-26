@@ -800,16 +800,16 @@ function LogPanel({
 
 // ---------- 体验改进计划（匿名遥测，默认关闭） ----------
 //
-// 设计取舍：这个卡片**没有**「保存」按钮——开关与端点各自即时生效。
-// 理由：遥测的正确性不靠表单的完整性，靠「所见即所发」。开关一拨就生效（并立刻删/建 ID），
-// 端点输完失焦即保存并校验，比攒一堆改动再统一提交更不容易出现「以为关了其实还在发」。
+// 设计取舍：这个卡片**没有**「保存」按钮——开关即时生效（并立刻删/建 ID）。
+// 理由：遥测的正确性不靠表单的完整性，靠「所见即所发」。
+//
+// 端点刻意**不暴露在 UI 上**：绝大多数用户永远不需要它，一串 URL 只会带来
+// 「数据到底传去哪」的不安。真要自建的用户改 data/config.json 的
+// settings.telemetry.endpoint（后端 normalizeEndpoint 会校验 https 公网地址）。
 //
 // 开关是**本地的乐观状态**：不依赖 GET 成功就能拨。老面板后端没有这些路由（404）时，
 // 卡片退化为「说明 + 开关 + 提示升级」，而不是整块报错——404 只说明旧后端不认识这个
 // 接口，不代表功能坏了，把它渲染成红色错误会吓到用户。
-
-/** 与 panel/telemetry.js 的 DEFAULTS.endpoint 保持一致（前端拿不到后端常量，两边一起改） */
-const DEFAULT_TELEMETRY_ENDPOINT = 'https://api-blocknexus.liveling.top/telemetry';
 
 export function TelemetryCard({ className = '' }: { className?: string }) {
   const { success, error } = useToastHelpers();
@@ -817,15 +817,12 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
   const [status, setStatus] = useState<TelemetryStatus | null>(null);
   const [preview, setPreview] = useState<TelemetryPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [endpoint, setEndpoint] = useState('');
   // 404 = 面板后端还是旧版本（没有这些路由）。与其它加载错误区分开：这不是故障，只是不可用。
   const [unsupported, setUnsupported] = useState(false);
   const [loadErr, setLoadErr] = useState('');
   const [busy, setBusy] = useState(false);
   // 开关的乐观值：GET 失败时仍有值可显示、可操作
   const [switchOn, setSwitchOn] = useState(false);
-  // 端点编辑态：默认隐藏（显示「官方接收端」），点「自定义」才展开输入框
-  const [editingEndpoint, setEditingEndpoint] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -834,7 +831,6 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
         if (!alive) return;
         setCfg(r.config);
         setStatus(r.status);
-        setEndpoint(r.config.endpoint);
         setSwitchOn(r.config.enabled);
       })
       .catch((e) => {
@@ -854,7 +850,6 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
       const r = await saveTelemetry(body);
       setCfg(r.config);
       setStatus(r.status);
-      setEndpoint(r.config.endpoint);
       setSwitchOn(r.config.enabled);
       return r;
     } catch (e) {
@@ -865,6 +860,7 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
     }
   };
 
+  /** 打开「查看将发送的数据」抽屉；打开时才拉取，拿到的就是此刻真实的 payload */
   const openPreview = async () => {
     setPreviewOpen(true);
     try {
@@ -918,61 +914,13 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
   if (loadErr) return wrap(<p className="text-[12px] text-destructive">{loadErr}</p>);
   if (!cfg) return wrap(<p className="text-[12px] text-muted-foreground">{$('common.loading')}</p>);
 
-  const endpointTrim = endpoint.trim();
-  // 与「保存后重进页面」一致即视为没改动，避免失焦空 PUT
-  const endpointDirty = endpointTrim !== cfg.endpoint;
-
   return wrap(
     <>
-      {/* 数据落点：境内存储是用户最关心的合规信息，常驻显示；端点地址本身默认隐藏 */}
+      {/* 数据落点：境内存储是用户最关心的合规信息，常驻显示。
+          端点地址刻意**不显示也不可改**：绝大多数用户永远不需要它，
+          一串 URL 只会带来「数据到底传去哪」的不安；真要改的用户是少数，
+          走 data/config.json 的 settings.telemetry.endpoint 即可。 */}
       <p className="text-[11px] text-muted-foreground">{$('panelSettings.telemetry.region')}</p>
-
-      {/*
-        端点默认隐藏：绝大多数用户不需要知道，一串地址只会带来「数据到底传去哪」的不安。
-        默认态只显示「官方接收端（默认）」；自建的人点「自定义」展开输入框，可随时恢复默认。
-      */}
-      {editingEndpoint || cfg.endpoint !== DEFAULT_TELEMETRY_ENDPOINT ? (
-        <FormGrid>
-          <Field
-            htmlFor="telemetry-endpoint"
-            label={cfg.endpoint === DEFAULT_TELEMETRY_ENDPOINT ? $('panelSettings.telemetry.endpoint') : $('panelSettings.telemetry.endpointCustom')}
-            hint={$('panelSettings.telemetry.endpointEditHint')}
-          >
-            <div className="flex items-center gap-2">
-              <Input
-                id="telemetry-endpoint"
-                value={endpoint}
-                disabled={!cfg.enabled || busy}
-                onChange={(e) => setEndpoint(e.target.value)}
-                onBlur={() => {
-                  if (endpointDirty) void patch({ endpoint: endpointTrim });
-                }}
-                placeholder={$('panelSettings.telemetry.endpointPlaceholder')}
-              />
-              {cfg.endpoint !== DEFAULT_TELEMETRY_ENDPOINT && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => {
-                    setEditingEndpoint(false);
-                    void patch({ endpoint: DEFAULT_TELEMETRY_ENDPOINT });
-                  }}
-                >
-                  {$('panelSettings.telemetry.endpointReset')}
-                </Button>
-              )}
-            </div>
-          </Field>
-        </FormGrid>
-      ) : (
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] text-muted-foreground">{$('panelSettings.telemetry.endpointDefault')}</span>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditingEndpoint(true)}>
-            {$('panelSettings.telemetry.endpointEdit')}
-          </Button>
-        </div>
-      )}
 
       {/* 状态行：上次发送 / 失败次数。失败可见，否则用户以为在发其实一直失败 */}
       {cfg.enabled && status && (status.lastSentAt || status.fails > 0 || status.error) && (
@@ -986,6 +934,7 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
       )}
 
       <FormActions>
+        {/* 查看是唯一的动作入口：把「会发什么」原样摆出来，透明化靠可验证不靠承诺 */}
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void openPreview()}>
           {$('panelSettings.telemetry.preview')}
         </Button>
@@ -1025,19 +974,15 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
         )}
       </FormActions>
 
-      {/* 「查看我将发送的数据」：原样展示 payload。透明化靠这个，不靠文档里的承诺 */}
+      {/* 「查看将发送的数据」：只展示 payload 本身。
+          刻意不放「哪些不会上报」的清单——反向清单会随代码演进过时，
+          过时的承诺比没有承诺更糟；正面的 payload 永远是当前真实的。 */}
       <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
         <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[520px]">
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle className="text-[13px]">{$('panelSettings.telemetry.previewTitle')}</SheetTitle>
           </SheetHeader>
           <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-5 py-4">
-            {preview?.neverSent?.length ? (
-              <div className="grid gap-1">
-                <b className="text-[12px] font-medium">{$('panelSettings.telemetry.neverSentTitle')}</b>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">{preview.neverSent.join(' · ')}</p>
-              </div>
-            ) : null}
             {preview?.rejected ? (
               <p className="text-[11px] leading-relaxed text-destructive">
                 {$('panelSettings.telemetry.previewRejected', preview.rejected)}
