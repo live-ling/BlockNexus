@@ -219,6 +219,34 @@ eq('countBucket: 没采到（null/undefined）→ unknown（不与真实的 0 �
   ok('publicConfig: 绝不回显 instanceId', !JSON.stringify(T.publicConfig({ instanceId: 'secret-id' })).includes('secret-id'));
 }
 
+// ---------- 6e. 注册/续期（接收端白名单制） ----------
+{
+  const DAY = 24 * 3600 * 1000;
+  const now = 1_700_000_000_000;
+  ok('needsRegister: 从未注册（0）→ 要带 first', T.needsRegister(0, now) === true);
+  ok('needsRegister: 刚注册过 → 不带', T.needsRegister(now - DAY, now) === false);
+  ok('needsRegister: 快到 30 天 → 仍不带', T.needsRegister(now - (30 * DAY - DAY), now) === false);
+  ok('needsRegister: 满 30 天 → 续期带 first', T.needsRegister(now - 30 * DAY, now) === true);
+  ok('needsRegister: 超过 30 天 → 续期带 first', T.needsRegister(now - 90 * DAY, now) === true);
+  ok('needsRegister: 非法值按未注册处理', T.needsRegister(null, now) === true && T.needsRegister('x', now) === true);
+
+  // payload 只在需要时出现 first 键（老客户端不带，接收端按「已注册才收」处理）
+  const withFirst = T.buildPayload({ ...FACTS, first: true }).payload;
+  ok('buildPayload: first=true 时 payload 含 first', withFirst.first === true);
+  const withoutFirst = T.buildPayload({ ...FACTS, first: false }).payload;
+  ok('buildPayload: 不需要注册时 payload 不含 first 键', !('first' in withoutFirst), JSON.stringify(Object.keys(withoutFirst)));
+  ok('buildPayload: first 非布尔 true 时也不带（防伪造字符串）',
+    !('first' in T.buildPayload({ ...FACTS, first: 'true' }).payload));
+
+  // registeredAt 由服务端自己维护，客户端不能通过请求体伪造
+  ok('normalizeConfig: 不从请求体读 registeredAt（防客户端伪造已注册）',
+    T.normalizeConfig({ enabled: true, registeredAt: 999999 }, { enabled: true, registeredAt: 111 }).config.registeredAt === 111);
+  ok('normalizeConfig: 关闭时清空 registeredAt（下次开启重新注册）',
+    T.normalizeConfig({ enabled: false }, { enabled: true, registeredAt: now }).config.registeredAt === 0);
+  ok('normalizeConfig: 保持开启时保留 registeredAt',
+    T.normalizeConfig({ enabled: true }, { enabled: true, registeredAt: now }).config.registeredAt === now);
+}
+
 // ---------- 7. assertPayloadSafe：第二道闸 ----------
 {
   const cases = [

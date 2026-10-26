@@ -102,7 +102,25 @@ function get(p, port, headers = {}) {
     ok('被拒请求未写盘', before === after);
   }
 
-  // 2) 正常上报（带密钥）
+  // 2) 注册制：首次必须带 first 才收
+  {
+    const unknown = await post({ ...GOOD, id: 'c1b2c3d4-0000-4000-8000-000000000000' }, port);
+    ok('未注册 ID 且无 first → 静默丢弃（200 + ignored）',
+      unknown.status === 200 && unknown.body.includes('ignored'), unknown.body);
+
+    const reg = await post({ ...GOOD, first: true }, port);
+    ok('带 first → 注册并接收（200）', reg.status === 200 && !reg.body.includes('ignored'), reg.body);
+
+    // 注册后同 ID 不带 first 也收（但会命中 1 小时去重）
+    const after = await post(GOOD, port);
+    ok('已注册 ID 不带 first → 仍接收', after.status === 200, after.body);
+
+    // 已注册表落盘
+    const regFile = path.join(dir, 'registry.json');
+    ok('注册表已落盘且含该 ID', fs.existsSync(regFile) && fs.readFileSync(regFile, 'utf8').includes(ID));
+  }
+
+  // 3) 正常上报（带密钥）
   const r1 = await post(GOOD, port);
   ok('正常上报 → 200', r1.status === 200, r1.body);
 

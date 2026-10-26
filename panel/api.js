@@ -5121,6 +5121,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       const id = teleEnsureId();
       const built = telemetry.buildPayload({
         id,
+        // 注册/续期标记：首次上报与每 30 天各带一次（接收端只收已注册的 ID，
+        // 注册表万一丢了，这个标记能让它在 30 天内自愈）
+        first: telemetry.needsRegister(cfg.registeredAt, Date.now()),
         panelVer: APP_VERSION,
         os: telemetry.osOf(process.platform),
         arch: telemetry.archOf(process.arch),
@@ -5148,6 +5151,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         teleState.lastError = '';
         teleErrors.reset(); // 这批已上报，清零避免重复计数
         teleState.lastKind = reason;
+        // 记下「已注册」：只在真正发成功后写，失败时保持 0 以便下次重带注册标记
+        const cur = config.data.settings.telemetry || {};
+        if (cur.instanceId === id) {
+          config.data.settings.telemetry = { ...cur, registeredAt: Date.now() };
+          try {
+            config.save();
+          } catch {}
+        }
       } else {
         teleState.fails += 1;
         teleState.lastError = r.reason || '发送失败';

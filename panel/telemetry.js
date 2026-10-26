@@ -39,7 +39,25 @@ const DEFAULTS = {
   // 匿名统计 ID：首次启用时生成，关闭时**删除**（不只是置 enabled=false）。
   // 它不是机器指纹——不用 MAC / 硬盘序列号 / 用户名哈希，重装即换新。
   instanceId: '',
+  // 注册时间（首次上传成功时写入）。接收端用「白名单注册制」：只有注册过的 ID 才收，
+  // 陌生 ID 静默丢弃——挡住「每次换新 UUID 刷数据」。
+  // 这里记的是本地认为已注册的时刻，用于决定何时**续期**（见 needsRegister）。
+  registeredAt: 0,
 };
+
+/**
+ * 注册续期间隔。接收端只认注册表里的 ID，而注册表可能丢（换机/重装/清数据）——
+ * 一旦丢，老用户会被静默丢弃且毫无感知。所以面板每 30 天带一次 first 标记做续期，
+ * 注册表丢了最多 30 天自愈。这不是「重复注册」，接收端对已存在的 ID 只刷新时间戳。
+ */
+const REGISTER_RENEW_MS = 30 * 24 * 3600 * 1000;
+
+/** 这次上报要不要带「注册/续期」标记 */
+function needsRegister(registeredAt, now) {
+  const t = Number(registeredAt) || 0;
+  if (!t) return true;
+  return (Number(now) || Date.now()) - t >= REGISTER_RENEW_MS;
+}
 
 /**
  * 官方接收端的共享密钥。**公开值**：它不承担保密职责（公开仓库里谁都看得到），
@@ -177,6 +195,8 @@ function buildPayload(facts) {
   };
   // 功能开关：逐个取布尔，缺键按 false（不猜）
   for (const key of FEATURES) payload.features[key] = bool(f.features && f.features[key]);
+  // 注册/续期标记：只在需要时出现（老客户端不带这个键，接收端按「已注册才收」处理）
+  if (f.first === true) payload.first = true;
 
   const safe = assertPayloadSafe(payload);
   if (!safe.ok) return { ok: false, reason: safe.reason, payload: null };
@@ -438,7 +458,12 @@ function normalizeConfig(input, current = {}) {
     endpoint,
     intervalSec: normalizeInterval(b.intervalSec === undefined ? cur.intervalSec : b.intervalSec),
     instanceId: str(cur.instanceId, MAX_ID_LEN),
+    // registeredAt 不从请求体读：它由服务端在发送成功后自己写，
+    // 让客户端能改它等于让客户端伪造「我已注册」。
+    registeredAt: Number(cur.registeredAt) || 0,
   };
+  // 关掉即视为注销：清掉注册时间，下次开启会重新注册（换新 ID 后本来也必须重注册）
+  if (!enabled) config.registeredAt = 0;
   return { config, error: '' };
 }
 
@@ -498,6 +523,8 @@ module.exports = {
   normalizeInterval,
   normalizeConfig,
   publicConfig,
+  needsRegister,
+  REGISTER_RENEW_MS,
   shouldSend,
   // I/O
   send,

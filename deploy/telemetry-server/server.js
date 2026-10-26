@@ -75,6 +75,67 @@ function tokenOk(req) {
   return !!(m && safeEqual(m[1], TELEMETRY_TOKEN));
 }
 
+// ---------- 注册表（白名单制） ----------
+//
+// 为什么要有它：光靠共享密钥挡不住「每次换新 UUID 刷数据」——那是最省事的污染方式。
+// 所以改成注册制：**首次上报即注册**（payload 带 first:true），之后只收注册过的 ID，
+// 陌生 ID 静默丢弃（返回 200 让它别重试，但不落库）。
+//
+// 失效模式与对策：注册表丢了（换机/重装/误删）会让老用户被永久静默丢弃且毫无感知，
+// 所以面板每 30 天带一次 first:true 做**续期**——注册表丢了下个月就自愈。
+// 对已存在的 ID，first:true 只刷新时间戳，不重复计数。
+const REGISTRY_FILE = path.join(DATA_DIR, 'registry.json');
+const MAX_REGISTRY = 200000; // 上限：表满淘汰最久未见的（与 loginFails 同一思路）
+
+let registry = null; // Map<id, lastSeenTs>
+
+function loadRegistry() {
+  registry = new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+    for (const [id, ts] of Object.entries((raw && raw.ids) || {})) {
+      if (typeof id === 'string' && ID_RE.test(id)) registry.set(id, Number(ts) || 0);
+    }
+  } catch {
+    // 不存在/坏掉都从空表开始（老用户靠 30 天续期自愈）
+  }
+}
+
+function saveRegistry() {
+  try {
+    const ids = Object.fromEntries(registry);
+    const tmp = `${REGISTRY_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ids }), { mode: 0o600 });
+    fs.renameSync(tmp, REGISTRY_FILE);
+  } catch (e) {
+    console.error('[telemetry] registry save failed:', e.message);
+  }
+}
+
+/** 注册或续期；返回是否成功（表满且需淘汰时也返回 true） */
+function register(id) {
+  const now = Date.now();
+  if (!registry.has(id) && registry.size >= MAX_REGISTRY) {
+    // 表满：淘汰最久未见的，而不是拒绝新用户（拒绝新用户会让增长直接停摆）
+    let oldestId = null;
+    let oldestTs = Infinity;
+    for (const [k, v] of registry) {
+      if (v < oldestTs) {
+        oldestTs = v;
+        oldestId = k;
+      }
+    }
+    if (oldestId) registry.delete(oldestId);
+  }
+  registry.set(id, now);
+  saveRegistry();
+  return true;
+}
+
+function isRegistered(id) {
+  return registry.has(id);
+}
+
 // ---------- 与 panel/telemetry.js 对齐的校验 ----------
 
 const VERSION_RE = /^\d{1,4}(?:\.\d{1,4}){0,2}(?:-[0-9a-z.-]+)?$/i;
@@ -154,6 +215,7 @@ function sanitize(body) {
     features,
     errors,
   };
+  if (body.first === true) rec.first = true;
   if (!scanStrings(rec)) return null;
   return rec;
 }
@@ -161,6 +223,17 @@ function sanitize(body) {
 // ---------- 限频：同一 ID 每小时最多 1 次成功入库（防 bug 或恶意刷写盘） ----------
 
 const recentIds = new Map(); // id -> ts
+// 被「未注册」规则丢弃的次数：只在内存里，供 /summary 与运维观察用。
+// 这个数字突然暴涨通常意味着注册表丢了（老用户全变成陌生 ID）。
+let discarded = 0;
+// 刷新 lastSeen 不必每次写盘：攒着定时落盘，减少 IO 与写入放大
+let registryDirty = false;
+setInterval(() => {
+  if (registryDirty) {
+    registryDirty = false;
+    saveRegistry();
+  }
+}, 60_000).unref();
 setInterval(() => {
   const cutoff = Date.now() - 3600_000;
   for (const [id, ts] of recentIds) if (ts < cutoff) recentIds.delete(id);
@@ -297,6 +370,8 @@ const server = http.createServer((req, res) => {
     const records = readRecords();
     const s = summarize(records, Number(url.searchParams.get('days')) || 0);
     s.today.records = records.filter((r) => new Date(r.ts).toISOString().slice(0, 10) === s.day).length;
+    // 注册表规模与「被丢弃的陌生 ID」次数：后者暴涨通常意味着注册表丢了
+    s.registry = { size: registry.size, discardedUnknown: discarded };
     return done(200, s);
   }
 
@@ -326,6 +401,21 @@ const server = http.createServer((req, res) => {
       }
       const rec = sanitize(body);
       if (!rec) return done(422, { error: 'payload rejected' });
+
+      // 注册制：带 first 的是注册/续期，其余只收注册表里已有的 ID。
+      // 陌生 ID **静默丢弃**：返回 200（避免客户端把它当失败反复重试），但不落库。
+      const isReg = rec.first === true;
+      if (isReg) {
+        // 注册限频：每 IP 每小时最多 20 次，挡住「批量注册新 ID」这种刷法
+        if (!rateLimit(`reg:${ip}`, 20, 3600_000)) return done(429, { error: 'too many registrations' });
+        register(rec.id);
+      } else if (!isRegistered(rec.id)) {
+        discarded += 1;
+        return done(200, { ok: true, ignored: true });
+      } else {
+        registry.set(rec.id, Date.now()); // 刷新 lastSeen（不每次都写盘，见下方定时落盘）
+        registryDirty = true;
+      }
 
       // 同一 ID 一小时内只入库一次（重启频繁的机器会重复上报）
       const last = recentIds.get(rec.id) || 0;
@@ -373,6 +463,7 @@ function rateLimit(key, max, windowMs) {
 // ---------- 启动 ----------
 
 ensureDirs();
+loadRegistry();
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[telemetry] listening on :${server.address().port}, data dir: ${DATA_DIR}`);
 });
