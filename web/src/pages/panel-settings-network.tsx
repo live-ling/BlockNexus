@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
 import { Field, FormActions, FormGrid, SettingsCard, StateChip } from '@/components/settings-card';
 import { FrpImportDialog } from '@/components/frp-import-dialog';
@@ -21,14 +22,22 @@ import {
   frpAction,
   getDdns,
   getFrp,
+  getTelemetry,
+  getTelemetryPreview,
+  resetTelemetryId,
   runDdns,
   saveDdns,
   saveFrp,
+  saveTelemetry,
+  sendTelemetryNow,
   timeago,
   type DdnsConfig,
   type DdnsStatus,
   type FrpConfig,
   type FrpStatus,
+  type TelemetryConfig,
+  type TelemetryPreview,
+  type TelemetryStatus,
 } from '@/lib/api';
 import { $ } from '@/lib/i18n';
 import { useToastHelpers } from '@/lib/toast';
@@ -786,5 +795,201 @@ function LogPanel({
         )}
       </div>
     </div>
+  );
+}
+
+// ---------- 遥测（默认关闭，opt-in） ----------
+//
+// 设计取舍：这个卡片**没有**「保存」按钮——开关与端点各自即时生效。
+// 理由：遥测的正确性不靠表单的完整性，靠「所见即所发」。开关一拨就生效（并立刻删/建 ID），
+// 端点输完失焦即保存并校验，比攒一堆改动再统一提交更不容易出现「以为关了其实还在发」。
+
+export function TelemetryCard({ className = '' }: { className?: string }) {
+  const { success, error } = useToastHelpers();
+  const [cfg, setCfg] = useState<TelemetryConfig | null>(null);
+  const [status, setStatus] = useState<TelemetryStatus | null>(null);
+  const [preview, setPreview] = useState<TelemetryPreview | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [endpoint, setEndpoint] = useState('');
+  const [loadErr, setLoadErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    getTelemetry()
+      .then((r) => {
+        if (!alive) return;
+        setCfg(r.config);
+        setStatus(r.status);
+        setEndpoint(r.config.endpoint);
+      })
+      .catch((e) => {
+        if (alive) setLoadErr(errText(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const patch = async (body: { enabled?: boolean; endpoint?: string }) => {
+    setBusy(true);
+    try {
+      const r = await saveTelemetry(body);
+      setCfg(r.config);
+      setStatus(r.status);
+      setEndpoint(r.config.endpoint);
+      return r;
+    } catch (e) {
+      error($('panelSettings.error.save'), errText(e));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openPreview = async () => {
+    setPreviewOpen(true);
+    try {
+      setPreview(await getTelemetryPreview());
+    } catch (e) {
+      error($('panelSettings.error.load'), errText(e));
+    }
+  };
+
+  const wrap = (body: React.ReactNode) => (
+    <SettingsCard
+      title={$('panelSettings.telemetry.title')}
+      description={$('panelSettings.telemetry.desc')}
+      className={className}
+      status={
+        <StateChip
+          ok={!!cfg?.enabled}
+          okText={$('panelSettings.telemetry.on')}
+          badText={$('panelSettings.telemetry.off')}
+        />
+      }
+    >
+      {body}
+    </SettingsCard>
+  );
+
+  if (loadErr) return wrap(<p className="text-[12px] text-destructive">{loadErr}</p>);
+  if (!cfg) return wrap(<p className="text-[12px] text-muted-foreground">{$('common.loading')}</p>);
+
+  const endpointTrim = endpoint.trim();
+  // 与「保存后重进页面」一致即视为没改动，避免失焦空 PUT
+  const endpointDirty = endpointTrim !== cfg.endpoint;
+
+  return wrap(
+    <>
+      {/* 开关即时生效：开启时后端生成匿名 ID，关闭时立刻删除 */}
+      <label className="flex max-w-[620px] items-center gap-2 pb-1 text-[13px]">
+        <Switch
+          checked={cfg.enabled}
+          disabled={busy}
+          onCheckedChange={(v) => {
+            void patch({ enabled: v }).then((r) => {
+              if (r) success(r.config.enabled ? $('panelSettings.telemetry.enabled') : $('panelSettings.telemetry.disabled'));
+            });
+          }}
+        />
+        <span>{$('panelSettings.telemetry.enabledLabel')}</span>
+      </label>
+
+      <FormGrid>
+        <Field
+          htmlFor="telemetry-endpoint"
+          label={$('panelSettings.telemetry.endpoint')}
+          hint={$('panelSettings.telemetry.endpointHint')}
+        >
+          <Input
+            id="telemetry-endpoint"
+            value={endpoint}
+            disabled={!cfg.enabled || busy}
+            onChange={(e) => setEndpoint(e.target.value)}
+            onBlur={() => {
+              if (endpointDirty) void patch({ endpoint: endpointTrim });
+            }}
+            placeholder="https://…/telemetry"
+          />
+        </Field>
+      </FormGrid>
+
+      {/* 状态行：上次发送 / 失败次数。失败可见，否则用户以为在发其实一直失败 */}
+      {cfg.enabled && status && (status.lastSentAt || status.fails > 0 || status.error) && (
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {status.lastSentAt
+            ? $('panelSettings.telemetry.lastSent', timeago(status.lastSentAt))
+            : $('panelSettings.telemetry.neverSent')}
+          {status.fails > 0 && ` · ${$('panelSettings.telemetry.fails', status.fails)}`}
+          {status.error && <span className="text-destructive"> · {status.error}</span>}
+        </p>
+      )}
+
+      <FormActions>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void openPreview()}>
+          {$('panelSettings.telemetry.preview')}
+        </Button>
+        {cfg.enabled && cfg.hasId && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              void resetTelemetryId()
+                .then((r) => {
+                  setCfg(r.config);
+                  success($('panelSettings.telemetry.idReset'));
+                })
+                .catch((e) => error($('panelSettings.error.save'), errText(e)));
+            }}
+          >
+            {$('panelSettings.telemetry.idReset')}
+          </Button>
+        )}
+        {cfg.enabled && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              void sendTelemetryNow()
+                .then((r) => {
+                  if (r.status) setStatus(r.status);
+                  success(r.sent ? $('panelSettings.telemetry.sentOk') : $('panelSettings.telemetry.sentFail', r.reason || ''));
+                })
+                .catch((e) => error($('panelSettings.error.save'), errText(e)));
+            }}
+          >
+            {$('panelSettings.telemetry.sendNow')}
+          </Button>
+        )}
+      </FormActions>
+
+      {/* 「查看我将发送的数据」：原样展示 payload。透明化靠这个，不靠文档里的承诺 */}
+      <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
+        <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[520px]">
+          <SheetHeader className="border-b px-5 py-4">
+            <SheetTitle className="text-[13px]">{$('panelSettings.telemetry.previewTitle')}</SheetTitle>
+          </SheetHeader>
+          <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-5 py-4">
+            {preview?.neverSent?.length ? (
+              <div className="grid gap-1">
+                <b className="text-[12px] font-medium">{$('panelSettings.telemetry.neverSentTitle')}</b>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">{preview.neverSent.join(' · ')}</p>
+              </div>
+            ) : null}
+            {preview?.rejected ? (
+              <p className="text-[11px] leading-relaxed text-destructive">
+                {$('panelSettings.telemetry.previewRejected', preview.rejected)}
+              </p>
+            ) : null}
+            <pre className="overflow-x-auto rounded-md bg-muted/40 px-3 py-2.5 font-mono text-[11px] leading-5">
+              {preview?.payload ? JSON.stringify(preview.payload, null, 2) : $('common.loading')}
+            </pre>
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>,
   );
 }

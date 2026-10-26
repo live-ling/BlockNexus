@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { randomToken } = require('./crypto');
 const { DEFAULTS: DDNS_DEFAULTS } = require('./ddns');
 const { DEFAULTS: FRP_DEFAULTS } = require('./frp');
+const { DEFAULTS: TELEMETRY_DEFAULTS } = require('./telemetry');
 
 function scryptHash(plain, salt) {
   return crypto.scryptSync(String(plain), salt, 32).toString('hex');
@@ -61,6 +62,8 @@ class Config {
         // 默认值以 panel/ddns.js、panel/frp.js 的 DEFAULTS 为唯一来源，避免三处各写一份。
         ddns: clone(DDNS_DEFAULTS),
         frp: clone(FRP_DEFAULTS),
+        // 合规遥测（默认关闭，见 panel/telemetry.js）：只上报枚举与计数，端点由用户填。
+        telemetry: clone(TELEMETRY_DEFAULTS),
       },
     };
     this.load();
@@ -89,6 +92,7 @@ class Config {
         // 否则老配置里缺一个子对象就会把默认值整个冲掉
         ddns: mergeDeep(defaults.ddns, (raw.settings || {}).ddns),
         frp: mergeDeep(defaults.frp, (raw.settings || {}).frp),
+        telemetry: mergeDeep(defaults.telemetry, (raw.settings || {}).telemetry),
       };
       for (const s of this.data.servers) {
         s.agent = {

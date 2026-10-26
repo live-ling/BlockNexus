@@ -33,9 +33,9 @@ const SRC = {
 const SRC_SNAPSHOT = JSON.stringify(SRC);
 
 // ---------- 契约常量 ----------
-check('契约: SCHEMA_FIELD / CURRENT_SCHEMA / 生产链含 1→2',
-  M.SCHEMA_FIELD === 'schemaVersion' && M.CURRENT_SCHEMA === 2 &&
-    typeof M.MIGRATIONS[1] === 'function',
+check('契约: SCHEMA_FIELD / CURRENT_SCHEMA / 生产链含 1→2→3',
+  M.SCHEMA_FIELD === 'schemaVersion' && M.CURRENT_SCHEMA === 3 &&
+    typeof M.MIGRATIONS[1] === 'function' && typeof M.MIGRATIONS[2] === 'function',
   JSON.stringify({ field: M.SCHEMA_FIELD, cur: M.CURRENT_SCHEMA, chain: Object.keys(M.MIGRATIONS) }));
 
 // ---------- 1. readSchema ----------
@@ -221,7 +221,7 @@ const boomM = M.createMigrator({
   check('生产: 1→2 不改入参', JSON.stringify(SRC) === SRC_SNAPSHOT);
 }
 
-// ---------- 9. migrateConfig（生产链：1→2 一步） ----------
+// ---------- 9. migrateConfig（生产链：1→2→3 两步） ----------
 {
   const cfg = {
     servers: [{ id: 'srv-a', port: 25565 }],
@@ -231,7 +231,7 @@ const boomM = M.createMigrator({
   };
   const before = JSON.stringify(cfg);
   const r = M.migrateConfig(cfg);
-  check('生产: 1→2 只执行一步', r.ok === true && r.applied.length === 1 && r.error === '', JSON.stringify(r).slice(0, 200));
+  check('生产: 1→3 执行两步', r.ok === true && r.applied.length === 2 && r.error === '', JSON.stringify(r).slice(0, 200));
   check(
     '生产: 原有字段完整保留',
     same(r.data.servers, cfg.servers) &&
@@ -240,15 +240,34 @@ const boomM = M.createMigrator({
       r.data.someUnknownFlag === true,
     JSON.stringify(r.data).slice(0, 200),
   );
-  check('生产: 结果版本号是 2', M.readSchema(r.data) === 2);
+  check('生产: 结果版本号是 3', M.readSchema(r.data) === 3);
+  check('生产: 补齐 settings.telemetry 且默认关闭（opt-in 是硬约定）',
+    !!r.data.settings.telemetry && r.data.settings.telemetry.enabled === false &&
+      r.data.settings.telemetry.instanceId === '',
+    JSON.stringify(r.data.settings && r.data.settings.telemetry));
   check('生产: 不改入参（也没有被偷偷写上版本字段）',
     JSON.stringify(cfg) === before && !(M.SCHEMA_FIELD in cfg), JSON.stringify(cfg));
   const r2 = M.migrateConfig(cfg, 1, M.CURRENT_SCHEMA);
-  check('生产: 显式 1→CURRENT_SCHEMA 同样走一步且字段保留',
-    r2.ok === true && r2.applied.length === 1 && same(r2.data.servers, cfg.servers));
+  check('生产: 显式 1→CURRENT_SCHEMA 同样走两步且字段保留',
+    r2.ok === true && r2.applied.length === 2 && same(r2.data.servers, cfg.servers));
   const r3 = M.migrateConfig({ ...cfg, [M.SCHEMA_FIELD]: M.CURRENT_SCHEMA });
   check('生产: 已带版本号的配置照常通过（重复启动幂等）',
     r3.ok === true && r3.applied.length === 0 && M.readSchema(r3.data) === M.CURRENT_SCHEMA);
+}
+
+// ---------- 9b. 2→3：老配置里若已存在 telemetry 也必须被强制关掉 ----------
+{
+  const r = M.migrateConfig(
+    { servers: [], settings: { telemetry: { enabled: true, endpoint: 'https://x.example.com/t', instanceId: 'keep-me' } } },
+    2,
+    3,
+  );
+  check('生产: 2→3 把既有的 telemetry 强制复位为关闭且清空 instanceId',
+    r.ok === true && r.data.settings.telemetry.enabled === false &&
+      r.data.settings.telemetry.instanceId === '' &&
+      r.data.settings.telemetry.endpoint === 'https://x.example.com/t',
+    JSON.stringify(r.data.settings.telemetry));
+  check('生产: 2→3 只执行一步', r.applied.length === 1 && same(r.applied, [{ from: 2, to: 3 }]));
 }
 
 // ---------- 10. 迁移函数返回非对象 ----------

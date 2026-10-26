@@ -47,7 +47,7 @@ import { $ } from '@/lib/i18n';
 import { getLanguage, setLanguage, LANGUAGE_LABELS, type LanguageCode } from '@/lib/i18n';
 import { subscribeSSE } from '@/lib/sse';
 import { useToastHelpers } from '@/lib/toast';
-import { DdnsCard, FrpCard } from '@/pages/panel-settings-network';
+import { DdnsCard, FrpCard, TelemetryCard } from '@/pages/panel-settings-network';
 
 /** 更新策略的兜底值：老后端不返回 update 字段时界面仍要能用（默认仅提醒） */
 const DEFAULT_UPDATE_POLICY: PanelUpdatePolicy = { auto: 'notify', source: '', dismissed: {} };
@@ -205,6 +205,8 @@ export function PanelSettingsPage({
                 {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
                 <DdnsCard />
                 <FrpCard />
+                {/* 匿名遥测（默认关闭）：放在网络之后，它是面板唯一的对外数据出口 */}
+                <TelemetryCard />
               </div>
             ),
           },

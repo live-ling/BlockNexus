@@ -387,6 +387,18 @@ const ERROR_CODES = {
     en: 'A proxy forwards to the panel port {port} while login protection is off — that would expose the whole panel to the internet. Enable login protection first, or use another port',
   },
 
+  // ---------- 遥测（可选功能，默认关闭） ----------
+  'settings.telemetry-endpoint-invalid': {
+    status: 400,
+    zh: '遥测端点无效：只接受 https 且为公网地址（不接受 http、内网 IP、localhost 或带用户名密码的地址）',
+    en: 'Invalid telemetry endpoint: only public https addresses are accepted (no http, private IPs, localhost, or credentials in the URL)',
+  },
+  'settings.telemetry-disabled': {
+    status: 400,
+    zh: '遥测还没启用',
+    en: 'Telemetry is not enabled',
+  },
+
   // ---------- 单实例 frp 端口映射 ----------
   'frp.not-local': {
     status: 400,

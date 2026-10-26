@@ -14,6 +14,8 @@ const quick = require('./quick');
 // 网络助手：DDNS（纯逻辑 + 注入 fetch）与 frp 客户端托管
 const ddns = require('./ddns');
 const frp = require('./frp');
+// 合规遥测：默认关闭，只上报枚举与计数（见 panel/telemetry.js 的三条硬约定）
+const telemetry = require('./telemetry');
 const mailTpl = require('./mail');
 const { errorResponse, langOf, messageOf } = require('./error-codes');
 // 自更新的纯逻辑（安装形态/元数据解析/升级计划/自动策略/写入白名单）与版本比较
@@ -254,6 +256,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const sseClients = new Set();
   const installing = new Set(); // serverId 防并发安装
 
+  // 遥测错误码计数器（只记 code → 次数，不记文案与参数）。
+  // 声明在**文件靠前**处：fail() 在第 266 行就要 bump 它，而 createApi 里的 const
+  // 在调用时虽已初始化，但放在这里更不易被后续改动挪到 fail 之后（届时 TDZ 会被
+  // fail 里的 try/catch 静默吞掉，错误码计数悄悄归零而没人发现）。
+  const teleErrors = telemetry.createErrorTally(200);
+
   // Cookie 的 Secure 标志：TLS 直连、或显式声明强制加时开启。
   // 请求本身是否加密（req.secure）在 cookieAttrs 里另外判定——面板可能同时通过
   // http://127.0.0.1 与 https://反代域名 访问，按请求判定才能两边都正确。
@@ -262,6 +270,10 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // 错误响应统一出口：文案来自 panel/error-codes.js，后端只给 code + 参数。
   // 过渡期同时回 `error`（按请求语言渲染好的文案）与 `code`，因此旧前端缓存照常显示。
   function fail(res, code, params, statusOverride) {
+    // 遥测：只记 code（不记 params / 文案——里面可能有路径、地址、实例名）
+    try {
+      teleErrors.bump(code);
+    } catch {}
     const { status, body } = errorResponse(code, params, {
       status: statusOverride,
       lang: langOf(res.req),
@@ -1614,6 +1626,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         model: st.ai.model || '',
         hasKey: !!st.ai.apiKey,
       },
+      // 遥测：默认关闭，端点为空（端点留空时 shouldSend() 直接返回 no-endpoint，不会发任何东西）
+      telemetry: telemetry.publicConfig(st.telemetry),
     });
   });
 
@@ -5036,8 +5050,235 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   });
 
 
+  // ---------- 遥测（合规匿名统计，默认关闭） ----------
+  //
+  // 三条硬约定（改这块时不要放宽）：
+  //   1. 默认关闭（opt-in）；端点留空时 shouldSend() 直接返回 no-endpoint，一个字节都不发。
+  //   2. 只上报枚举与计数，**永不上报用户输入的字符串**（域名/地址/路径/凭据一律不带）。
+  //      发送前还有 assertPayloadSafe() 兜底，命中敏感模式整包不发。
+  //   3. 永远不影响主功能：fire-and-forget、超时即弃、失败只退避不重试风暴。
+  //
+  // 调度与 DDNS 同一套路（setTimeout 链 + 退避 + unref），不引 node-cron：
+  // 遥测不需要精确时刻，多一个依赖不值当。
+  const teleState = { running: false, busy: false, lastSentAt: 0, lastError: '', fails: 0, sent: 0, nextAt: 0, lastKind: '' };
+  let teleTimer = null;
+
+  function teleStatus() {
+    return {
+      running: teleState.running,
+      busy: teleState.busy,
+      lastSentAt: teleState.lastSentAt || null,
+      nextAt: teleState.nextAt || null,
+      fails: teleState.fails,
+      sent: teleState.sent,
+      error: teleState.lastError || '',
+      lastKind: teleState.lastKind || '',
+    };
+  }
+
+  function teleStop() {
+    teleState.running = false;
+    teleState.nextAt = 0;
+    if (teleTimer) {
+      clearTimeout(teleTimer);
+      teleTimer = null;
+    }
+  }
+
+  /** instanceId 按需生成：只在「真的要发」时才造，避免给从不开遥测的用户也留一个 ID */
+  function teleEnsureId() {
+    const cfg = config.data.settings.telemetry || {};
+    if (cfg.instanceId) return cfg.instanceId;
+    const id = telemetry.newInstanceId(crypto);
+    config.data.settings.telemetry = { ...cfg, instanceId: id };
+    config.save();
+    return id;
+  }
+
+  /**
+   * 采集一次事实并发出去。
+   * 实例数只在**在线**服务器上统计：离线的 Agent 问不到实例列表，
+   * 把「问不到」当 0 会让趋势出现假的下降，所以离线服务器只贡献 Agent 版本（来自缓存的 info）。
+   */
+  async function teleSync(reason = 'auto') {
+    if (teleState.busy) return { skipped: 'busy', ...teleStatus() };
+    const cfg = config.data.settings.telemetry || {};
+    const decision = telemetry.shouldSend(cfg, {
+      now: Date.now(),
+      lastSentAt: teleState.lastSentAt,
+      failures: teleState.fails,
+      // 手动发送跳过节奏判断（间隔/退避），但不跳过 enabled / 端点合法性 / payload 自检
+      force: reason === 'manual',
+    });
+    if (!decision.send) {
+      teleState.lastKind = reason === 'manual' ? `refused:${decision.reason}` : '';
+      return { skipped: decision.reason, ...teleStatus() };
+    }
+
+    teleState.busy = true;
+    try {
+      const servers = config.listServers() || [];
+      const id = teleEnsureId();
+      const built = telemetry.buildPayload({
+        id,
+        panelVer: APP_VERSION,
+        os: telemetry.osOf(process.platform),
+        arch: telemetry.archOf(process.arch),
+        installKind: INSTALL.kind,
+        agentVers: telemetry.agentVersOf(servers),
+        servers: servers.length,
+        // 在线服务器的实例总数（离线记 null → 'unknown'，不冒充 0）
+        instances: await teleCountInstances(servers),
+        features: telemetry.featuresOf(config.data.settings),
+        errors: teleErrors.snapshot(),
+      });
+      if (!built.ok) {
+        teleState.lastError = `payload 被拒：${built.reason}`;
+        teleState.lastKind = 'rejected';
+        return { sent: false, reason: built.reason, ...teleStatus() };
+      }
+      const payload = built.payload;
+      // 面板版本取自 package.json；读不出来（打包异常）时用占位，不让这次采集白跑
+      if (!payload.panelVer) payload.panelVer = APP_VERSION || '0.0.0';
+      const r = await telemetry.send(payload, cfg.endpoint, {});
+      teleState.lastSentAt = Date.now();
+      if (r.sent) {
+        teleState.fails = 0;
+        teleState.sent += 1;
+        teleState.lastError = '';
+        teleErrors.reset(); // 这批已上报，清零避免重复计数
+        teleState.lastKind = reason;
+      } else {
+        teleState.fails += 1;
+        teleState.lastError = r.reason || '发送失败';
+        teleState.lastKind = 'failed';
+      }
+      return { sent: r.sent, reason: r.reason, status: r.status, ...teleStatus() };
+    } catch (e) {
+      // 采集本身（读服务器列表/写配置）出错也不能影响面板：只记状态
+      teleState.fails += 1;
+      teleState.lastSentAt = Date.now();
+      teleState.lastError = e && e.message ? e.message : '采集失败';
+      teleState.lastKind = 'error';
+      return { sent: false, reason: 'collect-failed', ...teleStatus() };
+    } finally {
+      teleState.busy = false;
+    }
+  }
+
+  /** 在线服务器的实例总数；一台在线的都问不到时返回 null（→ 'unknown'） */
+  async function teleCountInstances(servers) {
+    const online = servers.filter((s) => s && hub.isOnline(s.id));
+    if (!online.length) return servers.length ? null : 0; // 有服务器但全离线 = 采不到
+    let total = 0;
+    let any = false;
+    for (const s of online) {
+      try {
+        const list = await hub.request(s.id, 'instance.list', {}, 8000);
+        if (Array.isArray(list)) {
+          any = true;
+          total += list.length;
+        }
+      } catch {}
+    }
+    return any ? total : null;
+  }
+
+  function teleSchedule() {
+    teleStop();
+    const cfg = config.data.settings.telemetry || {};
+    if (!cfg.enabled || !cfg.endpoint) return;
+    teleState.running = true;
+    const tick = () => {
+      const cur = config.data.settings.telemetry || {};
+      if (!cur.enabled || !cur.endpoint) return teleStop();
+      void teleSync('auto').finally(() => {
+        if (!(config.data.settings.telemetry || {}).enabled) return;
+        const delay = telemetry.normalizeInterval(config.data.settings.telemetry.intervalSec) * 1000;
+        teleState.nextAt = Date.now() + delay;
+        teleTimer = setTimeout(tick, delay);
+        if (teleTimer.unref) teleTimer.unref();
+      });
+    };
+    // 启动后 60 秒先跑一次：比 DDNS 的 5 秒更晚，避免和面板启动、Agent 重连抢资源
+    teleState.nextAt = Date.now() + 60000;
+    teleTimer = setTimeout(tick, 60000);
+    if (teleTimer.unref) teleTimer.unref();
+  }
+
+  router.get('/settings/telemetry', (req, res) => {
+    res.json({ config: telemetry.publicConfig(config.data.settings.telemetry || {}), status: teleStatus() });
+  });
+
+  router.put('/settings/telemetry', (req, res) => {
+    const cur = config.data.settings.telemetry || {};
+    const r = telemetry.normalizeConfig(req.body || {}, cur);
+    if (r.error) return fail(res, r.error);
+    const was = !!cur.enabled;
+    config.data.settings.telemetry = r.config;
+    // 关闭时**立刻删除** instanceId：不只是置 enabled=false——留着 ID 等于留着一个
+    // 可关联的标识，下次误开就能把两段数据接起来。
+    if (was && !r.config.enabled) {
+      config.data.settings.telemetry = { ...r.config, instanceId: '' };
+      teleErrors.reset();
+    }
+    config.save();
+    teleState.fails = 0;
+    teleState.lastError = '';
+    teleSchedule();
+    res.json({ ok: true, config: telemetry.publicConfig(config.data.settings.telemetry), status: teleStatus() });
+  });
+
+  /** 重置匿名 ID：换一个新 ID，之前的数据无法再与这台机器关联 */
+  router.post('/settings/telemetry/reset-id', (req, res) => {
+    const cfg = config.data.settings.telemetry || {};
+    config.data.settings.telemetry = { ...cfg, instanceId: telemetry.newInstanceId(crypto) };
+    config.save();
+    res.json({ ok: true, config: telemetry.publicConfig(config.data.settings.telemetry), status: teleStatus() });
+  });
+
+  /** 「查看我将发送的数据」：把即将上报的 JSON 原样显示出来，透明化靠这个按钮 */
+  router.get('/settings/telemetry/preview', (req, res) => {
+    const cfg = config.data.settings.telemetry || {};
+    const servers = config.listServers() || [];
+    const built = telemetry.buildPayload({
+      id: cfg.instanceId || '(未生成：开启后首次发送时生成)',
+      panelVer: APP_VERSION,
+      os: telemetry.osOf(process.platform),
+      arch: telemetry.archOf(process.arch),
+      installKind: INSTALL.kind,
+      agentVers: telemetry.agentVersOf(servers),
+      servers: servers.length,
+      instances: 0,
+      features: telemetry.featuresOf(config.data.settings),
+      errors: teleErrors.snapshot(),
+    });
+    res.json({
+      config: telemetry.publicConfig(cfg),
+      payload: built.payload,
+      // buildPayload 被拒时把原因显示出来（正常情况永远是 ok）
+      rejected: built.ok ? '' : built.reason,
+      // 给前端做说明用：这些字段是 payload 里**永远不会出现**的
+      neverSent: ['IP 地址', '主机名/域名', '服务器地址与 SSH 凭据', 'SMTP 账号', 'AI 接口地址与密钥', '实例名', '文件路径', '日志正文'],
+    });
+  });
+
+  /** 手动发一次（设置页「立即发送一次」按钮） */
+  router.post('/settings/telemetry/send', async (req, res, next) => {
+    try {
+      if (!(config.data.settings.telemetry || {}).enabled) return fail(res, 'settings.telemetry-disabled');
+      // 手动发送忽略节奏判断，但**不绕过**安全自检（buildPayload / assertPayloadSafe 仍在链路上）
+      const r = await teleSync('manual');
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+
   // 启动调度：DDNS 立即按配置起；frp 若已启用则 5 秒后自动拉起（失败只记日志，不阻塞面板）
   ddnsSchedule();
+  teleSchedule();
   {
     const cfg = config.data.settings.frp || {};
     if (cfg.enabled && !frpMgr.running()) {

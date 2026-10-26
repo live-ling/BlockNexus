@@ -23,7 +23,7 @@
 const SCHEMA_FIELD = 'schemaVersion';
 
 /** 当前生产 schema。将来新增一次真正的结构变更时 +1，并在 MIGRATIONS 里补一条迁移。 */
-const CURRENT_SCHEMA = 2;
+const CURRENT_SCHEMA = 3;
 
 /**
  * 生产迁移链：`{ 源schema: (data) => 源+1 的数据 }`。
@@ -41,6 +41,20 @@ const MIGRATIONS = {
     }
     if (!settings.frp || typeof settings.frp !== 'object' || Array.isArray(settings.frp)) {
       settings.frp = { enabled: false, mode: 'sakura', binaryPath: '' };
+    }
+    out.settings = settings;
+    return out;
+  },
+  // 3：新增 settings.telemetry（合规遥测，默认关闭）。
+  // 只保证键存在且是对象，且**强制 enabled=false / instanceId=''**——老配置里不存在遥测
+  // 这个东西，迁移绝不替用户打开一个会外发数据的开关（opt-in 是硬约定）。
+  2: (data) => {
+    const out = { ...data };
+    const settings = { ...(data.settings && typeof data.settings === 'object' ? data.settings : {}) };
+    if (!settings.telemetry || typeof settings.telemetry !== 'object' || Array.isArray(settings.telemetry)) {
+      settings.telemetry = { enabled: false, endpoint: '', intervalSec: 24 * 3600, instanceId: '' };
+    } else {
+      settings.telemetry = { ...settings.telemetry, enabled: false, instanceId: '' };
     }
     out.settings = settings;
     return out;

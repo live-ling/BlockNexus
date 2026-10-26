@@ -1189,6 +1189,60 @@ export function frpAction(action: 'start' | 'stop' | 'restart'): Promise<{ ok: b
   return api(`/network/frp/${action}`, { method: 'POST', body: {} });
 }
 
+// ---------- 遥测（合规匿名统计，默认关闭） ----------
+
+/** GET /settings/telemetry 的 config 段：不含 instanceId 本身（只有 hasId 布尔） */
+export interface TelemetryConfig {
+  enabled: boolean;
+  endpoint: string;
+  intervalSec: number;
+  hasId: boolean;
+}
+
+export interface TelemetryStatus {
+  running: boolean;
+  busy: boolean;
+  lastSentAt: number | null;
+  nextAt: number | null;
+  fails: number;
+  sent: number;
+  error: string;
+  lastKind: string;
+}
+
+/** GET /settings/telemetry/preview：把即将上报的 JSON 原样给用户看 */
+export interface TelemetryPreview {
+  config: TelemetryConfig;
+  payload: Record<string, unknown> | null;
+  rejected: string;
+  /** 后端明示「这些字段永远不会出现在 payload 里」——透明化不靠文档承诺靠可验证 */
+  neverSent: string[];
+}
+
+export function getTelemetry(): Promise<{ config: TelemetryConfig; status: TelemetryStatus }> {
+  return api('/settings/telemetry');
+}
+
+export function saveTelemetry(body: {
+  enabled?: boolean;
+  endpoint?: string;
+  intervalSec?: number;
+}): Promise<{ ok: boolean; config: TelemetryConfig; status: TelemetryStatus }> {
+  return api('/settings/telemetry', { method: 'PUT', body });
+}
+
+export function getTelemetryPreview(): Promise<TelemetryPreview> {
+  return api('/settings/telemetry/preview');
+}
+
+export function resetTelemetryId(): Promise<{ ok: boolean; config: TelemetryConfig }> {
+  return api('/settings/telemetry/reset-id', { method: 'POST', body: {} });
+}
+
+export function sendTelemetryNow(): Promise<{ ok: boolean; sent: boolean; reason?: string; status?: TelemetryStatus }> {
+  return api('/settings/telemetry/send', { method: 'POST', body: {} });
+}
+
 /**
  * 粘贴樱花后台「手动配置」的整段 TOML → 解析并保存进 upstream 段。
  * 只覆盖 upstream，不改 enabled；frpc 正在运行时后端会自动重启应用新配置。

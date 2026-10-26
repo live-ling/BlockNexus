@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "panel": {
     "port": 3080,
     "username": "admin",
@@ -26,6 +26,7 @@
       "ipv6": false,
       "source": "api"
     },
-    "frp": { "enabled": false, "mode": "sakura", "binaryPath": "" }
+    "frp": { "enabled": false, "mode": "sakura", "binaryPath": "" },
+    "telemetry": { "enabled": false, "endpoint": "", "intervalSec": 86400, "instanceId": "" }
   }
 }

@@ -228,6 +228,36 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 > 安全：DDNS 的 Token、frp 的访问密钥都存在 `data/config.json`（与 SSH 密码同级别，明文）。
 > 建议用最小权限的 Token；**面板经隧道暴露到公网时必须开启登录保护**。
 
+## 匿名遥测（默认关闭）
+
+> 设置 → 匿名遥测。**默认关闭，需要你主动打开**；打开前可以先点「查看将发送的数据」看一眼。
+> 关闭的那一刻，本地统计 ID 会被**删除**（不只是记一个开关），下次再开就是一个全新的 ID。
+
+它回答一个问题：「外面跑的 BlockNexus 都是什么版本、什么系统、常报什么错」——这决定该优先修什么、还能不能改协议。
+
+**上报的字段就这些**（`v` 是上报格式版本，不是面板版本）：
+
+| 字段 | 内容 |
+|---|---|
+| `id` | 匿名统计 ID（随机 UUID，**不含任何机器指纹**——不用 MAC/硬盘序列号/用户名哈希） |
+| `panelVer` / `agentVers` | 面板版本 + 各远端 Agent 的版本（去重） |
+| `os` / `arch` / `installKind` | windows/linux、x64/arm64、portable/dir/git-clean/git-dirty |
+| `servers` / `instances` | **区间**，不是精确值：`0`/`1`/`2-5`/`6-20`/`20+`；采不到时是 `unknown` |
+| `features` | DDNS / frp / AI / SMTP / 通知 各自是否启用（只有布尔，没有配置值） |
+| `errors` | 错误码 → 次数（如 `ssh.timeout: 3`），**不含错误文案** |
+
+**以下内容永远不会被上报**，设置页的预览抽屉里也列了这份清单：
+
+IP 地址 · 主机名/域名 · 服务器地址与 SSH 凭据 · SMTP 账号 · AI 接口地址与密钥 · 实例名 · 文件路径 · 日志正文
+
+机制上有三道闸（改动这些约定会被测试拦下）：
+
+1. **白名单取值**：payload 由 `panel/telemetry.js` 逐字段挑出来，不在白名单里的键一律丢弃——就算调用方把敏感数据塞进采集入口也带不出去；
+2. **发送前自检**：payload 里任何字符串命中 IP / 邮箱 / URL / 路径 / 长随机串 / 常见密钥前缀的模式，**整包拒绝发送**；
+3. **端点校验**：只接受 https 且为公网地址，http 明文、内网 IP、localhost、带用户名密码的 URL 一律拒绝。
+
+节奏：启用后约 1 分钟发第一次，之后默认每 24 小时一次；失败按 5/30/120 分钟退避（封顶，不无限翻倍）。发送是 fire-and-forget，超时即弃，**遥测挂了不影响面板任何功能**。设置页可以「重置统计 ID」「立即发送一次」。
+
 ## 在线人数与玩家名单
 
 面板通过 Agent 用 **Minecraft 服务器列表协议（SLP，Server List Ping）** 直接查询实例端口（纯 Node 标准库实现，无第三方依赖），拿到实时 `在线人数 / 上限`（上限也可从 `server.properties` 的 `max-players` 兜底）：
@@ -371,6 +401,9 @@ POST /api/settings/ai-test           POST /api/settings/ai-models
 POST /api/servers/:id/instances/:name/ai-analyze
 GET|PUT /api/network/ddns            POST /api/network/ddns/check|run   (动态 DNS：配置/检测/立即同步)
 GET|PUT /api/network/frp             POST /api/network/frp/start|stop|restart  (frp 客户端托管)
+GET|PUT /api/settings/telemetry     (匿名遥测：默认关闭)
+GET  /api/settings/telemetry/preview (查看将上报的数据原样)
+POST /api/settings/telemetry/reset-id|send   (重置统计 ID / 立即发送一次)
 GET  /api/version                    (当前版本 + GitHub 最新 Release 与更新日志 + 自更新能力/推荐强度)
 GET  /api/panel-update/status        (更新进度 / 上次结果 / 能否回滚)
 GET  /api/panel-update/preflight?version=X   (升级预览：迁移项、需重装 Agent 的服务器、是否需完整包)
@@ -390,6 +423,7 @@ GET  /agent.js                       (Agent 单文件下载，匿名)
 - **通知设置**：管理员邮箱 + 「服务器离线时邮件通知」+ 「恢复上线时通知」。
   降噪规则（避免抖动与长期离线刷屏）：断线后先观察 **2 分钟**，期间自行恢复则**完全不通知**；持续离线才判定为故障并发信，同一次故障**只发一封**，之后每 **24 小时**补发一封提醒；恢复邮件**只在本次故障确实发过离线通知后**才发（不会冒出一封莫名的「已恢复」）。离线邮件里同时给出「断开时间」与「判定离线」两个时刻，便于判断故障时长；
 - **AI 日志分析**：接口地址（OpenAI Chat Completions 兼容）/ 模型 / API 密钥 + 启用开关，可「测试连接」；密钥留空表示不修改，页面不回传明文。启用后实例详情页出现「AI 分析」页签（详见上文「AI 日志分析」）；
+- **匿名遥测**（网络分区末尾）：默认关闭。开关与端点即时生效，可「查看将发送的数据」「重置统计 ID」「立即发送一次」（详见上文「匿名遥测」）；
 - **版本与更新**：当前版本与 GitHub 最新 Release 对比，内置**更新日志**（默认折叠，读取自 Release 正文）；「检查更新」可强制刷新（结果缓存 10 分钟）。本版起还支持**应用内更新**——升级预览、进度、上次结果与一键回滚、「跳过此版本」、自动更新策略与下载源（见上文「面板版本与自动更新」）；
 - **关于**（页面底部入口）：进入 `/about`，显示项目版本、开源地址、**许可证全文**（内置展开，无需跳转）、引用服务（MSL 开服器 / BMCLAPI / Mojang / Adoptium 及各核心官方 API）、开源依赖清单与免责声明。
 
