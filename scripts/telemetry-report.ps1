@@ -8,8 +8,8 @@
   只读接口，不需要凭据。
 
 .PARAMETER Endpoint
-  遥测端点。默认 https://api-blocknexus.liveling.top（EO + 反代后的 HTTPS 地址）。
-  路由未生效时可临时用 http://<telemetry-host>。
+  遥测端点。默认 https://api-blocknexus.liveling.top（经反代与 CDN 的 HTTPS 地址；
+  不要在文档或脚本里写源站 IP——源站只应接受来自反代的流量，直接暴露等于绕过防护）。
 
 .PARAMETER Days
   最近 N 天的按天装机数，0 = 全部。默认 30。
