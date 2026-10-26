@@ -205,8 +205,6 @@ export function PanelSettingsPage({
                 {/* 网络助手（实验）：DDNS 解决"动态 IP"，frp 解决"没有公网 IP" */}
                 <DdnsCard />
                 <FrpCard />
-                {/* 匿名遥测（默认关闭）：放在网络之后，它是面板唯一的对外数据出口 */}
-                <TelemetryCard />
               </div>
             ),
           },
@@ -249,6 +247,13 @@ export function PanelSettingsPage({
                 <AboutEntry />
               </div>
             ),
+          },
+          {
+            id: 'telemetry',
+            label: $('panelSettings.telemetry.section'),
+            heading: false,
+            // 默认关闭的隐私项放最后一个分区：多数人一辈子不会点开，不挤在常用设置中间
+            content: <TelemetryCard />,
           },
         ]}
       />

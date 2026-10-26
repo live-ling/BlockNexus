@@ -1714,9 +1714,11 @@ export const en = {
   'panelSettings.frp.lastExit': 'Last exit: code {0}',
   'common.refresh': 'Refresh',
 
-  // ---------- Anonymous telemetry (off by default) ----------
-  'panelSettings.telemetry.title': 'Anonymous telemetry',
-  'panelSettings.telemetry.desc': 'Help improve BlockNexus: reports versions, OS and error-code counts only — never IPs, addresses, domains, paths or credentials. Off by default.',
+  // ---------- Experience improvement program (anonymous telemetry, off by default) ----------
+  'panelSettings.telemetry.title': 'Experience improvement program',
+  'panelSettings.telemetry.desc': 'Help us learn which versions and systems people actually run, and which errors show up most — so we know what to improve first. Reports version, OS and error-code counts only; never IPs, addresses, domains, paths or credentials.',
+  'panelSettings.telemetry.section': 'Experience improvement program',
+  'panelSettings.telemetry.loadFailed': 'This panel version does not support it yet (available after upgrading)',
   'panelSettings.telemetry.on': 'On',
   'panelSettings.telemetry.off': 'Off',
   'panelSettings.telemetry.enabledLabel': 'Send anonymous usage statistics',

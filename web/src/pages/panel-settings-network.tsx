@@ -798,11 +798,15 @@ function LogPanel({
   );
 }
 
-// ---------- 遥测（默认关闭，opt-in） ----------
+// ---------- 体验改进计划（匿名遥测，默认关闭） ----------
 //
 // 设计取舍：这个卡片**没有**「保存」按钮——开关与端点各自即时生效。
 // 理由：遥测的正确性不靠表单的完整性，靠「所见即所发」。开关一拨就生效（并立刻删/建 ID），
 // 端点输完失焦即保存并校验，比攒一堆改动再统一提交更不容易出现「以为关了其实还在发」。
+//
+// 开关是**本地的乐观状态**：不依赖 GET 成功就能拨。老面板后端没有这些路由（404）时，
+// 卡片退化为「说明 + 开关 + 提示升级」，而不是整块报错——404 只说明旧后端不认识这个
+// 接口，不代表功能坏了，把它渲染成红色错误会吓到用户。
 
 export function TelemetryCard({ className = '' }: { className?: string }) {
   const { success, error } = useToastHelpers();
@@ -811,8 +815,12 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
   const [preview, setPreview] = useState<TelemetryPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [endpoint, setEndpoint] = useState('');
+  // 404 = 面板后端还是旧版本（没有这些路由）。与其它加载错误区分开：这不是故障，只是不可用。
+  const [unsupported, setUnsupported] = useState(false);
   const [loadErr, setLoadErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // 开关的乐观值：GET 失败时仍有值可显示、可操作
+  const [switchOn, setSwitchOn] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -822,9 +830,13 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
         setCfg(r.config);
         setStatus(r.status);
         setEndpoint(r.config.endpoint);
+        setSwitchOn(r.config.enabled);
       })
       .catch((e) => {
-        if (alive) setLoadErr(errText(e));
+        if (!alive) return;
+        const msg = errText(e);
+        if (/\b404\b/.test(msg)) setUnsupported(true);
+        else setLoadErr(msg);
       });
     return () => {
       alive = false;
@@ -838,6 +850,7 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
       setCfg(r.config);
       setStatus(r.status);
       setEndpoint(r.config.endpoint);
+      setSwitchOn(r.config.enabled);
       return r;
     } catch (e) {
       error($('panelSettings.error.save'), errText(e));
@@ -862,17 +875,41 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
       description={$('panelSettings.telemetry.desc')}
       className={className}
       status={
-        <StateChip
-          ok={!!cfg?.enabled}
-          okText={$('panelSettings.telemetry.on')}
-          badText={$('panelSettings.telemetry.off')}
-        />
+        <div className="flex items-center gap-2">
+          <Switch
+            className="shrink-0"
+            checked={switchOn}
+            disabled={busy || unsupported}
+            onCheckedChange={(v) => {
+              setSwitchOn(v); // 乐观更新：后端不支持时 UI 也不至于没反应
+              void patch({ enabled: v }).then((r) => {
+                if (r) success(r.config.enabled ? $('panelSettings.telemetry.enabled') : $('panelSettings.telemetry.disabled'));
+                else setSwitchOn(!v); // 保存失败回滚
+              });
+            }}
+          />
+          <StateChip ok={switchOn} okText={$('panelSettings.telemetry.on')} badText={$('panelSettings.telemetry.off')} />
+        </div>
       }
     >
       {body}
     </SettingsCard>
   );
 
+  // 旧面板后端：说明 + 开关（禁用）+ 升级提示，不渲染成错误
+  if (unsupported) {
+    return wrap(
+      <div className="grid max-w-[620px] gap-2">
+        <p className="text-[12px] text-muted-foreground">
+          {$('panelSettings.telemetry.loadFailed')}
+        </p>
+        <label className="flex items-center gap-2 text-[13px] opacity-60">
+          <Switch checked={false} disabled />
+          <span>{$('panelSettings.telemetry.enabledLabel')}</span>
+        </label>
+      </div>,
+    );
+  }
   if (loadErr) return wrap(<p className="text-[12px] text-destructive">{loadErr}</p>);
   if (!cfg) return wrap(<p className="text-[12px] text-muted-foreground">{$('common.loading')}</p>);
 
@@ -882,20 +919,7 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
 
   return wrap(
     <>
-      {/* 开关即时生效：开启时后端生成匿名 ID，关闭时立刻删除 */}
-      <label className="flex max-w-[620px] items-center gap-2 pb-1 text-[13px]">
-        <Switch
-          checked={cfg.enabled}
-          disabled={busy}
-          onCheckedChange={(v) => {
-            void patch({ enabled: v }).then((r) => {
-              if (r) success(r.config.enabled ? $('panelSettings.telemetry.enabled') : $('panelSettings.telemetry.disabled'));
-            });
-          }}
-        />
-        <span>{$('panelSettings.telemetry.enabledLabel')}</span>
-      </label>
-
+      {/* 开关在卡片标题右侧（status 槽），正文不再重复放一个开关 */}
       <FormGrid>
         <Field
           htmlFor="telemetry-endpoint"

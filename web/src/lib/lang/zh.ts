@@ -1719,9 +1719,11 @@ export const zh = {
   'panelSettings.frp.lastExit': '上次退出：code {0}',
   'common.refresh': '刷新',
 
-  // ---------- 匿名遥测（默认关闭） ----------
-  'panelSettings.telemetry.title': '匿名遥测',
-  'panelSettings.telemetry.desc': '帮助改进 BlockNexus：只上报版本、系统与错误码计数，绝不含 IP、地址、域名、路径或任何凭据。默认关闭。',
+  // ---------- 体验改进计划（匿名遥测，默认关闭） ----------
+  'panelSettings.telemetry.title': '体验改进计划',
+  'panelSettings.telemetry.desc': '加入后帮助我们了解大家在实际用什么版本、什么系统、常遇到什么错误，从而决定优先改进什么。只上报版本、系统与错误码计数，绝不含 IP、地址、域名、路径或任何凭据。',
+  'panelSettings.telemetry.section': '体验改进计划',
+  'panelSettings.telemetry.loadFailed': '当前面板版本尚不支持（升级面板后可用）',
   'panelSettings.telemetry.on': '已开启',
   'panelSettings.telemetry.off': '已关闭',
   'panelSettings.telemetry.enabledLabel': '发送匿名使用统计',
