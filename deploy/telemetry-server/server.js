@@ -40,11 +40,39 @@ const MAX_RECORDS_PER_DAY = 100000;
  * 可用环境变量 TELEMETRY_KEY 覆盖（换端点/自建时不必改代码）。
  */
 const TELEMETRY_KEY = process.env.TELEMETRY_KEY || 'bnx-telemetry-v1-7f3a9c21e5d84b06';
+
+/**
+ * 读取 token（**真正的秘密**：只存在 VPS 的环境文件与本地，绝不进仓库）。
+ *
+ * 为什么读和写用两把不同的钥匙：
+ *   · 写（POST /telemetry）面对全网，任何人都可能打过来，所以用「公开的共享串」——
+ *     它只提高门槛、不承担保密职责：被绕过的代价是垃圾数据，而限频与白名单兜得住；
+ *   · 读（GET /summary）暴露的是**运营数据**（装机量、版本分布、错误码），
+ *     只有运维者本人该看，所以必须用真秘密。
+ *
+ * 没配 token 时 /summary 直接 503（fail-closed）：宁可看不到报表，
+ * 也不能因为忘了配环境变量就把运营数据开放给全网——这是唯一安全的默认。
+ */
+const TELEMETRY_TOKEN = process.env.TELEMETRY_TOKEN || '';
+
 /** 常量时间比较：避免按字节逐位泄漏正确前缀 */
-function keyOk(got) {
+function safeEqual(got, want) {
   const a = Buffer.from(String(got || ''));
-  const b = Buffer.from(TELEMETRY_KEY);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  const b = Buffer.from(String(want || ''));
+  return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
+}
+
+function keyOk(got) {
+  return safeEqual(got, TELEMETRY_KEY);
+}
+
+/** 读 token：支持 X-Summary-Token 或 Authorization: Bearer <token> */
+function tokenOk(req) {
+  if (!TELEMETRY_TOKEN) return false;
+  const direct = req.headers['x-summary-token'];
+  if (direct && safeEqual(direct, TELEMETRY_TOKEN)) return true;
+  const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || '').trim());
+  return !!(m && safeEqual(m[1], TELEMETRY_TOKEN));
 }
 
 // ---------- 与 panel/telemetry.js 对齐的校验 ----------
@@ -261,8 +289,11 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/summary') {
-    // /summary 不鉴权（只有聚合结果，无原始数据），但加个非常粗的限频防爬
-    if (!rateLimit(`sum:${ip}`, 30, 3600_000)) return done(429, { error: 'too many requests' });
+    // 读路径要真秘密：运营数据（装机量/版本分布）只有运维者该看。
+    // 未配 token → 503 fail-closed；配了但不带/带错 → 401。
+    if (!TELEMETRY_TOKEN) return done(503, { error: 'summary token not configured' });
+    if (!rateLimit(`sum:${ip}`, 60, 3600_000)) return done(429, { error: 'too many requests' });
+    if (!tokenOk(req)) return done(401, { error: 'unauthorized' });
     const records = readRecords();
     const s = summarize(records, Number(url.searchParams.get('days')) || 0);
     s.today.records = records.filter((r) => new Date(r.ts).toISOString().slice(0, 10) === s.day).length;

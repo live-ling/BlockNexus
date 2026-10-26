@@ -7,6 +7,11 @@ Wants=network-online.target
 Type=simple
 ExecStart=/usr/local/bin/node /opt/blocknexus-telemetry/server.js
 WorkingDirectory=/opt/blocknexus-telemetry
+# 读 token 等秘密放环境文件，**不进仓库**（本文件会随仓库公开）。
+# 文件内容形如：TELEMETRY_TOKEN=<随机串>，权限 600、属主 root。
+# 前缀 `-` 表示文件缺失也不阻止启动——但那样 /summary 会 fail-closed 返回 503，
+# 这正是我们要的：宁可报表不可用，也不能因为漏配就把运营数据开放出去。
+EnvironmentFile=-/opt/blocknexus-telemetry/env
 Environment=TELEMETRY_PORT=45565
 Environment=TELEMETRY_DATA_DIR=/opt/blocknexus-telemetry/data
 Restart=on-failure

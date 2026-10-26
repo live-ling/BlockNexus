@@ -9,6 +9,9 @@ const os = require('os');
 process.env.TELEMETRY_PORT = '0'; // 随机端口
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bn-tel-srv-'));
 process.env.TELEMETRY_DATA_DIR = dir;
+// 读路径的 token 用测试值（生产由 VPS 的 EnvironmentFile 提供，绝不进仓库）
+const SUMMARY_TOKEN = 'test-summary-token-0123456789';
+process.env.TELEMETRY_TOKEN = SUMMARY_TOKEN;
 
 const server = require('./server.js');
 // 与 server.js 的默认密钥一致（server.js 可被环境变量覆盖；测试用默认值）
@@ -60,10 +63,10 @@ function post(body, port, headers = {}) {
   });
 }
 
-function get(p, port) {
+function get(p, port, headers = {}) {
   return new Promise((resolve, reject) => {
     require('http')
-      .get({ host: '127.0.0.1', port, path: p }, (res) => {
+      .get({ host: '127.0.0.1', port, path: p, headers }, (res) => {
         let t = '';
         res.on('data', (c) => (t += c));
         res.on('end', () => resolve({ status: res.statusCode, body: t }));
@@ -144,8 +147,20 @@ function get(p, port) {
   ok('拒收: 非法 JSON', badJson.status === 400, JSON.stringify(badJson));
 
   // 5) /health 与 /summary
-  ok('health → 200', (await get('/health', port)).status === 200);
-  const sum = JSON.parse((await get('/summary', port)).body);
+  ok('health → 200（公开，不含数据）', (await get('/health', port)).status === 200);
+
+  // 读路径鉴权：无 token / 错 token 一律 401，且不返回任何数据
+  const noTok = await get('/summary', port);
+  ok('summary 无 token → 401', noTok.status === 401, `${noTok.status}`);
+  ok('summary 无 token 不泄漏数据', !noTok.body.includes('totalRecords'), noTok.body.slice(0, 80));
+  const badTok = await get('/summary', port, { 'X-Summary-Token': 'wrong' });
+  ok('summary 错 token → 401', badTok.status === 401, `${badTok.status}`);
+  ok('summary Bearer 形式也可用',
+    (await get('/summary', port, { Authorization: `Bearer ${SUMMARY_TOKEN}` })).status === 200);
+  ok('summary 错 Bearer → 401',
+    (await get('/summary', port, { Authorization: 'Bearer nope' })).status === 401);
+
+  const sum = JSON.parse((await get('/summary', port, { 'X-Summary-Token': SUMMARY_TOKEN })).body);
   ok('summary.totalRecords=1', sum.totalRecords === 1, JSON.stringify(sum.totalRecords));
   ok('summary.uniqueIds=1', sum.uniqueIds === 1);
   ok('summary.today.installs=1', sum.today.installs === 1, JSON.stringify(sum.today));
@@ -163,7 +178,7 @@ function get(p, port) {
   // 7) 多天聚合（手动注入历史记录验证 installsPerDay）
   const y = new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 10);
   fs.appendFileSync(path.join(dir, 'telemetry.jsonl'), JSON.stringify({ ...GOOD, id: 'b1b2c3d4-0000-4000-8000-000000000000', ts: Date.parse(y + 'T12:00:00Z') }) + '\n');
-  const sum2 = JSON.parse((await get('/summary?days=7', port)).body);
+  const sum2 = JSON.parse((await get('/summary?days=7', port, { 'X-Summary-Token': SUMMARY_TOKEN })).body);
   ok('按天装机数包含两天', Object.keys(sum2.installsPerDay).length >= 2, JSON.stringify(sum2.installsPerDay));
 
   // 8) 404
