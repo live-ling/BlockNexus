@@ -461,6 +461,25 @@ function VersionCard({
   // 只有「能自动装 + 有新版本 + 没被跳过 + 没被本次会话稍后提醒」才出更新横幅
   const showBanner = selfUpdate && hasUpdate && !dismissed && !snoozeHide;
 
+  // 一键更新的目标：bridge 时是中间版本，否则是最新版。
+  // `/version` 已经把 allowed/mode/downloadBytes/migrations 都算好，前端不再先取预检。
+  const recTarget = rec?.target || rec?.latest || info?.latest || '';
+  const recBridge = rec?.mode === 'bridge' ? rec.bridgeVersion || '' : '';
+  const recPrimaryVersion = recBridge || recTarget;
+  const recCanApply =
+    !!rec &&
+    (rec.allowed !== false || (rec.mode === 'bridge' && !!rec.bridgeVersion)) &&
+    !!recPrimaryVersion;
+  /** 主按钮：不可逆先展开预检（要勾选确认）；bridge 直接升中间版本；其余直接更新 */
+  const primaryUpdate = () => {
+    if (!recCanApply) return;
+    if (rec?.irreversible) {
+      void openPreflight(recPrimaryVersion);
+      return;
+    }
+    void startUpdate(recPrimaryVersion);
+  };
+
   /** 取升级预览并就地展开；失败用 toast 兜底（errText 已本地化） */
   const openPreflight = async (version: string) => {
     setPreflightBusy(true);
@@ -476,19 +495,17 @@ function VersionCard({
   };
 
   /**
-   * 受理更新。`target` 默认取预览里的目标版本；bridge 模式传入中间版本（先升到它再继续）。
-   * confirmIrreversible 只在预览标了不可逆、且用户二次确认后带上——后端据此把「不可逆」
-   * 变成一次显式的知情同意，而不是前端自己判断后静默放行。
+   * 一键更新：目标版本与「是否不可逆」由 `/version` 的 recommendation 或预检给出。
+   * 不再由前端自己拼 preflight 对象——后端 POST 时会按目标版本重新预检并校验。
    */
-  const startUpdate = async (pf: PanelUpdatePreflight, target?: string) => {
-    const version = target || pf.to || pf.latest;
+  const startUpdate = async (version: string, opts: { irreversible?: boolean } = {}) => {
     if (!version) return;
     setApplying(true);
     try {
       await applyPanelUpdate({
         version,
         confirm: version,
-        ...(pf.irreversible && (!target || target === pf.to) ? { confirmIrreversible: true as const } : {}),
+        ...(opts.irreversible ? { confirmIrreversible: true as const } : {}),
       });
       // 通知 App：本地已发起更新，请开始轮询 /panel-update/status 并在版本变化后自动刷新。
       // 走 window 事件而不是 Context/全局 store：只有 App 一个监听者，不值得为此引入共享状态。
@@ -674,6 +691,27 @@ function VersionCard({
         </div>
       )}
 
+      {/* 上次更新未完成：pending 存在且当前版本没到目标（更新器死了/健康检查失败） */}
+      {!running &&
+        (() => {
+          const pending = updateState?.pending || status?.pending;
+          if (!pending) return null;
+          return (
+            <div className="grid gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {$('panelSettings.update.pending.title')}
+              </div>
+              <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                {$('panelSettings.update.pending.detail', String(pending.to || '?'))}
+              </p>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {$('panelSettings.update.pending.hint')}
+              </p>
+            </div>
+          );
+        })()}
+
       {/* 建议横幅：颜色按 severity 分级，security 用 destructive、critical 用 amber，其余中性 */}
       {showBanner && !running && (
         <div className={`grid gap-2 rounded-lg border px-3 py-2.5 ${severityBox(rec?.severity ?? 'optional')}`}>
@@ -689,7 +727,42 @@ function VersionCard({
             {rec?.irreversible && <p>{$('panelSettings.update.warn.irreversible')}</p>}
             {rec?.requiresAgentReinstall && <p>{$('panelSettings.update.warn.agentReinstall')}</p>}
             {rec?.metaMissing && <p className="text-muted-foreground">{$('panelSettings.update.metaMissing')}</p>}
+            {rec?.warnings
+              ?.filter(
+                (w) =>
+                  ![
+                    'update.warn-breaking',
+                    'update.warn-irreversible',
+                    'update.warn-agent-reinstall',
+                    'update.meta-missing',
+                  ].includes(w.code),
+              )
+              .map((w) => (
+                <p key={w.code} className="text-amber-600 dark:text-amber-400">
+                  {w.text}
+                </p>
+              ))}
           </div>
+          {/* 一键更新所需的关键信息：前端不再为了看这些再取一次预检 */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+            {rec?.downloadBytes ? <span>{fmtDownloadBytes(rec.downloadBytes)}</span> : null}
+            {rec && rec.migrations > 0 ? (
+              <span>· {$('panelSettings.update.preflight.migrations', rec.migrations)}</span>
+            ) : null}
+            {rec?.sourceId ? (
+              <span>
+                ·{' '}
+                {$(
+                  'panelSettings.update.inlineSource',
+                  rec.sourceId === 'github' ? 'GitHub' : $('panelSettings.update.sourceCustom'),
+                )}
+              </span>
+            ) : null}
+            {rec?.signatureOk ? <span>· {$('panelSettings.update.signatureOk')}</span> : null}
+          </div>
+          {rec && rec.allowed === false && rec.reasonText && (
+            <p className="text-[11px] leading-relaxed text-destructive">{rec.reasonText}</p>
+          )}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
             {rec?.notesUrl && (
               <a
@@ -797,8 +870,8 @@ function VersionCard({
               // 跨版本不能一步到位：只允许先升到中间版本，文案与按钮都指向它
               <Button
                 size="sm"
-                disabled={applying || !preflight.allowed || !preflight.bridgeVersion}
-                onClick={() => void startUpdate(preflight, preflight.bridgeVersion)}
+                disabled={applying || !preflight.bridgeVersion}
+                onClick={() => void startUpdate(preflight.bridgeVersion)}
               >
                 {applying ? $('panelSettings.update.busy') : $('panelSettings.update.preflight.bridgeAction', preflight.bridgeVersion)}
               </Button>
@@ -813,7 +886,11 @@ function VersionCard({
                   // 不可逆更新必须显式勾一次：二次点击本身就是确认动作（不引 Checkbox 依赖）
                   (preflight.irreversible && !irreversibleOk)
                 }
-                onClick={() => void startUpdate(preflight)}
+                onClick={() =>
+                  void startUpdate(preflight.to || preflight.latest, {
+                    irreversible: preflight.irreversible && irreversibleOk,
+                  })
+                }
               >
                 {applying
                   ? $('panelSettings.update.busy')
@@ -894,14 +971,55 @@ function VersionCard({
           </>
         )}
         {selfUpdate && hasUpdate && !running && (
-          <Button
-            size="sm"
-            disabled={preflightBusy || applying}
-            onClick={() => void openPreflight(rec?.latest || info?.latest || '')}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {preflightBusy ? $('panelSettings.update.preflight.checking') : $('panelSettings.update.apply')}
-          </Button>
+          <>
+            {rec?.needsFullPackage && rec.fullPackageUrl ? (
+              // 依赖/外壳变了：应用内只换程序文件不够，给（跟随下载源的）完整包
+              <a
+                href={rec.fullPackageUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-[11.5px] text-foreground transition-colors hover:bg-muted/60"
+              >
+                <Download className="h-3.5 w-3.5" />
+                {$('panelSettings.update.preflight.download')}
+              </a>
+            ) : rec ? (
+              <>
+                <Button
+                  size="sm"
+                  disabled={!recCanApply || applying || preflightBusy}
+                  onClick={primaryUpdate}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {applying
+                    ? $('panelSettings.update.busy')
+                    : rec.irreversible
+                      ? $('panelSettings.update.confirmIrreversible')
+                      : recBridge
+                        ? $('panelSettings.update.preflight.bridgeAction', recBridge)
+                        : $('panelSettings.update.applyTo', recPrimaryVersion)}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={applying || preflightBusy || !recTarget}
+                  onClick={() => void openPreflight(recTarget)}
+                >
+                  {$('panelSettings.update.details')}
+                </Button>
+              </>
+            ) : (
+              // 老后端没有 recommendation：退回「先取预检」的旧入口
+              <Button
+                size="sm"
+                disabled={preflightBusy || applying}
+                onClick={() => void openPreflight(info?.latest || '')}
+              >
+                <Download className="h-3.5 w-3.5" />
+                {preflightBusy ? $('panelSettings.update.preflight.checking') : $('panelSettings.update.apply')}
+              </Button>
+            )}
+          </>
         )}
         <Button variant="outline" size="sm" disabled={busy || running} onClick={() => check(true)}>
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />

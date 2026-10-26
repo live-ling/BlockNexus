@@ -41,6 +41,8 @@ panel/
   frp.js        frp 客户端托管：配置生成（SakuraFrp 参数 / frpc.toml）、进程状态机、日志
   api.js        REST API（登录、服务器 CRUD、安装、实例操作、网络助手、面板自更新）+ SSE 实时推送
   update.js     自更新判定：安装形态、Release 元数据解析、升级计划、写入白名单（纯函数）
+  release.js    发布源与 URL 构造：GitHub latest 元数据、资产名/URL、自定义镜像（纯逻辑）
+  signature.js  update.json 的 Ed25519 验签/签名（公钥内置，私钥只在发版时使用）
   migrate.js    data/config.json 的 schemaVersion 迁移链
   mail.js       邮件模板（HTML 卡片样式 + 纯文本兜底）
 agent/
@@ -48,8 +50,11 @@ agent/
   build.js      打包器：把 src/** 拼成上面的单文件产物（`npm run build:agent`；`--check` 只校验是否同步）
   src/          Agent 源码，按功能组分模块（config/crypto/ws/http/catalog/util + instance/**）
 scripts/
-  panel-updater.js  自更新执行器（独立进程：快照 → 替换 → 拉起 → 健康检查 → 失败回滚）
-  build-release.ps1 发版打包（便携版 / 纯外壳 / 应用包 + update.json + SHA256SUMS.txt）
+  panel-updater.js    自更新执行器（独立进程：快照 → 替换 → 拉起 → 健康检查 → 失败回滚）
+  finalize-release.js 发布收尾（files 哈希 + update.json.sig + SHA256SUMS.txt）
+  check-release.js    发布门禁（版本/资产/dataSchema/minSourceVersion/signature 全量断言）
+  start-panel.sh      systemd 启动包装（更新期间等 data/update/in-progress，避免和 Restart=always 抢）
+  build-release.ps1   发版打包（便携版 / 纯外壳 / 应用包 + update.json + SHA256SUMS.txt）
 data/           运行时数据（config.json、本地测试实例、data/update/ 更新日志与备份），已 gitignore
 ```
 
@@ -98,6 +103,39 @@ node agent/test-frp.js            # frp 托管：TOML 生成/参数校验/进程
 ```
 
 覆盖范围：模块导入完整性、产物与源码同步 / npm 内联、启动并发去重、看门狗与备份调度规则、玩家进出与在线时长统计、聊天解析与落盘、文件操作与路径越界、面板安全与加固、错误码与中英文案成对、面板自更新与配置迁移、Anvil 解析与地图渲染、Windows 子进程静默与 Java 多版本管理、卸载的后置核验与幂等。
+
+新增的更新相关测试：
+
+```bash
+node agent/test-panel-release.js       # 发布源/URL/资产合成（纯逻辑）
+node agent/test-panel-signature.js     # Ed25519 验签/篡改/未知 keyId
+node agent/test-panel-update-flow.js   # 真起更新器：成功/回滚/非法路径
+node agent/test-release-tools.js       # finalize + check-release 门禁
+```
+
+---
+
+## 发布签名与门禁
+
+- **私钥**：`data/update-signing-key.b64`（base64 PKCS#8，`data/` 已 gitignore）；发版时也可用 `BLOCKNEXUS_SIGNING_KEY` 环境变量。
+  **绝不提交私钥**；换机器/换人时把它离线备份，丢失后只能轮换公钥（旧面板会拒绝新签名）。
+- **公钥**：`panel/signature.js` 的 `PUBLIC_KEYS`（keyId → base64 SPKI DER）。轮换时新增一项，旧 keyId 保留至少一个版本。
+- **产物**：`update.json` 里的 `files` 只覆盖三个 zip；`update.json.sig` 签的是 `update.json` 的原始字节；
+  `SHA256SUMS.txt` 覆盖目录内全部文件（含 `.sig`），供 0.6.0 与人工核对。
+- **顺序**（缺一不可）：
+
+  ```powershell
+  scripts\build-release.ps1 -Severity recommended -DataSchema 3 -MinSchema 1 -MinSourceVersion 0.6.0 -Summary "..."
+  node scripts/finalize-release.js --dir <产物目录> --key data/update-signing-key.b64   # 本机；CI 用 BLOCKNEXUS_SIGNING_KEY
+  node scripts/check-release.js --dir <产物目录> --require-signature
+  gh release create vX.Y.Z <产物目录>\* --notes-file <说明>
+  ```
+
+- **门禁会拦**：`tag` 与 `version` 不一致、`dataSchema` 与 `CURRENT_SCHEMA` 不符、`minSourceVersion` 为空、
+  缺 app zip、`files`/`SHA256SUMS` 对不上、`lockHash`/`shellHash` 与工作区不一致、签名无效。
+- **为什么冻结依赖与外壳**：0.6.0 的更新器只认 payload（不碰 `node_modules`/exe/dll），且用 `lockHash`/`shellHash`
+  判断能否应用包更新。改了 `package-lock.json` 或重打 exe，0.6.0 用户就会退化成「下载完整包手动装」。
+  要改，必须先发一个带 `deps`/完整包能力的版本，再把 `minSourceVersion` 提上去。
 
 ---
 

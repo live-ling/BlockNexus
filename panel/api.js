@@ -22,8 +22,9 @@ const { errorResponse, langOf, messageOf } = require('./error-codes');
 // 都收在 panel/update.js：这一层必须能被单测覆盖，且不允许在 api.js 里再长出一份
 // 版本比较的副本（历史坑：两套 semver 判断迟早对不上）。
 const upd = require('./update');
+const release = require('./release');
+const signature = require('./signature');
 const migrate = require('./migrate');
-const { semverGreater } = upd;
 
 const COOKIE = 'blocknexussid';const SESSION_TTL = 7 * 24 * 3600 * 1000;
 // 勾选「记住我」：Cookie 与会话有效期都放宽到 30 天（滑动续期），关浏览器仍保持登录
@@ -66,93 +67,175 @@ process.once('exit', () => {
   }
 });
 
-// 最新版本检查：GitHub Releases（缓存 10 分钟；?refresh=1 跳过缓存）
+// 最新版本检查：优先 releases/latest/download/update.json（不消耗 GitHub API 速率限制），
+// 失败时按源列表回退；GitHub API 只用于 changelog / 真实资产大小。
 const REPO_URL = 'https://github.com/live-ling/BlockNexus';
 const LATEST_RELEASE_API = 'https://api.github.com/repos/live-ling/BlockNexus/releases/latest';
 const VERSION_CACHE_MS = 10 * 60e3;
-let versionCache = { at: 0, data: null };
+let versionCache = { at: 0, data: null, key: '' };
 
-/** 三段版本号比较：a 是否大于 b（忽略 v 前缀与后缀）——实现已上移到 panel/update.js */
-
-/**
- * 检查更新；失败时保留旧缓存并在结果里带 error 字段。force=true 跳过缓存（?refresh=1）
- *
- * 自更新需要的额外信息也在这里取（**同一份缓存**，不额外打 GitHub API）：
- *   · assets：Release 的资产列表（挑 app/portable 包与 SHA256SUMS.txt）
- *   · meta：update.json（推荐等级、跨版本、迁移声明）——它决定"该不该升、怎么升"
- */
-async function checkLatestRelease(version, force = false) {
-  const fresh = Date.now() - versionCache.at < VERSION_CACHE_MS;
-  if (!force && versionCache.data && fresh) return { ...versionCache.data, cached: true };
+/** 可选增强：GitHub API；4s 超时，失败返回 null（绝不影响更新） */
+async function fetchLatestApi(version) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
     const r = await fetch(LATEST_RELEASE_API, {
       signal: ctrl.signal,
       headers: { 'User-Agent': `BlockNexus/${version}`, Accept: 'application/vnd.github+json' },
     });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  } finally {
     clearTimeout(timer);
-    if (!r.ok) throw new Error(`GitHub API ${r.status}`);
-    const j = await r.json();
-    const tag = String(j.tag_name || '').replace(/^v/, '');
-    const assets = Array.isArray(j.assets)
-      ? j.assets.slice(0, 40).map((a) => ({
-          name: String(a.name || ''),
-          size: Number(a.size) || 0,
-          browser_download_url: String(a.browser_download_url || ''),
-        }))
-      : [];
-    // update.json：机器可读的发布元数据（可能没有——老 Release 都没有，按安全默认处理）
-    let meta = { ...upd.META_DEFAULTS };
-    let metaMissing = true;
-    const metaAsset = upd.pickAsset(assets, upd.ASSET.meta);
-    if (metaAsset) {
-      try {
-        const text = await fetchRemoteText(metaAsset.url, 128 * 1024, `BlockNexus/${version}`);
-        const parsed = upd.parseUpdateMeta(text);
-        meta = parsed.meta;
-        metaMissing = parsed.missing || !parsed.ok;
-      } catch {
-        // 取不到就按"未声明"处理：不拦更新，但必须人工确认（安全默认）
-      }
-    }
-    const data = {
-      latest: tag || null,
-      hasUpdate: !!tag && semverGreater(tag, version),
-      releaseUrl: j.html_url || null,
-      changelog: String(j.body || ''),
-      checkedAt: Date.now(),
-      assets,
-      meta,
-      metaMissing,
-    };
-    versionCache = { at: Date.now(), data };
-    return data;
-  } catch (e) {
-    if (versionCache.data) return { ...versionCache.data, cached: true, error: e.message || '检查失败' };
-    return {
-      latest: null,
-      hasUpdate: false,
-      releaseUrl: null,
-      changelog: '',
-      checkedAt: Date.now(),
-      assets: [],
-      meta: { ...upd.META_DEFAULTS },
-      metaMissing: true,
-      error: e.message || '检查失败',
-    };
   }
 }
 
-/** 取远端小文本（update.json / SHA256SUMS.txt）；带上限，避免异常端点撑爆内存 */
-function fetchRemoteText(url, maxBytes, ua) {
+function errTextOf(e) {
+  return e && e.message ? e.message : String(e);
+}
+
+/**
+ * 解析 + 验签一份 update.json。
+ * 规则：GitHub 源允许「无签名」（兼容 0.6.0 的旧规则）；其它源必须签名通过。
+ * @returns {{ok:boolean, parsed?:object, verdict:object, reason?:string}}
+ */
+async function readSignedMeta(text, src, version) {
+  const parsed = upd.parseUpdateMeta(text);
+  if (!parsed.ok) return { ok: false, parsed, verdict: { ok: false, reason: 'meta-invalid' }, reason: 'meta-invalid' };
+  let sigText = '';
+  try {
+    sigText = await fetchRemoteText(release.sigUrl(src, parsed.meta.version), 8 * 1024, `BlockNexus/${version}`, {
+      timeoutMs: 4000,
+    });
+  } catch {
+    // 没有 .sig 很常见（0.6.0 及更早 / GitHub 直连）
+  }
+  const verdict = signature.verifyUpdateMeta(text, sigText);
+  if (!verdict.ok && src.id !== 'github') {
+    return { ok: false, parsed, verdict, reason: `signature-${verdict.reason}` };
+  }
+  return { ok: true, parsed, verdict };
+}
+
+/**
+ * 检查更新；失败时保留旧缓存并在结果里带 error 字段。
+ *
+ * @param {string} version 当前面板版本
+ * @param {{force?:boolean, source?:string}} opts
+ *   force=true 跳过缓存（?refresh=1）；source 是「高级：自定义源」，留空=自动
+ */
+async function checkLatestRelease(version, opts = {}) {
+  const force = opts.force === true;
+  const custom = String(opts.source || '');
+  const fresh = Date.now() - versionCache.at < VERSION_CACHE_MS;
+  if (!force && versionCache.data && fresh && versionCache.key === custom) {
+    return { ...versionCache.data, cached: true };
+  }
+  const sources = release.sources(custom);
+  let lastErr = null;
+  let bestNoUpdate = null;
+
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i];
+    try {
+      const text = await fetchWithRetry(release.metaUrl(src, ''), 128 * 1024, `BlockNexus/${version}`, {
+        timeoutMs: 5000,
+        retries: 0,
+      });
+      const checked = await readSignedMeta(text, src, version);
+      if (!checked.ok) throw new Error(checked.reason);
+      const meta = checked.parsed.meta;
+      // API 增强只给 GitHub 源；自定义源必须坚持用镜像 URL，否则下载又回到 GitHub
+      const api = src.id === 'github' ? await fetchLatestApi(version) : null;
+      const assets = release.mergeAssets(api && api.assets, src, meta.version);
+      const data = {
+        latest: meta.version || null,
+        hasUpdate: !!meta.version && upd.isNewer(meta.version, version),
+        releaseUrl: (api && api.html_url) || `${REPO_URL}/releases/tag/v${meta.version}`,
+        changelog: api ? String(api.body || '') : '',
+        checkedAt: Date.now(),
+        assets,
+        meta,
+        metaMissing: false,
+        sourceId: src.id,
+        signature: checked.verdict,
+      };
+      // 自定义源可能停留在旧版本（缓存/同步延迟）：它说「已是最新」时不要挡住后面的 GitHub，
+      // 但仍记下来，万一后面的源全部失败还能给出一个可用结果。
+      if (!data.hasUpdate && i < sources.length - 1) {
+        bestNoUpdate = data;
+        continue;
+      }
+      versionCache = { at: Date.now(), data, key: custom };
+      return data;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  // 兜底：update.json 不存在（0.6.0 及更早的 Release）时，用 GitHub API 的 tag 合成安全默认
+  const api = await fetchLatestApi(version);
+  if (api && api.tag_name) {
+    const tag = String(api.tag_name).replace(/^v/, '');
+    const eff = release.effectiveMeta(null, tag);
+    const assets = release.mergeAssets(api.assets, release.GITHUB_SOURCE, tag);
+    const data = {
+      latest: tag,
+      hasUpdate: upd.isNewer(tag, version),
+      releaseUrl: api.html_url || `${REPO_URL}/releases/tag/v${tag}`,
+      changelog: String(api.body || ''),
+      checkedAt: Date.now(),
+      assets,
+      meta: eff.meta,
+      metaMissing: true,
+      sourceId: 'github',
+      signature: { ok: false, reason: 'missing' },
+      error: lastErr ? errTextOf(lastErr) : '',
+    };
+    versionCache = { at: Date.now(), data, key: custom };
+    return data;
+  }
+
+  if (bestNoUpdate) {
+    versionCache = { at: Date.now(), data: bestNoUpdate, key: custom };
+    return bestNoUpdate;
+  }
+  if (versionCache.data) {
+    return { ...versionCache.data, cached: true, error: errTextOf(lastErr) };
+  }
+  return {
+    latest: null,
+    hasUpdate: false,
+    releaseUrl: null,
+    changelog: '',
+    checkedAt: Date.now(),
+    assets: [],
+    meta: { ...upd.META_DEFAULTS },
+    metaMissing: true,
+    sourceId: '',
+    signature: { ok: false, reason: 'missing' },
+    error: lastErr ? errTextOf(lastErr) : '检查失败',
+  };
+}
+
+/** 取远端小文本（update.json / SHA256SUMS.txt / .sig）；带上限与超时 */
+function fetchRemoteText(url, maxBytes, ua, opts = {}) {
   return new Promise((resolve, reject) => {
     const u = String(url);
+    if (!/^https?:\/\//i.test(u)) return reject(new Error('只支持 http(s) 地址'));
+    const timeoutMs = Number(opts.timeoutMs) || 10000;
+    const redirects = Number(opts.redirects) || 0;
     const mod = u.startsWith('https') ? require('https') : require('http');
     const req = mod.get(u, { headers: { 'User-Agent': ua || 'BlockNexus', Accept: '*/*' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return fetchRemoteText(new URL(res.headers.location, u).toString(), maxBytes, ua).then(resolve, reject);
+        if (redirects >= 5) return reject(new Error('重定向过多'));
+        return fetchRemoteText(new URL(res.headers.location, u).toString(), maxBytes, ua, {
+          ...opts,
+          redirects: redirects + 1,
+        }).then(resolve, reject);
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -161,8 +244,22 @@ function fetchRemoteText(url, maxBytes, ua) {
       readBodyCapped(res, req, maxBytes, '更新元数据').then((buf) => resolve(buf.toString('utf8')), reject);
     });
     req.on('error', (e) => reject(new Error(e.message || '网络错误')));
-    req.setTimeout(10000, () => req.destroy(new Error('超时')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('超时')));
   });
+}
+
+/** 带重试的小文本请求：retries=0 只试一次；重试放在源列表层（换个源往往比原地重试更有效） */
+async function fetchWithRetry(url, maxBytes, ua, opts = {}) {
+  const tries = Math.max(1, (Number(opts.retries) || 0) + 1);
+  let lastErr = null;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fetchRemoteText(url, maxBytes, ua, opts);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('网络错误');
 }
 
 // langOf（从 Accept-Language 判断用哪种语言渲染 error 文案）已移到 panel/error-codes.js：
@@ -252,7 +349,26 @@ function assertRemoteTargetAllowed(u) {
 
 function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const router = express.Router();
+  // 更新器健康检查专用：必须注册在**鉴权中间件之前**。
+  // 更新器是 detached 进程、没有会话 Cookie；若只依赖登录后的 /api/version，
+  // 开启登录保护后面板会把自己的更新误判为「新版本没起来」并回滚。
+  router.get('/health', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, version: APP_VERSION, pid: process.pid });
+  });
   const sessions = new Map(); // sid -> expires
+  // 0.6.0 的更新器健康检查走 /api/version；它没有会话 Cookie。
+  // 对「登录保护开启 + 未认证」的请求只回版本号（不触网、不允许 ?refresh=1），
+  // 已登录/免密请求 next() 到后面的完整路由。否则 0.6.0 → 0.7.0 在登录保护下
+  // 会被旧更新器误判为「新版本没起来」并回滚。
+  router.get('/version', (req, res, next) => {
+    if (!config.data.panel.authEnabled) return next();
+    const sid = getSid(req);
+    const sess = sid && sessions.get(sid);
+    if (sess && sess.exp > Date.now()) return next();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ version: APP_VERSION });
+  });
   const sseClients = new Set();
   const installing = new Set(); // serverId 防并发安装
 
@@ -1051,12 +1167,12 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   // ---------- 版本与更新检查（登录后） ----------
   // ?refresh=1 跳过 10 分钟缓存（前端「检查更新」按钮）
   router.get('/version', async (req, res) => {
-    const data = await checkLatestRelease(APP_VERSION, req.query.refresh === '1');
-    const pre = upd.planUpgrade({
-      localVersion: APP_VERSION,
-      localSchema: migrate.readSchema(config.data),
-      meta: data.meta,
+    const data = await checkLatestRelease(APP_VERSION, {
+      force: req.query.refresh === '1',
+      source: updPolicy().source,
     });
+    // 预检复用刚取到的 rel（同一份缓存/同一次失败），不再多打一轮网络
+    const pre = await buildPreflight(req, { rel: data });
     res.json({
       version: APP_VERSION,
       repoUrl: REPO_URL,
@@ -1089,6 +1205,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   const UPDATE_ROOT = path.join(ROOT_DIR, 'data', 'update');
   const UPDATE_LOG = path.join(UPDATE_ROOT, 'update.log');
   const UPDATE_RESULT = path.join(UPDATE_ROOT, 'last-result.json');
+  const UPDATE_PENDING = path.join(UPDATE_ROOT, 'pending.json');
+  const UPDATE_HEARTBEAT = path.join(UPDATE_ROOT, 'heartbeat.json');
+  const UPDATE_LOCK = path.join(UPDATE_ROOT, 'in-progress');
   const UPDATER = path.join(ROOT_DIR, 'scripts', 'panel-updater.js');
   const LAUNCH_ARGS = opts.launcherArgs || { host: '127.0.0.1', port: 3080, scheme: 'http' };
   const MAX_UPDATE_BYTES = 200 * 1024 * 1024;
@@ -1107,6 +1226,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     warnings: [],
     requiresAgentReinstall: false,
     irreversible: false,
+    /** 上次交接留下的 pending.json（没完成时非空） */
+    pending: null,
   };
   let updateInFlight = false;
   let updateFails = 0; // 连续失败次数（自动更新退避，与 Agent 更新同一套思路）
@@ -1133,6 +1254,22 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     return dir;
   }
 
+  /** 磁盘余量：解压大约需要 3 倍 zip 体积；拿不到 statfs 就跳过（不因平台差异阻断更新） */
+  function assertDiskSpace(dir, bytes) {
+    const need = Number(bytes) || 0;
+    if (!need || typeof fs.statfsSync !== 'function') return;
+    let st;
+    try {
+      st = fs.statfsSync(dir);
+    } catch {
+      return;
+    }
+    const free = Number(st.bavail) * Number(st.bsize);
+    if (free && free < need * 3) {
+      throw new Error(messageOf('update.disk-full', 'zh') || 'update.disk-full');
+    }
+  }
+
   function readJsonSafe(file) {
     try {
       return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -1145,10 +1282,72 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     return readJsonSafe(UPDATE_RESULT);
   }
 
+  // ---------- 更新交接的持久化标记（pending / heartbeat / 锁） ----------
+  // 为什么需要：更新器是 detached 进程，面板在它启动后 600ms 就退出了；
+  // 如果更新器没起来/中途死了，面板必须能在下次启动时说出「上次更新未完成」。
+
+  function writePendingFile(patch) {
+    const body = { from: APP_VERSION, pid: process.pid, startedAt: Date.now(), ...(patch || {}), updatedAt: Date.now() };
+    ensureUpdateDir(UPDATE_ROOT);
+    const tmp = `${UPDATE_PENDING}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, UPDATE_PENDING);
+  }
+
+  function clearPendingFile() {
+    try { fs.rmSync(UPDATE_PENDING, { force: true }); } catch {}
+  }
+
+  function writeUpdateLock(info) {
+    ensureUpdateDir(UPDATE_ROOT);
+    try {
+      fs.writeFileSync(UPDATE_LOCK, JSON.stringify({ pid: process.pid, at: Date.now(), ...(info || {}) }), { mode: 0o600 });
+    } catch {}
+  }
+
+  function clearUpdateLock() {
+    try { fs.rmSync(UPDATE_LOCK, { force: true }); } catch {}
+  }
+
+  /** 更新器心跳是否新鲜（面板启动时/状态接口用） */
+  function updaterAlive(ms = 15000) {
+    const hb = readJsonSafe(UPDATE_HEARTBEAT);
+    return !!(hb && Number(hb.at) && Date.now() - Number(hb.at) < ms);
+  }
+
+  /**
+   * 启动对账：上次交接留下的 pending。
+   *  - 目标版本 === 当前版本：说明更新成功了（结果文件可能没写全），清掉标记；
+   *  - 否则：保留 pending，让 UI 明确显示「上次更新未完成」，可重试/回滚。
+   */
+  function reconcilePending() {
+    const p = readJsonSafe(UPDATE_PENDING);
+    if (!p) return;
+    const atTarget = String(p.to || '') === String(APP_VERSION);
+    const isRollback = p.mode === 'rollback';
+    // 更新（非回滚）只要目标版本 === 当前版本，就说明目的已达成（可能是更新器写的 done，
+    // 也可能是用户手动装了新版）；回滚必须看到 done，否则 to 恰好等于当前版本时
+    // 会把「回滚失败」误判成成功。
+    if (atTarget && (p.phase === 'done' || !isRollback)) {
+      clearPendingFile();
+      clearUpdateLock();
+      try { fs.rmSync(UPDATE_HEARTBEAT, { force: true }); } catch {}
+      return;
+    }
+    updateState.state = 'failed';
+    updateState.error = '';
+    updateState.pending = p;
+    updateState.to = String(p.to || '');
+    updateState.startedAt = Number(p.startedAt) || 0;
+  }
+
   function setUpdate(patch) {
     Object.assign(updateState, patch);
     bus.emit('broadcast', { type: 'panel-update', ...updateState });
   }
+
+  // 启动时对账一次：上次交接没完成 → 明确进入 failed 状态（带 pending）
+  reconcilePending();
 
   /** 面板是否空闲（有实例启停 / 备份 / 安装任务时不更新） */
   function idleForUpdate() {
@@ -1166,24 +1365,61 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       .map((s) => ({ id: s.id, name: s.name }));
   }
 
-  /** 下载地址：镜像只承载下载，校验值始终来自 GitHub */
-  function downloadUrlFor(assetUrl, assetName, version) {
-    const src = updPolicy().source.trim();
-    if (!src) return assetUrl;
-    try {
-      if (src.includes('{name}') || src.includes('{version}')) {
-        return src.replace(/\{name\}/g, assetName).replace(/\{version\}/g, `v${version}`);
+  /**
+   * 取指定版本的 update.json（桥接目标 / 显式目标）。
+   * 与「最新版」不同：目标版本的元数据缺失时**不能**用安全默认硬升——
+   * 我们不知道它的 minSourceVersion / dataSchema，所以返回 metaMissing，预检会拒绝。
+   */
+  async function fetchMetaForVersion(target) {
+    const t = String(target || '').trim().replace(/^v/i, '');
+    const sources = release.sources(updPolicy().source);
+    let lastErr = null;
+    for (const src of sources) {
+      for (const url of release.metaCandidates(src, t)) {
+        try {
+          const raw = await fetchWithRetry(url, 128 * 1024, `BlockNexus/${APP_VERSION}`, {
+            timeoutMs: 5000,
+            retries: 0,
+          });
+          const checked = await readSignedMeta(raw, src, APP_VERSION);
+          if (!checked.ok) throw new Error(checked.reason);
+          return {
+            meta: checked.parsed.meta,
+            assets: release.synthAssets(src, t),
+            sourceId: src.id,
+            signature: checked.verdict,
+            metaMissing: false,
+            releaseUrl: `${REPO_URL}/releases/tag/v${t}`,
+            error: '',
+          };
+        } catch (e) {
+          lastErr = e;
+        }
       }
-      return `${src.replace(/\/+$/, '')}/${assetName}`;
-    } catch {
-      return assetUrl;
     }
+    return {
+      meta: { ...upd.META_DEFAULTS, version: t },
+      assets: [],
+      sourceId: '',
+      signature: { ok: false, reason: 'missing' },
+      metaMissing: true,
+      releaseUrl: `${REPO_URL}/releases/tag/v${t}`,
+      error: lastErr ? errTextOf(lastErr) : '',
+    };
   }
 
   /** 组装升级预览（预检）：UI 先看这个，用户确认后才允许点更新 */
-  async function buildPreflight(req, force) {
-    const rel = await checkLatestRelease(APP_VERSION, !!force);
-    const meta = rel.meta || { ...upd.META_DEFAULTS };
+  async function buildPreflight(req, opts = {}) {
+    const target = String(opts.target || '').trim().replace(/^v/i, '');
+    const force = opts.force === true;
+    // /version 已经查过一次；把结果传进来，避免失败时把全部源再重试一遍（最坏 10s+）
+    const rel = opts.rel || (await checkLatestRelease(APP_VERSION, { force, source: updPolicy().source }));
+    const latestVersion = String((rel.meta && rel.meta.version) || rel.latest || '').replace(/^v/i, '');
+    const targetInfo = target && target !== latestVersion ? await fetchMetaForVersion(target) : null;
+    const meta = targetInfo ? targetInfo.meta : rel.meta || { ...upd.META_DEFAULTS };
+    const assets = targetInfo ? targetInfo.assets : rel.assets || [];
+    const to = target || meta.version || rel.latest || '';
+    const releaseUrl = targetInfo ? targetInfo.releaseUrl : rel.releaseUrl || `${REPO_URL}/releases/tag/v${to}`;
     const local = upd.computeLocalHashes(ROOT_DIR);
     const plan = upd.planUpgrade({
       localVersion: APP_VERSION,
@@ -1192,41 +1428,66 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       currentNode: NODE_MAJOR,
     });
     const full = upd.needsFullPackage(meta, local);
-    const to = meta.version || rel.latest || '';
-    const appAsset = upd.pickAsset(rel.assets, upd.ASSET.app(to));
-    const portAsset = upd.pickAsset(rel.assets, upd.ASSET.portable(to));
+    const appAsset = upd.pickAsset(assets, upd.ASSET.app(to));
+    const portAsset = upd.pickAsset(assets, upd.ASSET.portable(to));
+    const sumsAsset = upd.pickAsset(assets, upd.ASSET.sums);
+    // 「怎么装」与「能不能跳」是两件事：git-clean 走 git，其余走 payload；
+    // 不能再用 plan.mode（direct/bridge/manual）兼职——那正是 P0-2 的根因。
+    const applyMode = upd.applyModeFor(INSTALL.kind);
     const nodeOk = !meta.minNode || NODE_MAJOR >= meta.minNode;
+    const metaMissing = targetInfo ? targetInfo.metaMissing : !!rel.metaMissing;
     const warnings = plan.warnings.map((k) => ({ code: k, text: text(k, req) }));
-    if (rel.metaMissing) warnings.push({ code: 'update.meta-missing', text: text('update.meta-missing', req) });
-    let allowed = INSTALL.canSelfUpdate && plan.allowed && nodeOk && !rel.error;
+    if (metaMissing) warnings.push({ code: 'update.meta-missing', text: text('update.meta-missing', req) });
+    let allowed = INSTALL.canSelfUpdate && plan.allowed && nodeOk;
     let reasonKey = '';
     // 原因按「最贴近用户疑问」的顺序给：先"根本没新版本"，再"这台机器不能自更新"，
-    // 再 Node/跨版本/完整包。否则本地版本高于线上时会被形态门禁的原因盖住，读起来像出错了。
+    // 再 Node/跨版本/缺件/完整包。否则本地版本高于线上时会被形态门禁的原因盖住，读起来像出错了。
     if (!to || !upd.isNewer(to, APP_VERSION)) reasonKey = 'update.version-not-newer';
     else if (!INSTALL.canSelfUpdate) reasonKey = INSTALL.reasonKey;
     else if (!nodeOk) reasonKey = 'update.node-too-old';
     else if (!plan.allowed) reasonKey = plan.reasonKey;
+    else if (applyMode === 'payload' && !appAsset) reasonKey = 'update.asset-missing';
     else if (full.needed) reasonKey = full.reasonKey;
-    // 完整包（含外壳/依赖变化）第一版不做应用内替换：只给提示与下载地址
-    if (allowed && full.needed) allowed = false;
+    // 指定目标（bridge）必须有它自己的元数据：没有就拒绝，不能拿安全默认硬升
+    if (allowed && targetInfo && targetInfo.metaMissing) {
+      allowed = false;
+      reasonKey = 'update.meta-invalid';
+    }
+    // bridge 是「这一跳只到中间版本」：目标是最新版本时不允许直接装，
+    // 必须让前端改用 bridgeVersion。否则 API 调用方可以绕过桥接直接硬升。
+    if (plan.mode === upd.KIND_BRIDGE && plan.bridgeVersion && to !== plan.bridgeVersion) {
+      allowed = false;
+      reasonKey = 'update.needs-bridge';
+    }
+    // 完整包 / 缺 app zip：第一版不做应用内替换，只给提示与下载地址
+    if (allowed && (full.needed || (applyMode === 'payload' && !appAsset))) allowed = false;
     return {
       from: APP_VERSION,
       to,
       latest: rel.latest || '',
       severity: meta.severity,
       summary: meta.summary,
-      notesUrl: meta.notesUrl || rel.releaseUrl || '',
-      changelog: String(rel.changelog || '').slice(0, 4000),
+      notesUrl: meta.notesUrl || releaseUrl,
+      changelog: targetInfo ? '' : String(rel.changelog || '').slice(0, 4000),
       breaking: meta.breaking,
       irreversible: meta.irreversible,
       requiresAgentReinstall: meta.requiresAgentReinstall,
       agentsToReinstall: meta.requiresAgentReinstall ? agentsNeedingReinstall() : [],
       migrations: plan.migrations,
       mode: plan.mode,
+      applyMode,
       bridgeVersion: plan.bridgeVersion,
       needsFullPackage: full.needed,
-      fullPackageUrl: portAsset ? portAsset.url : rel.releaseUrl || '',
+      fullPackageReason: full.reason || '',
+      fullPackageUrl: portAsset ? portAsset.url : releaseUrl,
       appAssetAvailable: !!appAsset,
+      appAssetUrl: appAsset ? appAsset.url : '',
+      appAssetName: appAsset ? appAsset.name : '',
+      appAssetSize: appAsset ? appAsset.size : 0,
+      sumsUrl: sumsAsset ? sumsAsset.url : '',
+      files: meta.files && typeof meta.files === 'object' ? meta.files : {},
+      signatureOk: !!(targetInfo ? targetInfo.signature : rel.signature || {}).ok,
+      sourceId: targetInfo ? targetInfo.sourceId : rel.sourceId || '',
       downloadBytes: (full.needed ? portAsset : appAsset)?.size || 0,
       lockChanged: !!(meta.lockHash && local.lockHash && meta.lockHash !== local.lockHash),
       nodeOk,
@@ -1235,43 +1496,67 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       canSelfUpdate: INSTALL.canSelfUpdate,
       allowed,
       reasonKey,
-      reasonText: text(reasonKey, req),
+      reasonText: text(
+        reasonKey,
+        req,
+        reasonKey === 'update.needs-bridge' ? { version: plan.bridgeVersion } : undefined,
+      ),
       warnings,
-      metaMissing: rel.metaMissing,
+      metaMissing,
       checkedAt: rel.checkedAt,
-      error: rel.error || '',
+      error: targetInfo ? targetInfo.error : rel.error || '',
     };
   }
 
-  /** 推荐模型：等级 + 摘要 + 是否已被用户"跳过此版本" */
-  function recommendationOf(rel, plan, req) {
+  /** 推荐模型：等级 + 摘要 + 是否已被用户"跳过此版本" + 一键更新所需的计划字段 */
+  function recommendationOf(rel, pre, req) {
     const meta = rel.meta || { ...upd.META_DEFAULTS };
     const policy = updPolicy();
-    const dismissedAt = policy.dismissed[meta.version || rel.latest || ''] || 0;
+    const target = pre.to || meta.version || rel.latest || '';
+    const dismissedAt = policy.dismissed[target] || 0;
     return {
       hasUpdate: !!rel.hasUpdate,
       latest: rel.latest || '',
+      target,
       severity: meta.severity,
       summary: meta.summary,
       notesUrl: meta.notesUrl || rel.releaseUrl || '',
       breaking: meta.breaking,
       requiresAgentReinstall: meta.requiresAgentReinstall,
       irreversible: meta.irreversible,
-      metaMissing: rel.metaMissing,
-      migrations: plan.migrations.length,
+      metaMissing: pre.metaMissing,
+      migrations: (pre.migrations || []).length,
       dismissed: !!dismissedAt,
       dismissedAt,
       // 自动更新为什么没自动：把原因也渲染好，UI 不用自己映射
-      autoReason: policy.auto === 'auto' ? text(shouldAutoApplyNow(rel, plan).reasonKey, req) : '',
-      error: rel.error || '',
+      autoReason: policy.auto === 'auto' ? text(shouldAutoApplyNow(rel, pre).reasonKey, req) : '',
+      error: pre.error || rel.error || '',
+      // 一键更新：按钮文案/禁用/目标版本都由这里决定，不再要求前端先点一次预检
+      mode: pre.mode,
+      applyMode: pre.applyMode,
+      bridgeVersion: pre.bridgeVersion,
+      needsFullPackage: pre.needsFullPackage,
+      fullPackageReason: pre.fullPackageReason,
+      fullPackageUrl: pre.fullPackageUrl,
+      appAssetAvailable: pre.appAssetAvailable,
+      downloadBytes: pre.downloadBytes,
+      allowed: pre.allowed,
+      reasonKey: pre.reasonKey,
+      reasonText: pre.reasonText,
+      warnings: pre.warnings || [],
+      agentsToReinstall: pre.agentsToReinstall || [],
+      sourceId: pre.sourceId || '',
+      signatureOk: !!pre.signatureOk,
+      checkedAt: pre.checkedAt,
+      from: pre.from,
     };
   }
 
   /** 自动策略的当前判定（时间/空闲/退避等上下文都在这里取） */
-  function shouldAutoApplyNow(rel, plan, pre) {
+  function shouldAutoApplyNow(rel, pre) {
     return upd.shouldAutoApply({
       meta: rel.meta,
-      plan,
+      plan: pre,
       ctx: {
         idle: idleForUpdate(),
         exposedWithoutAuth: !!opts.mayBeExposed && !config.data.panel.authEnabled,
@@ -1283,8 +1568,47 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   }
   void shouldAutoApplyNow;
 
+  /**
+   * 列出 zip 条目（**不解压**）：Windows 用 .NET ZipFile，Linux 用 unzip -Z1 / bsdtar -tf。
+   * 目的是把「路径穿越」挡在解压之前——Expand-Archive/unzip 对 ../ 的处理依平台而异，
+   * 不能等写完盘再靠白名单检查。
+   */
+  function listArchiveEntries(zip) {
+    const { spawnSync } = require('child_process');
+    const q = (s) => String(s).replace(/'/g, "''");
+    if (process.platform === 'win32') {
+      const ps = [
+        'Add-Type -AssemblyName System.IO.Compression.FileSystem;',
+        `$z=[System.IO.Compression.ZipFile]::OpenRead('${q(zip)}');`,
+        'try { $z.Entries | ForEach-Object { $_.FullName } } finally { $z.Dispose() }',
+      ].join(' ');
+      const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 30000,
+      });
+      if (r.status !== 0) throw new Error(`读取压缩包条目失败：${String(r.stderr || r.stdout || '').slice(0, 300)}`);
+      return String(r.stdout || '').split(/\r?\n/).filter((s) => s.length > 0);
+    }
+    let r = spawnSync('unzip', ['-Z1', zip], { encoding: 'utf8', timeout: 30000 });
+    if (r.status === 0) return String(r.stdout || '').split(/\r?\n/).filter(Boolean);
+    r = spawnSync('bsdtar', ['-tf', zip], { encoding: 'utf8', timeout: 30000 });
+    if (r.status === 0) return String(r.stdout || '').split(/\r?\n/).filter(Boolean);
+    throw new Error(`读取压缩包条目失败（unzip/bsdtar 均不可用）：${String(r.stderr || '').slice(0, 300)}`);
+  }
+
+  /** 解压前校验：拒绝 ../、绝对路径、盘符、NUL，以及异常多的条目（zip bomb） */
+  function assertArchiveSafe(zip) {
+    const entries = listArchiveEntries(zip);
+    if (entries.length > 20000) throw new Error(text('update.stage-invalid', null));
+    for (const name of entries) {
+      if (!upd.assertSafeArchiveEntry(name).ok) throw new Error(text('update.stage-invalid', null));
+    }
+  }
+
   /** 解压到指定目录：Windows 用 PowerShell，Linux 优先 unzip、缺失退 bsdtar（与项目既有约定一致） */
   function extractArchive(zip, dest) {
+    assertArchiveSafe(zip);
     const { spawnSync } = require('child_process');
     ensureUpdateDir(dest);
     const q = (s) => String(s).replace(/'/g, "''");
@@ -1350,13 +1674,53 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       windowsHide: true,
       cwd: ROOT_DIR,
     });
+    child.on('error', () => {}); // 启动失败由心跳判定，别让未捕获的 error 事件杀掉面板
     child.unref();
     return child.pid;
   }
 
-  /** 停掉面板，把控制权交给更新器（更新器会等端口释放后换文件） */
-  function handoffToUpdater(args) {
-    spawnUpdater(args);
+  /** 等更新器写下心跳（证明它真的起来了） */
+  async function waitUpdaterHeartbeat(startedAt, ms = 2500) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const hb = readJsonSafe(UPDATE_HEARTBEAT);
+      if (hb && Number(hb.at) >= startedAt && Number(hb.pid) > 0) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  }
+
+  /**
+   * 停掉面板，把控制权交给更新器。
+   *
+   * 顺序：写 pending/锁 → spawn → 等心跳 → 再停机。
+   * 心跳没出现 = 更新器没起来：**抛错让面板保持运行**（绝不能先自杀，
+   * 否则脚本缺失/权限异常时会留下一个再也起不来的面板）。
+   */
+  async function handoffToUpdater(args, info = {}) {
+    const startedAt = Date.now();
+    const to = String(info.to || '');
+    writePendingFile({
+      to,
+      mode: info.mode || 'payload',
+      applyMode: info.applyMode || '',
+      sourceId: info.sourceId || '',
+      phase: 'handoff',
+    });
+    writeUpdateLock({ to, mode: info.mode || 'payload' });
+    let ok = false;
+    try {
+      spawnUpdater(args);
+      ok = await waitUpdaterHeartbeat(startedAt, 2500);
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      clearPendingFile();
+      clearUpdateLock();
+      try { fs.rmSync(UPDATE_HEARTBEAT, { force: true }); } catch {}
+      throw new Error(messageOf('update.updater-not-started', info.lang || 'zh') || 'update.updater-not-started');
+    }
     setUpdate({ state: 'restarting' });
     if (typeof opts.onShutdown === 'function') {
       setTimeout(() => opts.onShutdown('panel-update'), 600);
@@ -1368,10 +1732,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     const reqLang = langOf(req);
     const t = (code, params) => messageOf(code, reqLang, params) || code;
     try {
-      // 预检刚刚强制刷新过缓存，这里直接吃缓存（少打一次 GitHub API，省限流额度）
-      const rel = await checkLatestRelease(APP_VERSION, false);
       const to = pre.to;
-      if (pre.mode === 'git') {
+      if (pre.applyMode === 'git') {
         // git 形态：不下载载荷，由更新器 fetch tags + checkout + 重建前端
         const nm = path.join(ROOT_DIR, 'web', 'node_modules');
         const needsInstall = pre.lockChanged || !fs.existsSync(nm);
@@ -1384,32 +1746,48 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         if (pre.migrations.length) args.push('--data-backup', 'data/config.json');
         if (pre.irreversible) args.push('--irreversible');
         setUpdate({ state: 'applying', to, mode: 'git', migrations: pre.migrations });
-        handoffToUpdater(args);
+        await handoffToUpdater(args, { to, mode: 'git', applyMode: 'git', sourceId: pre.sourceId, lang: reqLang });
         return;
       }
 
-      const asset = upd.pickAsset(rel.assets, upd.ASSET.app(to));
-      if (!asset) throw new Error(t('update.asset-missing'));
-      const sumsAsset = upd.pickAsset(rel.assets, upd.ASSET.sums);
+      // 用预检已经解析好的 URL/名字：指定目标（bridge）时不能再去拿「最新版」的资产
+      const asset = { name: pre.appAssetName || '', url: pre.appAssetUrl || '', size: pre.appAssetSize || 0 };
+      if (!asset.url || !asset.name) throw new Error(t('update.asset-missing'));
       const tmpDir = ensureUpdateDir(path.join(UPDATE_ROOT, 'tmp', to));
       fs.rmSync(tmpDir, { recursive: true, force: true });
       ensureUpdateDir(tmpDir);
+      assertDiskSpace(tmpDir, asset.size);
       const zip = path.join(tmpDir, asset.name);
-      setUpdate({ state: 'downloading', to, mode: 'payload', progress: 0, total: asset.size, migrations: pre.migrations, warnings: pre.warnings.map((w) => w.code) });
-      await downloadFilePanel(
-        downloadUrlFor(asset.url, asset.name, to),
-        zip,
-        (got, total) => setUpdate({ progress: got, total: total || asset.size }),
-        600000,
-      );
+      setUpdate({
+        state: 'downloading',
+        to,
+        mode: 'payload',
+        progress: 0,
+        total: asset.size,
+        migrations: pre.migrations,
+        warnings: (pre.warnings || []).map((w) => w.text || w.code),
+      });
+      try {
+        await downloadFilePanel(asset.url, zip, (got, total) => setUpdate({ progress: got, total: total || asset.size }), 600000);
+      } catch (firstErr) {
+        // 同一 URL 重试一次：到 GitHub/CDN 的瞬时断流很常见；仍失败才报错
+        console.warn('[update] 下载失败，重试一次：', firstErr && firstErr.message ? firstErr.message : String(firstErr));
+        setUpdate({ progress: 0, total: asset.size });
+        await downloadFilePanel(asset.url, zip, (got, total) => setUpdate({ progress: got, total: total || asset.size }), 600000);
+      }
       const st = fs.statSync(zip);
       if (st.size > MAX_UPDATE_BYTES) throw new Error(t('update.asset-too-large', { limit: Math.round(MAX_UPDATE_BYTES / 1048576) }));
 
-      // 校验：读校验值只走 GitHub 资产（镜像不在信任链上）
+      // 校验：优先用签名清单里的 files（镜像也可信）；否则回退到 SHA256SUMS（0.6.0 的旧规则）
       setUpdate({ state: 'verifying', progress: 0, total: 0 });
-      if (!sumsAsset) throw new Error(t('update.checksum-missing'));
-      const sums = upd.parseChecksums(await fetchRemoteText(sumsAsset.url, 256 * 1024, `BlockNexus/${APP_VERSION}`));
-      const want = upd.expectedHash(sums, asset.name);
+      let want = pre.files && pre.files[asset.name] ? pre.files[asset.name] : '';
+      if (!want) {
+        if (!pre.sumsUrl) throw new Error(t('update.checksum-missing'));
+        const sums = upd.parseChecksums(
+          await fetchRemoteText(pre.sumsUrl, 256 * 1024, `BlockNexus/${APP_VERSION}`, { timeoutMs: 10000 }),
+        );
+        want = upd.expectedHash(sums, asset.name);
+      }
       if (!want) throw new Error(t('update.checksum-missing'));
       const gotHash = await hashFileHex(zip);
       if (gotHash !== want) {
@@ -1443,9 +1821,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (pre.migrations.length) args.push('--data-backup', 'data/config.json');
       if (pre.irreversible) args.push('--irreversible');
       setUpdate({ state: 'applying' });
+      await handoffToUpdater(args, { to, mode: 'payload', applyMode: 'payload', sourceId: pre.sourceId, lang: reqLang });
       updateFails = 0;
       updateLastAttemptAt = Date.now();
-      handoffToUpdater(args);
     } catch (e) {
       updateInFlight = false;
       updateFails += 1;
@@ -1461,8 +1839,9 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   router.get('/panel-update/preflight', async (req, res) => {
     if (opts.mayBeExposed && !config.data.panel.authEnabled) return fail(res, 'update.disabled-exposed');
     try {
-      const pre = await buildPreflight(req, String(req.query.refresh || '') === '1');
-      res.json({ ...pre, requested: String(req.query.version || '').replace(/^v/i, '') });
+      const target = String(req.query.version || '').trim().replace(/^v/i, '');
+      const pre = await buildPreflight(req, { target, force: String(req.query.refresh || '') === '1' });
+      res.json({ ...pre, requested: target });
     } catch (e) {
       return fail(res, 'update.no-release', { error: e && e.message ? e.message : String(e) });
     }
@@ -1483,16 +1862,27 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
     let pre;
     try {
-      pre = await buildPreflight(req, true);
+      pre = await buildPreflight(req, { target: version, force: true });
     } catch (e) {
       return fail(res, 'update.no-release', { error: e.message });
     }
     if (!pre.to || pre.to !== version) return fail(res, 'update.no-release');
+    // 运行期工作区变脏：更新前的最后一次检查（INSTALL 只在启动时算一次）
+    if (pre.applyMode === 'git' && upd.probeGitClean(ROOT_DIR) !== true) return fail(res, 'update.disabled-dirty');
     if (!pre.allowed) return fail(res, pre.reasonKey || 'update.unsupported-payload', { version: pre.bridgeVersion });
     if (pre.irreversible && body.confirmIrreversible !== true) return fail(res, 'update.irreversible-confirm');
 
     updateInFlight = true;
-    setUpdate({ state: 'downloading', to: version, error: '', startedAt: Date.now(), mode: pre.mode, migrations: pre.migrations, irreversible: pre.irreversible, requiresAgentReinstall: pre.requiresAgentReinstall });
+    setUpdate({
+      state: 'downloading',
+      to: version,
+      error: '',
+      startedAt: Date.now(),
+      mode: pre.applyMode,
+      migrations: pre.migrations,
+      irreversible: pre.irreversible,
+      requiresAgentReinstall: pre.requiresAgentReinstall,
+    });
     res.status(202).json({ ok: true, accepted: true, version, preflight: pre });
     runUpdateJob(pre, req).catch(() => {});
   });
@@ -1514,6 +1904,8 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       installKind: INSTALL.kind,
       canSelfUpdate: INSTALL.canSelfUpdate,
       lastResult: last,
+      pending: readJsonSafe(UPDATE_PENDING),
+      updaterAlive: updaterAlive(),
       rollback: {
         available: canRoll,
         to: backupFrom,
@@ -1524,7 +1916,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   });
 
   /** 回滚到上一次更新前的版本（不可逆迁移之后拒绝） */
-  router.post('/panel-update/rollback', (req, res) => {
+  router.post('/panel-update/rollback', async (req, res) => {
     if (opts.mayBeExposed && !config.data.panel.authEnabled) return fail(res, 'update.disabled-exposed');
     if (!INSTALL.canSelfUpdate) return fail(res, INSTALL.reasonKey || 'update.disabled-unknown');
     if (updateInFlight) return fail(res, 'update.busy');
@@ -1549,8 +1941,14 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (last && Array.isArray(last.dataBackup) && last.dataBackup.length) {
       args.push('--data-backup', last.dataBackup.join(','));
     }
+    try {
+      await handoffToUpdater(args, { to: target, mode: 'rollback', lang: langOf(req) });
+    } catch (e) {
+      updateInFlight = false;
+      setUpdate({ state: updateState.pending ? 'failed' : 'idle', error: '' });
+      return fail(res, 'update.updater-not-started', { error: e.message });
+    }
     res.status(202).json({ ok: true, accepted: true, rollbackTo: target });
-    handoffToUpdater(args);
   });
 
   /**
@@ -1564,7 +1962,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       if (policy.auto === 'off') return;
       if (updateInFlight || !INSTALL.canSelfUpdate) return;
       if (opts.mayBeExposed && !config.data.panel.authEnabled) return;
-      const rel = await checkLatestRelease(APP_VERSION, false);
+      const rel = await checkLatestRelease(APP_VERSION, { source: policy.source });
       if (!rel.hasUpdate) return;
       const local = upd.computeLocalHashes(ROOT_DIR);
       const plan = upd.planUpgrade({ localVersion: APP_VERSION, localSchema: migrate.readSchema(config.data), meta: rel.meta, currentNode: NODE_MAJOR });
@@ -1583,10 +1981,10 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
         },
       });
       if (!verdict.ok) return;
-      const pre = await buildPreflight({ headers: { 'accept-language': 'zh' } }, false);
+      const pre = await buildPreflight({ headers: { 'accept-language': 'zh' } }, {});
       if (!pre.allowed) return;
       updateInFlight = true;
-      setUpdate({ state: 'downloading', to: pre.to, mode: pre.mode, migrations: pre.migrations, startedAt: Date.now() });
+      setUpdate({ state: 'downloading', to: pre.to, mode: pre.applyMode, migrations: pre.migrations, startedAt: Date.now() });
       runUpdateJob(pre, { headers: { 'accept-language': 'zh' } }).catch(() => {});
     } catch {
       // 自动更新是尽力而为，任何异常都不打扰用户

@@ -181,6 +181,17 @@ async function main() {
     await p.close();
   }
 
+  // ================= G2. 未认证的 /version 只回版本号（0.6.0 更新器健康检查） =================
+  {
+    const p = await makePanel();
+    const r = await fetch(`${p.base}/version`);
+    let j = {};
+    try { j = await r.json(); } catch {}
+    check('登录保护下未认证的 /version 只回版本号（不触网、不泄露完整信息）',
+      r.status === 200 && !!j.version && !j.recommendation && !j.hasUpdate);
+    await p.close();
+  }
+
   // ================= H. --secure-cookies 时带 Secure =================
   {
     const p = await makePanel({ apiOpts: { secureCookies: true } });

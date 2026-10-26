@@ -505,6 +505,28 @@ export interface AppVersionRecommendation {
   /** 后端为什么建议自动安装（auto 策略下才会非空） */
   autoReason: string;
   error: string;
+  /** 目标版本（与 latest 可能不同：bridge 时是中间版本） */
+  target?: string;
+  /** direct / bridge / manual：决定按钮是「更新」「先升级到 vX」还是「下载完整包」 */
+  mode?: 'direct' | 'bridge' | 'manual';
+  /** git / payload：实际换文件的方式 */
+  applyMode?: 'git' | 'payload';
+  bridgeVersion?: string;
+  needsFullPackage?: boolean;
+  fullPackageReason?: string;
+  fullPackageUrl?: string;
+  appAssetAvailable?: boolean;
+  downloadBytes?: number;
+  /** 后端最终判定：能不能应用内更新 */
+  allowed?: boolean;
+  reasonKey?: string;
+  reasonText?: string;
+  warnings?: { code: string; text: string }[];
+  agentsToReinstall?: { id: string; name: string }[];
+  sourceId?: string;
+  signatureOk?: boolean;
+  checkedAt?: number;
+  from?: string;
 }
 
 export async function getVersion(refresh = false): Promise<AppVersion> {
@@ -536,6 +558,16 @@ export interface PanelUpdateState {
   warnings: string[];
   requiresAgentReinstall: boolean;
   irreversible: boolean;
+  /** 上次交接留下、尚未完成的更新（启动对账时非空） */
+  pending?: {
+    from?: string;
+    to?: string;
+    mode?: string;
+    phase?: string;
+    error?: string;
+    startedAt?: number;
+    updatedAt?: number;
+  } | null;
 }
 
 /** 上次更新的结果（重启后仍可读；成功为 ok=true） */
@@ -565,6 +597,8 @@ export type PanelUpdateStatus = PanelUpdateState & {
   installKind: string;
   canSelfUpdate: boolean;
   lastResult: PanelUpdateLastResult | null;
+  /** 更新器心跳是否新鲜（交接后判断它有没有真的跑起来） */
+  updaterAlive?: boolean;
   rollback: PanelUpdateRollback;
 };
 
@@ -587,11 +621,22 @@ export interface PanelUpdatePreflight {
    * manual = 只能人工装（界面给下载地址，禁用应用内更新）。
    */
   mode: 'direct' | 'bridge' | 'manual';
+  /** git / payload：实际换文件的方式（与 mode 正交） */
+  applyMode?: 'git' | 'payload';
   /** mode === 'bridge' 时的中间版本号 */
   bridgeVersion: string;
   needsFullPackage: boolean;
+  fullPackageReason?: string;
   fullPackageUrl: string;
   appAssetAvailable: boolean;
+  appAssetUrl?: string;
+  appAssetName?: string;
+  appAssetSize?: number;
+  sumsUrl?: string;
+  /** 签名清单里的资产哈希（有签名时优先用它校验） */
+  files?: Record<string, string>;
+  signatureOk?: boolean;
+  sourceId?: string;
   downloadBytes: number;
   lockChanged: boolean;
   nodeOk: boolean;

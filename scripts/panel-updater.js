@@ -67,6 +67,9 @@ const UPDATE_DIR = path.join(ROOT, 'data', 'update');
 const BACKUP_DIR = path.join(UPDATE_DIR, 'backup', FROM || 'unknown');
 const LOG_FILE = arg('log') || path.join(UPDATE_DIR, 'update.log');
 const RESULT_FILE = arg('result') || path.join(UPDATE_DIR, 'last-result.json');
+const HEARTBEAT_FILE = path.join(UPDATE_DIR, 'heartbeat.json');
+const PENDING_FILE = path.join(UPDATE_DIR, 'pending.json');
+const LOCK_FILE = path.join(UPDATE_DIR, 'in-progress');
 // 超时可通过环境变量覆盖：仅用于离线演练/自动化测试（把 60s 压到几秒）
 const WAIT_EXIT_MS = Number(process.env.BLOCKNEXUS_UPDATE_WAIT_MS || 60000) || 60000;
 const HEALTH_MS = Number(process.env.BLOCKNEXUS_UPDATE_HEALTH_MS || 60000) || 60000;
@@ -106,6 +109,71 @@ function writeResult(res) {
     log(`写结果文件失败：${e.message}`);
   }
   return body;
+}
+
+// ---------- 心跳 / 待完成标记 / 更新锁 ----------
+// 心跳解决「更新器到底起没起来」：面板在关机前等它出现，2.5 秒拿不到就不退出。
+// pending 解决「更新器中途死了怎么办」：下次面板启动读到它，明确报「上次更新未完成」。
+// in-progress 给 systemd 包装脚本用：更新期间让服务管理器等一等，别在换文件时拉起面板。
+
+let hbTimer = null;
+function beat() {
+  try {
+    fs.mkdirSync(UPDATE_DIR, { recursive: true, mode: 0o700 });
+    const body = JSON.stringify({ pid: process.pid, at: Date.now(), from: FROM, to: TO, mode: MODE });
+    const tmp = `${HEARTBEAT_FILE}.tmp`;
+    fs.writeFileSync(tmp, body, { mode: 0o600 });
+    fs.renameSync(tmp, HEARTBEAT_FILE);
+  } catch {}
+}
+function startHeartbeat() {
+  beat();
+  hbTimer = setInterval(beat, 5000);
+  if (hbTimer.unref) hbTimer.unref();
+}
+function stopHeartbeat() {
+  if (hbTimer) {
+    clearInterval(hbTimer);
+    hbTimer = null;
+  }
+  try { fs.rmSync(HEARTBEAT_FILE, { force: true }); } catch {}
+}
+
+function writePending(patch) {
+  try {
+    fs.mkdirSync(UPDATE_DIR, { recursive: true, mode: 0o700 });
+    let cur = {};
+    try { cur = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8')); } catch {}
+    const body = {
+      from: FROM,
+      to: TO,
+      mode: MODE,
+      pid: process.pid,
+      startedAt: Date.now(),
+      ...cur,
+      ...(patch || {}),
+      updatedAt: Date.now(),
+    };
+    const tmp = `${PENDING_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, PENDING_FILE);
+  } catch {}
+}
+function clearPending() {
+  try { fs.rmSync(PENDING_FILE, { force: true }); } catch {}
+}
+function clearLock() {
+  try { fs.rmSync(LOCK_FILE, { force: true }); } catch {}
+}
+function writeLock(info) {
+  try {
+    fs.mkdirSync(UPDATE_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      LOCK_FILE,
+      JSON.stringify({ pid: process.pid, at: Date.now(), from: FROM, to: TO, mode: MODE, ...(info || {}) }),
+      { mode: 0o600 },
+    );
+  } catch {}
 }
 
 // ---------- 小工具 ----------
@@ -322,6 +390,8 @@ function restoreFromBackup() {
   return restored;
 }
 
+let newPanelPid = 0; // 本次拉起/健康检查看到的新面板 PID（回滚前要停掉它）
+
 function launchPanel() {
   if (LAUNCH === 'none') return;
   const node = process.execPath;
@@ -330,6 +400,7 @@ function launchPanel() {
     if (LAUNCH === 'panel-only') args.push('--panel-only');
     const child = spawn(node, args, { detached: true, stdio: 'ignore', windowsHide: true, cwd: ROOT });
     child.unref();
+    newPanelPid = Number(child.pid) || 0;
     log(`已拉起面板（${LAUNCH}，pid ${child.pid}）`);
     return;
   }
@@ -339,6 +410,7 @@ function launchPanel() {
     detached: true, stdio: ['ignore', out, out], cwd: ROOT,
   });
   child.unref();
+  newPanelPid = Number(child.pid) || 0;
   log(`已拉起面板（node panel/server.js，pid ${child.pid}）`);
 }
 
@@ -347,17 +419,54 @@ function underSystemd() {
   return process.platform !== 'win32' && !!(process.env.INVOCATION_ID || process.env.JOURNAL_STREAM);
 }
 
+/**
+ * 回滚前尽力停掉「新版本面板」。
+ * 为什么需要：健康检查失败时新面板可能已经起来了；Windows 上不先停掉，
+ * 替换文件会 EBUSY，回滚本身会失败。
+ * 只杀**已知的**新面板 PID（launchPanel 拉起的，或 /api/health 上报的），
+ * 不按端口扫进程——避免误杀同端口的其他程序/测试进程。
+ */
+function stopNewPanel() {
+  const pid = Number(newPanelPid);
+  if (!pid || pid === process.pid || pid === PANEL_PID) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    try { process.kill(pid); } catch {}
+  }
+  log(`回滚前已尝试停止新面板（pid ${pid}）`);
+}
+
 async function healthCheck(expectVersion, timeoutMs = HEALTH_MS) {
-  const url = `${SCHEME}://${HOST}:${PORT}/api/version`;
+  const base = `${SCHEME}://${HOST}:${PORT}`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await httpGet(url, 2000);
+    // 新版用 /api/health（鉴权前）；回滚到 0.6.0 这类老版本时它不存在，退回 /api/version
+    let path = '/api/health';
+    let res = await httpGet(`${base}${path}`, 2000);
+    if (res && res.status === 404) {
+      path = '/api/version';
+      res = await httpGet(`${base}${path}`, 2000);
+    }
     if (res && res.status === 200) {
+      let versionOk = false;
       try {
         const j = JSON.parse(res.body);
-        if (!expectVersion || String(j.version) === String(expectVersion)) return true;
-        log(`健康检查：面板已起来但版本仍是 ${j.version}（期望 ${expectVersion}）`);
+        // 记录新面板 PID：回滚前要停掉它（只认它自报的 PID，不按端口扫）
+        if (j && Number(j.pid) > 0 && Number(j.pid) !== PANEL_PID) newPanelPid = Number(j.pid);
+        const healthOk = path === '/api/version' || (j && j.ok === true);
+        if (healthOk && j && (!expectVersion || String(j.version) === String(expectVersion))) {
+          versionOk = true;
+        } else if (j && j.version) {
+          log(`健康检查：面板已起来但版本仍是 ${j.version}（期望 ${expectVersion}）`);
+        }
       } catch {}
+      if (versionOk) {
+        // 版本对还不够：静态首页也要能出来，否则「面板起来了但前端是坏的」
+        const home = await httpGet(`${base}/`, 2000);
+        if (home && home.status === 200 && /id=["']root["']/.test(home.body)) return true;
+        log('健康检查：版本接口通过，但首页未通过');
+      }
     }
     await sleep(1000);
   }
@@ -381,10 +490,13 @@ async function main() {
   if (!TO || !FROM) throw new Error('缺少 --to / --from');
   if (!['payload', 'git', 'rollback'].includes(MODE)) throw new Error(`未知 --mode ${MODE}`);
   log(`=== ${MODE === 'rollback' ? '回滚' : '更新'} ${FROM} → ${TO}（mode=${MODE}, root=${ROOT}）===`);
+  startHeartbeat();
+  writePending({ phase: 'waiting-exit' });
 
   const exited = await waitPanelExit();
   if (!exited) throw new Error('等待面板退出超时（未做任何改动）');
   log('面板已退出，开始应用');
+  writePending({ phase: 'applying' });
 
   // ---------- 回滚模式：把备份贴回去（含声明过的数据文件） ----------
   if (MODE === 'rollback') {
@@ -394,13 +506,22 @@ async function main() {
       restored = applyRollback(rfiles);
     } catch (e) {
       // 回滚到一半失败：不再叠加第二次尝试（避免半新半旧），如实记录并尽量把面板拉起来
+      clearLock();
       launchPanel();
       const res = writeResult({ ok: false, rolledBack: false, restored, error: `回滚失败：${e.message}` });
+      writePending({ phase: 'failed', ok: false, error: `回滚失败：${e.message}` });
       log(`回滚失败（已恢复 ${restored} 个文件）：${JSON.stringify(res)}`);
       return 1;
     }
+    clearLock(); // 文件已恢复：允许 systemd 包装脚本启动旧版
     const ok = await launchAndCheck(TO);
     writeResult({ ok, rolledBack: true, restored, oldVersionHealthy: ok, error: ok ? '' : '回滚后健康检查失败' });
+    if (ok) {
+      writePending({ phase: 'done', ok: true, rolledBack: true });
+      clearPending();
+    } else {
+      writePending({ phase: 'failed', ok: false, error: '回滚后健康检查失败' });
+    }
     pruneBackups();
     log(ok ? `回滚完成：v${TO} 已就绪` : `回滚完成但健康检查未通过（v${TO}）`);
     return ok ? 0 : 1;
@@ -429,14 +550,26 @@ async function main() {
     }
   } catch (e) {
     log(`应用失败：${e.message}，开始回滚`);
+    writeLock({ to: FROM, mode: 'rollback' });
+    stopNewPanel();
     const restored = restoreFromBackup();
-    launchPanel();
-    const res = writeResult({ ok: false, rolledBack: restored > 0, restored, error: e.message, irreversible: irreversibleMarked });
-    log(`已回滚 ${restored} 个文件；结果：${JSON.stringify(res)}`);
+    clearLock(); // 文件已恢复：允许 systemd 包装脚本启动旧版
+    const oldOk = await launchAndCheck(FROM);
+    const res = writeResult({
+      ok: false,
+      rolledBack: restored > 0,
+      restored,
+      oldVersionHealthy: oldOk,
+      error: e.message,
+      irreversible: irreversibleMarked,
+    });
+    writePending({ phase: 'failed', ok: false, error: e.message, irreversible: irreversibleMarked });
+    log(`已回滚 ${restored} 个文件（旧版健康=${oldOk}）；结果：${JSON.stringify(res)}`);
     pruneBackups();
     return 1;
   }
 
+  clearLock(); // 文件已换好：允许 systemd 包装脚本启动新版（非 systemd 时由 launchAndCheck 拉起）
   const healthy = await launchAndCheck(TO);
   if (healthy) {
     log(`健康检查通过：v${TO} 已就绪`);
@@ -448,6 +581,8 @@ async function main() {
       // 记下"迁移可能改过哪些数据文件"：手动回滚时要按同一份清单恢复数据
       dataBackup: DATA_BACKUP,
     });
+    writePending({ phase: 'done', ok: true });
+    clearPending();
     try { if (STAGE) fs.rmSync(STAGE, { recursive: true, force: true }); } catch {}
     pruneBackups();
     return 0;
@@ -456,13 +591,18 @@ async function main() {
   // 新版没起来：不可逆迁移之后不允许程序回滚（只保留备份供手动恢复）
   if (irreversibleMarked) {
     const res = writeResult({ ok: false, rolledBack: false, irreversible: true, error: '新版本健康检查失败；因含不可逆迁移未自动回滚' });
+    writePending({ phase: 'failed', ok: false, irreversible: true, error: '新版本健康检查失败；因含不可逆迁移未自动回滚' });
     log(`健康检查失败；因不可逆迁移拒绝回滚。结果：${JSON.stringify(res)}`);
     return 1;
   }
   log('健康检查失败，回滚到旧版本');
+  writeLock({ to: FROM, mode: 'rollback' });
+  stopNewPanel();
   const restored = restoreFromBackup();
+  clearLock();
   const oldOk = await launchAndCheck(FROM);
   const res = writeResult({ ok: false, rolledBack: restored > 0, restored, oldVersionHealthy: oldOk, error: '新版本健康检查失败，已回滚' });
+  writePending({ phase: 'failed', ok: false, error: '新版本健康检查失败，已回滚', rolledBack: restored > 0 });
   log(`回滚完成（${restored} 个文件，旧版健康=${oldOk}）。结果：${JSON.stringify(res)}`);
   pruneBackups();
   return 1;
@@ -470,12 +610,18 @@ async function main() {
 
 main()
   .then((code) => {
+    stopHeartbeat();
+    clearLock();
     try { if (logFd !== null) fs.closeSync(logFd); } catch {}
     process.exit(code);
   })
   .catch((e) => {
     log(`更新失败（未完成）：${e.message}`);
     writeResult({ ok: false, rolledBack: false, error: e.message });
+    // 没进入应用阶段也可能失败（缺参数/等不到退出）：仍留下 pending 让面板报「上次未完成」
+    writePending({ phase: 'failed', ok: false, error: e.message });
+    stopHeartbeat();
+    clearLock();
     try { if (logFd !== null) fs.closeSync(logFd); } catch {}
     process.exit(1);
   });

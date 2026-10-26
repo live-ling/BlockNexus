@@ -64,6 +64,10 @@ check('形态: git 存在但探测不出 → 与"未知目录"给不同原因（
     U.describeKind(U.KIND_UNKNOWN, { hasGit: false }).reasonKey === 'update.disabled-unknown');
 check('形态: portable/dir/git-clean 可自更新',
   [U.KIND_PORTABLE, U.KIND_DIR, U.KIND_GIT_CLEAN].every((k) => U.describeKind(k).canSelfUpdate === true));
+check('applyMode: git-clean → git（这是 P0-2 的修复点）',
+  U.applyModeFor(U.KIND_GIT_CLEAN) === 'git');
+check('applyMode: portable/dir/unknown → payload',
+  [U.KIND_PORTABLE, U.KIND_DIR, U.KIND_UNKNOWN, U.KIND_GIT_DIRTY].every((k) => U.applyModeFor(k) === 'payload'));
 
 // probeInstallKind 走真实文件系统（临时目录，不碰仓库）
 {
@@ -139,6 +143,27 @@ check('meta: 超长摘要被截断',
   U.parseUpdateMeta({ version: '1.0.0', summary: 'x'.repeat(900) }).meta.summary.length === 500);
 check('meta: minNode 非法 → 默认 18',
   U.parseUpdateMeta({ version: '1.0.0', minNode: 'abc' }).meta.minNode === 18);
+{
+  const ok = U.fillMetaFromTag(U.parseUpdateMeta({ version: '0.7.0' }).meta, '0.7.0');
+  check('fillMetaFromTag: 合法 meta 原样返回',
+    ok.filled === false && ok.metaMissing === false && ok.meta.version === '0.7.0');
+  const fb = U.fillMetaFromTag(U.META_DEFAULTS, 'v0.7.0');
+  check('fillMetaFromTag: 缺 meta 用 tag 合成，且保持保守（breaking/autoSafe）',
+    fb.filled === true && fb.metaMissing === true && fb.meta.version === '0.7.0' &&
+      fb.meta.breaking === true && fb.meta.autoSafe === false);
+  const bad = U.fillMetaFromTag(U.META_DEFAULTS, 'nope');
+  check('fillMetaFromTag: tag 也非法 → 安全默认且不填版本',
+    bad.filled === false && bad.metaMissing === true && bad.meta.version === '');
+}
+{
+  const r = U.parseUpdateMeta({
+    version: '1.0.0',
+    files: { 'a.zip': HASH_A, '../evil.zip': HASH_B, 'b.zip': 'bad', 'c.zip': HASH_A.toUpperCase() },
+  });
+  check('meta: files 只收安全名字与 64 位哈希（大写转小写）',
+    JSON.stringify(r.meta.files) === JSON.stringify({ 'a.zip': HASH_A, 'c.zip': HASH_A }),
+    JSON.stringify(r.meta.files));
+}
 
 // ---------- 资产与校验值 ----------
 {
@@ -152,7 +177,8 @@ check('meta: minNode 非法 → 默认 18',
     U.pickAsset([{ name: 'a.zip' }], 'a.zip') === null);
   check('asset: 资产名构造函数与发布脚本一致',
     U.ASSET.portable('0.6.0') === 'BlockNexus-v0.6.0-portable.zip' &&
-      U.ASSET.meta === 'update.json' && U.ASSET.sums === 'SHA256SUMS.txt');
+      U.ASSET.meta === 'update.json' && U.ASSET.sums === 'SHA256SUMS.txt' &&
+      U.ASSET.sig === 'update.json.sig');
 }
 {
   const sums = U.parseChecksums(
@@ -215,16 +241,30 @@ const directMeta = U.parseUpdateMeta({
       p.migrations[1].from === 2 && p.migrations[1].to === 3, JSON.stringify(p.migrations));
 }
 {
+  // 发布纪律：桥接版本自己的 update.json 必须允许「当前来源」直装，否则「先升级到 vX」这一跳也会被挡。
+  const bridgeMeta = U.parseUpdateMeta({ version: '0.7.0', minSourceVersion: '0.6.0', dataSchema: 3 }).meta;
+  const p = U.planUpgrade({ localVersion: '0.6.0', localSchema: 3, meta: bridgeMeta });
+  check('plan: 桥接目标自身能被 0.6.0 直装（发布纪律）',
+    p.allowed === true && p.mode === U.KIND_DIRECT);
+}
+{
   const meta = U.parseUpdateMeta({ version: '0.9.0', minNode: 20 }).meta;
   const p = U.planUpgrade({ localVersion: '0.8.0', localSchema: 1, meta, currentNode: 16 });
   check('plan: Node 版本不够 → 拒绝', p.allowed === false && p.reasonKey === 'update.node-too-old');
 }
 {
   const meta = U.parseUpdateMeta({ version: '0.9.0', lockHash: HASH_B }).meta;
-  check('needsFullPackage: lock 哈希不同 → 需要完整包',
-    U.needsFullPackage(meta, { lockHash: HASH_A }).needed === true);
+  const r = U.needsFullPackage(meta, { lockHash: HASH_A });
+  check('needsFullPackage: lock 哈希不同 → 需要完整包（reason=lock）',
+    r.needed === true && r.reason === 'lock' && r.reasonKey === 'update.needs-full-package');
   check('needsFullPackage: 未声明哈希 → 不强制完整包',
     U.needsFullPackage(U.parseUpdateMeta({ version: '0.9.0' }).meta, { lockHash: HASH_A }).needed === false);
+}
+{
+  const meta = U.parseUpdateMeta({ version: '0.9.0', shellHash: HASH_B }).meta;
+  const r = U.needsFullPackage(meta, { shellHash: HASH_A });
+  check('needsFullPackage: shell 哈希不同 → 需要完整包（reason=shell）',
+    r.needed === true && r.reason === 'shell');
 }
 
 // ---------- 自动更新策略 ----------

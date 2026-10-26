@@ -56,7 +56,12 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 
 ### 面板版本与自动更新（应用内更新）
 
-设置页「版本与更新」卡片除了对比 GitHub Release，还能**直接升级面板自己**：点「立即更新」→ 看升级预览 → 替换程序文件并自动重启。**只换程序文件、不动 `data/`**（服务器列表、token、SSH 凭据、SMTP/AI 密钥都在里面），面板重启 1–3 秒，运行中的 MC 实例不受影响。
+设置页「版本与更新」卡片除了对比 GitHub Release，还能**直接升级面板自己**。**0.7.0 起**点一次「更新到 vX」就开始下载 → 校验 → 替换程序文件 → 自动重启；预览信息（下载量、迁移条数、来源、签名状态）直接内联在卡片里，不再需要先点一次「立即更新」看预览。**只换程序文件、不动 `data/`**（服务器列表、token、SSH 凭据、SMTP/AI 密钥都在里面），面板重启 1–3 秒，运行中的 MC 实例不受影响。
+
+> 0.6.0 → 0.7.0 是最后一次使用旧的三步流程（检查 → 立即更新 → 开始更新）；同样不需要输入任何链接。
+> 但 0.6.0 的「检查更新」仍依赖 GitHub API；如果那一步不可达，需要手动装一次 0.7.0 便携包
+> （0.7.0 起才有「不依赖 API 的发现 + 镜像 + 签名」）。
+> 0.5.0 及更早的 Release 没有应用包/更新元数据，只能手动装一次 0.7.0。
 
 | 安装形态（启动时判定一次，横幅会打印） | 更新方式 |
 |---|---|
@@ -64,14 +69,18 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 | `git-clean`（有 `.git` 且工作区干净） | `git fetch --tags` + 切 Release 标签（**游离 HEAD**，回开发分支用 `git checkout main`）+ 重建前端；`origin` 非本仓库官方地址时直接拒绝 |
 | `git-dirty`（有未提交改动）/ `unknown`（判断不出，如未装 git） | **禁用**（避免覆盖你的工作区） |
 
-- **跨版本**：Release 用 `minSourceVersion` / `bridge` 声明可直跳范围与逐跳路径；差距过大时这一跳只允许升到桥接版本，无桥接路径则给手动路径（下载便携包 → **保留 `data/`** → 覆盖程序文件）。
+- **发现**：主路径是 `releases/latest/download/update.json`（不消耗 GitHub API 速率限制），资产 URL 由版本号 + 命名约定构造；`api.github.com` 只用来补更新日志与资产大小，失败不影响更新。旧 Release 缺 `update.json` 时按 tag 合成「安全默认」（需要人工确认）。
+- **源**：默认 GitHub；设置页「更新策略 → 下载源」是**高级项**，留空即自动。自定义源必须同时提供 `update.json`、`update.json.sig` 与资产；否则会拒绝并回退 GitHub。
+- **跨版本**：Release 用 `minSourceVersion` / `bridge` 声明可直跳范围与逐跳路径；差距过大时这一跳只允许升到桥接版本，无桥接路径则给手动路径（下载便携包 → **保留 `data/`** → 覆盖程序文件）。0.6.0 → 0.7.0 → 1.0.0 默认都是直跳。
 - **数据迁移**：`data/config.json` 带 `schemaVersion`，新版**启动时**按 `panel/migrate.js` 的迁移链升级（迁移代码属于新版，所以应用包 / 便携包 / 手动覆盖 / git 四条路径都自动生效）；迁移前备份原文件，**失败即拒绝启动**；Release 声明 `irreversible: true` 时升级后不允许自动回滚。
 - **提示强度**：`update.json` 的 `severity` = `security`（红色横幅）/ `critical`（琥珀）/ `recommended` / `optional`，可「跳过此版本」（永久对该版本静默）；本地版本高于线上时不提示。
 - **自动更新**：设置页三选一 `off / notify / auto`（默认 `notify` 只提示）。`auto` 还**必须发布方显式声明 `autoSafe: true`**，且非破坏性、不需要重装 Agent、迁移可逆、面板空闲、未连续失败 3 次——v1.0 之前 semver 不严格，所以**不按"minor 就安全"猜**；缺 `update.json` 的旧 Release 一律按"需要人工确认"处理。
-- **校验与边界**：更新包 SHA256 只认 GitHub 的 `SHA256SUMS.txt`（下载可走自建镜像，但镜像不在信任链上），**拿不到校验值就拒绝更新**；解压与写入按白名单（`panel/`、`web/dist/`、`agent/agent.js`、`scripts/` 等），`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/` 一律拒绝；面板对外且未开登录保护时禁止更新。
-- **失败处理**：更新器是独立进程（面板必须先退出，它才动手），顺序为「等端口释放 → 备份将被替换的文件 → 替换 → 拉起 → 健康检查」；任何一步失败都回滚程序 + 数据快照并拉起旧版本。日志与结果在 `data/update/`（设置页显示上次结果，可一键回滚）。
+- **校验与边界**：`update.json` 用 Ed25519 签名（`update.json.sig`），`files` 里带三个 zip 的 SHA256；签名通过则**镜像也可信**。没有签名时退回旧规则：只认 GitHub 的 `SHA256SUMS.txt`，**拿不到校验值就拒绝更新**。解压前先列出 zip 条目并拒绝 `../`/绝对路径/盘符/NUL，解压与写入按白名单（`panel/`、`web/dist/`、`agent/agent.js`、`scripts/` 等），`data/`、`root.txt`、`.git/`、`web/src/`、`agent/src/`、`docs/` 一律拒绝；面板对外且未开登录保护时禁止更新。
+- **失败处理**：更新器是独立进程（面板必须先退出，它才动手），顺序为「等端口释放 → 备份将被替换的文件 → 替换 → 拉起 → 健康检查（`/api/health` + 首页）」。交接前面板等更新器心跳（2.5 秒）才退出；更新器没起来/中途死了，下次启动会显示「上次更新未完成」，可重试或回滚。日志、`pending.json`、`last-result.json` 与最近 3 份备份都在 `data/update/`。
 
-> 维护者发版：`portable` / `shell` / `app` 三个 zip 加 `update.json`、`SHA256SUMS.txt` 缺一不可（后两者是判定与校验依据，漏传会被当成"元数据缺失"）。命令与参数见 `scripts/build-release.ps1`。
+> 维护者发版：`portable` / `shell` / `app` 三个 zip 加 `update.json`、`update.json.sig`、`SHA256SUMS.txt` 缺一不可。流程是
+> `build-release.ps1` → `node scripts/finalize-release.js --dir <out>`（补 files + 签名 + sums）→
+> `node scripts/check-release.js --dir <out> --require-signature`（发布门禁）。详见 `scripts/` 与 `docs/panel-update-hardening-plan.md`。
 
 ### 本机服务器（host 填 127.0.0.1 / localhost）
 

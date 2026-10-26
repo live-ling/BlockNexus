@@ -26,6 +26,7 @@ const ASSET = {
   shell: (v) => `BlockNexus-shell-v${v}.zip`,
   meta: 'update.json',
   sums: 'SHA256SUMS.txt',
+  sig: 'update.json.sig',
 };
 
 // ---------- 版本比较（从 panel/api.js 上移，保持行为逐字一致） ----------
@@ -118,6 +119,17 @@ function describeKind(kind, facts) {
   }
 }
 
+/**
+ * 形态 → **实际应用方式**：git-clean 走 git，其余走 payload。
+ *
+ * 这是与 planUpgrade 的 direct/bridge/manual **正交**的另一个维度：
+ * 「能不能跳」看版本/数据，`怎么换文件`看形态。早期把两者塞进同一个 mode 字段，
+ * 导致 `pre.mode === 'git'` 永远不成立（git 安装实际被 payload 覆盖，工作区变脏）。
+ */
+function applyModeFor(kind) {
+  return kind === KIND_GIT_CLEAN ? 'git' : 'payload';
+}
+
 function readInstallMarker(root) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(root, 'install.json'), 'utf8'));
@@ -184,6 +196,7 @@ const META_DEFAULTS = Object.freeze({
   minNode: 18,
   lockHash: '',
   shellHash: '',
+  files: Object.freeze({}),
   summary: '',
   notesUrl: '',
 });
@@ -234,6 +247,16 @@ function parseUpdateMeta(raw) {
   const bridge = Array.isArray(obj.bridge)
     ? [...new Set(obj.bridge.map((v) => cleanText(v, 40)).filter((v) => !!normalizeVersion(v)))].slice(0, 8)
     : [];
+  // files：资产名 → SHA256（Ed25519 签名把这份映射一起签掉）。名字只收安全字符，
+  // 哈希只收 64 位十六进制；其余一律丢弃（外部输入，不能让它影响路径/匹配）。
+  const files = {};
+  if (obj.files && typeof obj.files === 'object' && !Array.isArray(obj.files)) {
+    for (const [name, hash] of Object.entries(obj.files)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(name)) continue;
+      const h = cleanHash(hash);
+      if (h) files[name] = h;
+    }
+  }
   const meta = {
     schema: cleanSchemaNumber(obj.schema, 1),
     version,
@@ -250,11 +273,35 @@ function parseUpdateMeta(raw) {
     minNode: cleanSchemaNumber(obj.minNode, 18),
     lockHash: cleanHash(obj.lockHash),
     shellHash: cleanHash(obj.shellHash),
+    files,
     summary: cleanText(obj.summary, 500),
     notesUrl: cleanUrl(obj.notesUrl),
   };
   if (meta.minSchema > meta.dataSchema) meta.minSchema = meta.dataSchema;
   return { ok: true, missing: false, meta };
+}
+
+/**
+ * 元数据缺失/非法时，用 Release tag 合成一份**安全默认**。
+ *
+ * 为什么需要它：0.6.0 及更早的 Release 没有 update.json（线上真实存在），而
+ * `planUpgrade` 对 `meta.version` 非法是一律拒绝的 → 用户永远只能手动装。
+ * 合成后的 meta 仍然 `breaking=true`、`autoSafe=false`，所以只会退化成
+ * 「可直跳 + 必须人工确认」，不会变成「自动升级」。
+ *
+ * @returns {{meta: object, metaMissing: boolean, filled: boolean}}
+ */
+function fillMetaFromTag(meta, tag) {
+  if (meta && typeof meta === 'object' && normalizeVersion(meta.version)) {
+    return { meta, metaMissing: false, filled: false };
+  }
+  const t = String(tag || '').trim().replace(/^v/i, '');
+  if (!normalizeVersion(t)) return { meta: { ...META_DEFAULTS }, metaMissing: true, filled: false };
+  return {
+    meta: { ...META_DEFAULTS, version: t, breaking: true, autoSafe: false },
+    metaMissing: true,
+    filled: true,
+  };
 }
 
 /** 从 release.assets 里按名字挑资产（GitHub 的 assets[].name / browser_download_url） */
@@ -370,9 +417,13 @@ function planUpgrade({ localVersion, localSchema, meta, currentNode } = {}) {
 function needsFullPackage(meta, local) {
   const m = meta || {};
   const l = local || {};
-  if (m.lockHash && l.lockHash && m.lockHash !== l.lockHash) return { needed: true, reasonKey: 'update.needs-full-package' };
-  if (m.shellHash && l.shellHash && m.shellHash !== l.shellHash) return { needed: true, reasonKey: 'update.needs-full-package' };
-  return { needed: false, reasonKey: '' };
+  if (m.lockHash && l.lockHash && m.lockHash !== l.lockHash) {
+    return { needed: true, reason: 'lock', reasonKey: 'update.needs-full-package' };
+  }
+  if (m.shellHash && l.shellHash && m.shellHash !== l.shellHash) {
+    return { needed: true, reason: 'shell', reasonKey: 'update.needs-full-package' };
+  }
+  return { needed: false, reason: '', reasonKey: '' };
 }
 
 // ---------- 本地哈希（判断"应用包是否够用"） ----------
@@ -544,6 +595,7 @@ module.exports = {
   KIND_UNKNOWN,
   resolveInstallKind,
   describeKind,
+  applyModeFor,
   probeInstallKind,
   probeGitClean,
   readInstallMarker,
@@ -551,6 +603,7 @@ module.exports = {
   SEVERITIES,
   META_DEFAULTS,
   parseUpdateMeta,
+  fillMetaFromTag,
   pickAsset,
   parseChecksums,
   expectedHash,

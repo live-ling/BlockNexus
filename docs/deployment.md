@@ -64,7 +64,9 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/blocknexus
-ExecStart=/usr/bin/node /opt/blocknexus/panel/server.js --host 127.0.0.1
+# 用包装脚本：面板内更新期间它会等 data/update/in-progress 消失，避免
+# systemd 在「面板已退、文件还没换完」时把旧版/半成品拉起来。
+ExecStart=/opt/blocknexus/scripts/start-panel.sh --host 127.0.0.1
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
@@ -74,6 +76,7 @@ WantedBy=multi-user.target
 ```
 
 ```bash
+chmod +x /opt/blocknexus/scripts/start-panel.sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now blocknexus
 curl -s http://127.0.0.1:3080/api/me      # 验证
@@ -83,6 +86,9 @@ curl -s http://127.0.0.1:3080/api/me      # 验证
 - 需要局域网访问才 `--host 0.0.0.0`，并先开登录；
 - 升级：`git pull && npm ci && npm run build:web && sudo systemctl restart blocknexus`
   （`git-clean` 形态也可用面板内应用内更新）。
+- **不用包装脚本时**：把 `ExecStart` 写成 `/usr/bin/node /opt/blocknexus/panel/server.js ...` 也能跑，
+  但 `Restart=always` 会和更新器抢时间——可能表现为「等待面板退出超时」或更新后回滚。
+  这种情况下建议至少把 `Restart` 改成 `on-failure`，并知道更新器会自己拉起面板（不再由 systemd 托管）。
 
 ## C. 面板 + 远程 Linux Agent
 

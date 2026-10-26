@@ -632,6 +632,16 @@ const ERROR_CODES = {
     zh: '当前安装形态不支持这种更新方式',
     en: 'This installation cannot be updated this way',
   },
+  'update.updater-not-started': {
+    status: 500,
+    zh: '更新器没有启动成功，面板保持运行；请查看 data/update/ 日志后重试',
+    en: 'The updater did not start; the panel is still running. Check data/update logs and retry',
+  },
+  'update.disk-full': {
+    status: 507,
+    zh: '磁盘剩余空间不足（解压大约需要更新包的 3 倍），已中止',
+    en: 'Not enough free disk space (about 3× the package size is needed); aborted',
+  },
   'update.stage-invalid': {
     status: 500,
     zh: '更新包内容异常（路径不安全或缺少关键文件），已中止',
