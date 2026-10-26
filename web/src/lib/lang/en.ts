@@ -120,7 +120,7 @@ export const en = {
   'instances.error.load': 'Failed to load instances: {0}',
   'instances.group.count': '{0} instances',
 
-  // ---------- Console UI (ported from /proto: list cards + right filter drawer) ----------
+  // ---------- Console UI (list cards + right filter drawer) ----------
   'ui.filter.title': 'Filter',
   'ui.filter.search': 'Search',
   'ui.search.instances': 'Search instances…',

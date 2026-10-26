@@ -130,7 +130,7 @@ export const zh = {
   'instances.error.load': '拉取实例失败：{0}',
   'instances.group.count': '{0} 个实例',
 
-  // ---------- 控制台通用（/proto 落地：列表卡片 / 右侧筛选抽屉） ----------
+  // ---------- 控制台通用（列表卡片 / 右侧筛选抽屉） ----------
   'ui.filter.title': '筛选',
   'ui.filter.search': '搜索',
   'ui.search.instances': '搜索实例…',

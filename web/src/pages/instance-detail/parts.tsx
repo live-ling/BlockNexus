@@ -219,7 +219,7 @@ export function FullScreenOverlay({
   );
 }
 
-/** 主区页签：下划线式（与 /proto 一致），不用灰底药丸，避免和驾驶舱抢层级 */
+/** 主区页签：下划线式，不用灰底药丸，避免和驾驶舱抢层级 */
 export function ViewTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button

@@ -1,5 +1,5 @@
 /**
- * 页面唯一标题栏（来源：`/proto` 的 PageHeader）。
+ * 页面唯一标题栏（沿用早期布局原型的 PageHeader）。
  *
  * 约定（docs/frontend-redesign-design.md §2）：
  *   · 只放「标题 / 副标题 / 页面自己的操作」；

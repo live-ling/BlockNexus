@@ -106,7 +106,7 @@ import { fmtDuration, sessionMs, totalWithSession } from '@/lib/player-stats';
 import { copyText } from '@/lib/clipboard';
 import { useToastHelpers } from '@/lib/toast';
 
-/** 主区页签（/proto 的 5 Tab）：AI 分析、Spark、地图、聊天按下述归属收进对应页签 */
+/** 主区页签（5 Tab）：AI 分析、Spark、地图、聊天按下述归属收进对应页签 */
 type Tab = 'overview' | 'players' | 'files' | 'config';
 
 /**
@@ -194,7 +194,7 @@ export function InstanceDetailPage({
   const [frpInfo, setFrpInfo] = useState<InstanceFrpInfo | null>(null);
   // 玩家统计（在线时长）与聊天记录页签
   const [playerStats, setPlayerStats] = useState<PlayersStats | null>(null);
-  // 主区页签（/proto 的 5 Tab）：默认「概览」
+  // 主区页签（5 Tab）：默认「概览」
   const [tab, setTab] = useState<Tab>('overview');
   // 概览里的世界地图：默认收起，点「地图」就地展开
   const [mapOpen, setMapOpen] = useState(false);
@@ -585,7 +585,7 @@ export function InstanceDetailPage({
     // 只有终端日志、玩家名单这类内部区域自己滚。之前是 min-h-screen（文档可滚），
     // 滚轮会把整页内容推上推下。
     <div className="flex h-screen flex-col overflow-hidden bg-muted/30">
-      {/* ---------- 头部：状态呼吸灯 + 名称 + 详情｜单一主操作 + 更多（/proto 第六版） ---------- */}
+      {/* ---------- 头部：状态呼吸灯 + 名称 + 详情｜单一主操作 + 更多（驾驶舱版式） ---------- */}
       <header className="flex h-11 shrink-0 items-center gap-2.5 border-b border-border/70 bg-background px-4">
         <button
           type="button"
@@ -768,7 +768,7 @@ export function InstanceDetailPage({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* ---------- 页签：概览 / 玩家 / 文件 / 配置 / 维护（/proto 的 5 Tab） ---------- */}
+        {/* ---------- 页签：概览 / 玩家 / 文件 / 配置 / 维护（5 Tab） ---------- */}
         <div className="flex h-10 shrink-0 items-stretch gap-0.5 border-b border-border/60 px-4">
           {tabs.map((t) => (
             <ViewTab key={t.key} label={t.label} active={tab === t.key} onClick={() => setTab(t.key)} />
