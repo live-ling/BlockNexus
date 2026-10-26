@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { Field, FormActions, FormGrid, SettingsCard, StateChip } from '@/components/settings-card';
 import { FrpImportDialog } from '@/components/frp-import-dialog';
@@ -24,7 +24,6 @@ import {
   getFrp,
   getTelemetry,
   getTelemetryPreview,
-  resetTelemetryId,
   runDdns,
   saveDdns,
   saveFrp,
@@ -823,6 +822,9 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
   const [busy, setBusy] = useState(false);
   // 开关的乐观值：GET 失败时仍有值可显示、可操作
   const [switchOn, setSwitchOn] = useState(false);
+  // 静默发送中 / 最近一次静默发送的结果（只在模态框里显示，不弹 toast）
+  const [sending, setSending] = useState(false);
+  const [lastSentResult, setLastSentResult] = useState<'' | 'ok' | 'fail'>('');
 
   useEffect(() => {
     let alive = true;
@@ -860,13 +862,33 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
     }
   };
 
-  /** 打开「查看将发送的数据」抽屉；打开时才拉取，拿到的就是此刻真实的 payload */
+  /**
+   * 打开「即将上报的数据」模态框；打开时才拉取，拿到的是此刻真实的 payload。
+   * 同时拉一次状态：模态框里要展示上报记录，需要最新的 lastSentAt / fails。
+   */
   const openPreview = async () => {
     setPreviewOpen(true);
     try {
-      setPreview(await getTelemetryPreview());
+      const [p, h] = await Promise.all([getTelemetryPreview(), getTelemetry()]);
+      setPreview(p);
+      setStatus(h.status);
     } catch (e) {
       error($('panelSettings.error.load'), errText(e));
+    }
+  };
+
+  /** 静默发送：成功/失败都不弹 toast，结果反映在模态框的上报记录里 */
+  const sendSilently = async () => {
+    setSending(true);
+    try {
+      const r = await sendTelemetryNow();
+      if (r.status) setStatus(r.status);
+      setLastSentResult(r.sent ? 'ok' : 'fail');
+      // 静默：不弹 toast。用户在模态框里看到「刚刚发送」这一行，就是全部反馈。
+    } catch {
+      setLastSentResult('fail');
+    } finally {
+      setSending(false);
     }
   };
 
@@ -938,51 +960,44 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void openPreview()}>
           {$('panelSettings.telemetry.preview')}
         </Button>
-        {cfg.enabled && cfg.hasId && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => {
-              void resetTelemetryId()
-                .then((r) => {
-                  setCfg(r.config);
-                  success($('panelSettings.telemetry.idReset'));
-                })
-                .catch((e) => error($('panelSettings.error.save'), errText(e)));
-            }}
-          >
-            {$('panelSettings.telemetry.idReset')}
-          </Button>
-        )}
-        {cfg.enabled && (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => {
-              void sendTelemetryNow()
-                .then((r) => {
-                  if (r.status) setStatus(r.status);
-                  success(r.sent ? $('panelSettings.telemetry.sentOk') : $('panelSettings.telemetry.sentFail', r.reason || ''));
-                })
-                .catch((e) => error($('panelSettings.error.save'), errText(e)));
-            }}
-          >
-            {$('panelSettings.telemetry.sendNow')}
-          </Button>
-        )}
       </FormActions>
 
-      {/* 「查看将发送的数据」：只展示 payload 本身。
-          刻意不放「哪些不会上报」的清单——反向清单会随代码演进过时，
-          过时的承诺比没有承诺更糟；正面的 payload 永远是当前真实的。 */}
-      <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
-        <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-[520px]">
-          <SheetHeader className="border-b px-5 py-4">
-            <SheetTitle className="text-[13px]">{$('panelSettings.telemetry.previewTitle')}</SheetTitle>
-          </SheetHeader>
-          <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-5 py-4">
+      {/*
+        「即将上报的数据」模态框：payload + 上报记录 + 手动发送。
+        三样放在一起是因为它们是同一个问题——「这台机器到底发了什么、什么时候发的」：
+        看 payload（将要发的）、看记录（已经发的）、点发送（现在就发一次验证）。
+        「重置统计 ID」已从 UI 移除：换 ID 是排查用的低频操作，改 data/config.json 即可，
+        常驻按钮反而让用户怀疑自己的数据「能不能被追踪到」。
+      */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle className="text-[13px]">{$('panelSettings.telemetry.previewTitle')}</DialogTitle>
+          </DialogHeader>
+          <div className="grid max-h-[70vh] gap-3 overflow-y-auto pr-1">
+            {/* 上报记录：已经发生了什么 */}
+            <div className="grid gap-1.5 rounded-md border bg-muted/20 px-3 py-2.5">
+              <b className="text-[12px] font-medium">{$('panelSettings.telemetry.historyTitle')}</b>
+              {status ? (
+                <div className="grid gap-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <span>
+                    {status.lastSentAt
+                      ? $('panelSettings.telemetry.lastSent', timeago(status.lastSentAt))
+                      : $('panelSettings.telemetry.neverSent')}
+                    {status.sent > 0 && ` · ${$('panelSettings.telemetry.sentCount', status.sent)}`}
+                    {status.fails > 0 && ` · ${$('panelSettings.telemetry.fails', status.fails)}`}
+                  </span>
+                  {status.error && <span className="text-destructive">{status.error}</span>}
+                  {lastSentResult === 'ok' && <span className="text-emerald-600 dark:text-emerald-400">{$('panelSettings.telemetry.sentOk')}</span>}
+                  {lastSentResult === 'fail' && <span className="text-destructive">{$('panelSettings.telemetry.sentFail', '')}</span>}
+                </div>
+              ) : (
+                <span className="text-[11px] text-muted-foreground">{$('common.loading')}</span>
+              )}
+            </div>
+
+            {/* 即将上报的数据：将要发生什么（正面展示，不放反向清单——
+                反向清单会随代码演进过时，过时的承诺比没有承诺更糟） */}
             {preview?.rejected ? (
               <p className="text-[11px] leading-relaxed text-destructive">
                 {$('panelSettings.telemetry.previewRejected', preview.rejected)}
@@ -992,8 +1007,15 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
               {preview?.payload ? JSON.stringify(preview.payload, null, 2) : $('common.loading')}
             </pre>
           </div>
-        </SheetContent>
-      </Sheet>
+          <DialogFooter className="gap-2">
+            {cfg.enabled ? (
+              <Button variant="outline" size="sm" disabled={busy || sending} onClick={() => void sendSilently()}>
+                {$('panelSettings.telemetry.sendNow')}
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>,
   );
 }

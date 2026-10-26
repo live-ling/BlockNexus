@@ -30,9 +30,30 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $base = $Endpoint.TrimEnd('/')
+if ($Days -lt 0 -or $Days -gt 3650) { Write-Error '-Days 需在 0-3650 之间'; exit 1 }
 $path = if ($Days -gt 0) { "/summary?days=$Days" } else { '/summary' }
 
-$summary = Invoke-RestMethod -Uri ($base + $path) -TimeoutSec 20
+# 拉取失败重试 2 次（EO 路由抖动 / 本地网络抖动不该让报表直接挂掉），失败给排查提示
+$summary = $null
+$lastErr = ''
+for ($i = 0; $i -lt 3; $i++) {
+  try {
+    $summary = Invoke-RestMethod -Uri ($base + $path) -TimeoutSec 20
+    break
+  } catch {
+    $lastErr = $_.Exception.Message
+    if ($i -lt 2) { Start-Sleep -Seconds (1 + $i * 2) }
+  }
+}
+if (-not $summary) {
+  Write-Output "获取遥测统计失败（已重试 3 次）: $lastErr"
+  Write-Output ''
+  Write-Output '排查提示:'
+  Write-Output ("  1. 确认端点可达  : Invoke-RestMethod '{0}/health'" -f $base)
+  Write-Output '  2. VPS 服务状态  : systemctl status blocknexus-telemetry'
+  Write-Output '  3. 换端点对比    : ./telemetry-report.ps1 -Endpoint <其它地址>'
+  exit 1
+}
 # Invoke-RestMethod 对单键对象的类型推断不稳定：JSON 往返一次，强制成规整的 PSCustomObject
 $summary = $summary | ConvertTo-Json -Depth 10 | ConvertFrom-Json
 

@@ -1729,13 +1729,13 @@ export const en = {
   'panelSettings.telemetry.neverSent': 'Never sent',
   'panelSettings.telemetry.fails': '{0} consecutive failures (backing off automatically)',
   'panelSettings.telemetry.preview': 'View data to be sent',
-  'panelSettings.telemetry.previewTitle': 'Data about to be reported (verbatim)',
+  'panelSettings.telemetry.previewTitle': 'Data about to be reported',
   'panelSettings.telemetry.previewRejected': 'This payload was blocked by the safety check and will not be sent: {0}',
-  'panelSettings.telemetry.idReset': 'Reset stats ID',
-  'panelSettings.telemetry.idResetDone': 'Stats ID replaced — previous data can no longer be linked to this machine',
+  'panelSettings.telemetry.historyTitle': 'Report history',
+  'panelSettings.telemetry.sentCount': '{0} successful reports',
   'panelSettings.telemetry.sendNow': 'Send now',
-  'panelSettings.telemetry.sentOk': 'Sent',
-  'panelSettings.telemetry.sentFail': 'Send failed: {0}',
+  'panelSettings.telemetry.sentOk': 'Just sent once',
+  'panelSettings.telemetry.sentFail': 'Send failed — will retry with backoff',
 
   // ---------- SakuraFrp config import ----------
   'frpImport.title': 'Paste SakuraFrp config',

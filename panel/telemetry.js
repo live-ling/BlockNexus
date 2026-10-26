@@ -41,6 +41,14 @@ const DEFAULTS = {
   instanceId: '',
 };
 
+/**
+ * 官方接收端的共享密钥。**公开值**：它不承担保密职责（公开仓库里谁都看得到），
+ * 只提高伪造门槛——扫描器与随手脚本不带这个头就会被接收端拒收，
+ * 污染数据需要有人主动读代码再写脚本，成本足以挡掉绝大多数噪音。
+ * 真正的防线在接收端的白名单校验与限频上。
+ */
+const TELEMETRY_KEY = 'bnx-telemetry-v1-7f3a9c21e5d84b06';
+
 const OSES = ['windows', 'linux', 'other'];
 // 计数桶：'unknown' 表示「这次没采到」（离线/超时），与真实的 0 区分开——
 // 把「没采到」当成 0 会让趋势图出现假的下降。
@@ -318,7 +326,15 @@ async function send(payload, endpoint, opts = {}) {
   try {
     const res = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': `BlockNexus/${payload.panelVer || '0'}` },
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': `BlockNexus/${payload.panelVer || '0'}`,
+        // 共享密钥：接收端据此拒收无密钥的请求（防扫到端口后刷垃圾数据）。
+        // 密钥是公开仓库里的固定串——它的作用不是保密，是提高伪造门槛：
+        // 攻击者当然能看到它，但**得主动写代码带上它**才能污染数据，
+        // 这足以过滤掉绝大多数扫描器与随手脚本的噪音。
+        'X-Telemetry-Key': opts.key || TELEMETRY_KEY,
+      },
       body: JSON.stringify(payload),
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
@@ -454,6 +470,7 @@ function newInstanceId(cryptoImpl) {
 
 module.exports = {
   DEFAULTS,
+  TELEMETRY_KEY,
   PAYLOAD_VERSION,
   OSES,
   BUCKETS,

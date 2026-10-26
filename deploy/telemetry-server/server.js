@@ -33,6 +33,19 @@ const JSONL_FILE = path.join(DATA_DIR, 'telemetry.jsonl');
 const SUMMARY_DIR = path.join(DATA_DIR, 'summary');
 const MAX_BODY = 16 * 1024;
 const MAX_RECORDS_PER_DAY = 100000;
+/**
+ * 共享密钥。与 panel/telemetry.js 的 TELEMETRY_KEY 逐字一致（公开仓库里两处一起改）。
+ * 它不是保密措施——是伪造门槛：不带这个头的请求直接 401，
+ * 扫描器与随手脚本污染数据得先读代码再写脚本，成本足以挡掉绝大多数噪音。
+ * 可用环境变量 TELEMETRY_KEY 覆盖（换端点/自建时不必改代码）。
+ */
+const TELEMETRY_KEY = process.env.TELEMETRY_KEY || 'bnx-telemetry-v1-7f3a9c21e5d84b06';
+/** 常量时间比较：避免按字节逐位泄漏正确前缀 */
+function keyOk(got) {
+  const a = Buffer.from(String(got || ''));
+  const b = Buffer.from(TELEMETRY_KEY);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // ---------- 与 panel/telemetry.js 对齐的校验 ----------
 
@@ -258,6 +271,8 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/telemetry') {
     if (!rateLimit(`post:${ip}`, 60, 3600_000)) return done(429, { error: 'too many requests' });
+    // 共享密钥：不带或不对 → 401（在限频之后判，避免被用来无成本探测）
+    if (!keyOk(req.headers['x-telemetry-key'])) return done(401, { error: 'unauthorized' });
 
     const chunks = [];
     let size = 0;

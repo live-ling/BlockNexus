@@ -11,6 +11,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bn-tel-srv-'));
 process.env.TELEMETRY_DATA_DIR = dir;
 
 const server = require('./server.js');
+// 与 server.js 的默认密钥一致（server.js 可被环境变量覆盖；测试用默认值）
+const KEY = 'bnx-telemetry-v1-7f3a9c21e5d84b06';
 
 let pass = 0;
 let total = 0;
@@ -36,11 +38,17 @@ const GOOD = {
   errors: { 'ssh.timeout': 3 },
 };
 
-function post(body, port) {
+function post(body, port, headers = {}) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = require('http').request(
-      { host: '127.0.0.1', port, path: '/telemetry', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } },
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/telemetry',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), 'X-Telemetry-Key': KEY, ...headers },
+      },
       (res) => {
         let t = '';
         res.on('data', (c) => (t += c));
@@ -80,7 +88,18 @@ function get(p, port) {
   }
   ok('服务已监听', typeof port === 'number' && port > 0, String(port));
 
-  // 1) 正常上报
+  // 1) 鉴权：不带/带错密钥 → 401，不写任何数据
+  {
+    const before = fs.existsSync(path.join(dir, 'telemetry.jsonl')) ? fs.readFileSync(path.join(dir, 'telemetry.jsonl'), 'utf8').length : 0;
+    const noKey = await post(GOOD, port, { 'X-Telemetry-Key': '' });
+    ok('无密钥 → 401', noKey.status === 401, `${noKey.status}`);
+    const badKey = await post(GOOD, port, { 'X-Telemetry-Key': 'wrong-key' });
+    ok('错误密钥 → 401', badKey.status === 401, `${badKey.status}`);
+    const after = fs.existsSync(path.join(dir, 'telemetry.jsonl')) ? fs.readFileSync(path.join(dir, 'telemetry.jsonl'), 'utf8').length : 0;
+    ok('被拒请求未写盘', before === after);
+  }
+
+  // 2) 正常上报（带密钥）
   const r1 = await post(GOOD, port);
   ok('正常上报 → 200', r1.status === 200, r1.body);
 
@@ -109,10 +128,10 @@ function get(p, port) {
   const r4 = await post({ ...GOOD, errors: { '连接 1.2.3.4 失败': 1, 'ssh.timeout': 5 } }, port);
   ok('errors 非法键剔除、合法键保留', r4.status === 200, `${r4.status}`);
 
-  // JSON 坏 → 400
+  // JSON 坏 → 400（鉴权已过，是真正的「格式坏」路径）
   const badJson = await new Promise((resolve, reject) => {
     const req = require('http').request(
-      { host: '127.0.0.1', port, path: '/telemetry', method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      { host: '127.0.0.1', port, path: '/telemetry', method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telemetry-Key': KEY } },
       (r) => {
         let t = '';
         r.on('data', (c) => (t += c));

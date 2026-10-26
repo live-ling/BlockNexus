@@ -1734,13 +1734,13 @@ export const zh = {
   'panelSettings.telemetry.neverSent': '尚未发送过',
   'panelSettings.telemetry.fails': '连续失败 {0} 次（将自动退避重试）',
   'panelSettings.telemetry.preview': '查看将发送的数据',
-  'panelSettings.telemetry.previewTitle': '即将上报的数据（原样）',
+  'panelSettings.telemetry.previewTitle': '即将上报的数据',
   'panelSettings.telemetry.previewRejected': '本次数据被安全自检拦截，不会发送：{0}',
-  'panelSettings.telemetry.idReset': '重置统计 ID',
-  'panelSettings.telemetry.idResetDone': '统计 ID 已更换，旧数据无法再关联到这台机器',
+  'panelSettings.telemetry.historyTitle': '上报记录',
+  'panelSettings.telemetry.sentCount': '已成功上报 {0} 次',
   'panelSettings.telemetry.sendNow': '立即发送一次',
-  'panelSettings.telemetry.sentOk': '已发送',
-  'panelSettings.telemetry.sentFail': '发送失败：{0}',
+  'panelSettings.telemetry.sentOk': '刚刚已发送一次',
+  'panelSettings.telemetry.sentFail': '发送失败，可稍后重试（失败会自动退避重试）',
 
   // ---------- 樱花配置导入 ----------
   'frpImport.title': '粘贴樱花 frp 配置',
