@@ -1736,7 +1736,6 @@ export const zh = {
   'panelSettings.telemetry.preview': '查看将发送的数据',
   'panelSettings.telemetry.previewTitle': '即将上报的数据（原样）',
   'panelSettings.telemetry.previewRejected': '本次数据被安全自检拦截，不会发送：{0}',
-  'panelSettings.telemetry.neverSentTitle': '以下内容永远不会被上报',
   'panelSettings.telemetry.idReset': '重置统计 ID',
   'panelSettings.telemetry.idResetDone': '统计 ID 已更换，旧数据无法再关联到这台机器',
   'panelSettings.telemetry.sendNow': '立即发送一次',

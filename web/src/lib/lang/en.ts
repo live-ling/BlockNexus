@@ -1731,7 +1731,6 @@ export const en = {
   'panelSettings.telemetry.preview': 'View data to be sent',
   'panelSettings.telemetry.previewTitle': 'Data about to be reported (verbatim)',
   'panelSettings.telemetry.previewRejected': 'This payload was blocked by the safety check and will not be sent: {0}',
-  'panelSettings.telemetry.neverSentTitle': 'These are never reported',
   'panelSettings.telemetry.idReset': 'Reset stats ID',
   'panelSettings.telemetry.idResetDone': 'Stats ID replaced — previous data can no longer be linked to this machine',
   'panelSettings.telemetry.sendNow': 'Send now',
