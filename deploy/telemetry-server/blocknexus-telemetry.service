@@ -1,0 +1,23 @@
+[Unit]
+Description=BlockNexus telemetry receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/node /opt/blocknexus-telemetry/server.js
+WorkingDirectory=/opt/blocknexus-telemetry
+Environment=TELEMETRY_PORT=45565
+Environment=TELEMETRY_DATA_DIR=/opt/blocknexus-telemetry/data
+Restart=on-failure
+RestartSec=5
+# 硬化：只给必要权限
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/blocknexus-telemetry/data
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target
