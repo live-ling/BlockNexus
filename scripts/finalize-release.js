@@ -57,7 +57,7 @@ function finalizeRelease(opts = {}) {
     const sig = fs.existsSync(SIG) ? fs.readFileSync(SIG, 'utf8') : '';
     const verdict = signature.verifyUpdateMeta(raw, sig, publicKeys);
     if (!verdict.ok) throw new Error(`签名无效：${JSON.stringify(verdict)}`);
-    return { ok: true, version, signed: true };
+    return { ok: true, version, signed: true, files: parsed.meta.files || {} };
   }
 
   // ---------- 1. files（只覆盖三个 zip） ----------
@@ -118,7 +118,7 @@ function main() {
       noSign: process.argv.includes('--no-sign'),
       verifyOnly: process.argv.includes('--verify'),
     });
-    if (r.ok && r.signed) console.log(`✓ 签名完成：v${r.version}（${Object.keys(r.files).length} 个资产）`);
+    if (r.ok && r.signed) console.log(`✓ 签名完成：v${r.version}（${Object.keys(r.files || {}).length} 个资产）`);
     else if (r.ok) console.log(`✓ 完成：v${r.version}${r.signed ? '' : '（未签名）'}`);
     if (r.sumsLines) console.log(`✓ SHA256SUMS.txt: ${r.sumsLines} 行`);
     console.log(`\n下一步：node scripts/check-release.js --dir ${dir}${r.signed ? ' --require-signature' : ''}`);
