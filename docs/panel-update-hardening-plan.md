@@ -1,6 +1,6 @@
 # 面板更新强化计划（0.7.0 → 1.0.0）
 
-> 状态：**待评审**。本文只写计划，不含代码改动。
+> 状态：**0.7.0 已发布（2026-10-26，tag `v0.7.0`，commit `136904b`）**；1.0.0 待做。本文保留计划与实施记录。
 > 依据：[面板更新健壮性盘点](./panel-update-robustness.md)（问题编号 P0-x / P1-x / P2-x 均出自该文）。
 > 目标版本：**0.7.0 = 更新引擎强化版；1.0.0 = 正式发布版**。
 > 约束：外壳（`BlockNexus.exe` + WebView2）**不在本次替换范围**；日常变更集中在 `web/dist`、`agent/agent.js`、`panel/`。
@@ -13,7 +13,8 @@
 > `npm run test:agent` 全绿（新增 4 个测试），web 203 例全绿、`tsc`/Vite 构建通过；
 > `lockHash`/`shellHash` 仍与 0.6.0 完全一致。**尚未做**：WP-7 的 GitHub Actions（先用本地 runbook）、
 > 多跳 `intent.json`/`autoContinue`（bridge 已修好，当前手动点第二次）、full/deps 载荷、HTTP 代理。
-> 版本号仍是 0.6.0；发版时按 §7.2 提升到 0.7.0。
+> 0.7.0 已发布：commit `136904b`；资产为 app / portable / shell + `update.json` + `update.json.sig` + `SHA256SUMS.txt`；
+> 在线校验已通过（`releases/latest/download/update.json` 版本 0.7.0、签名 `bn-1` 有效、app zip 哈希与 `files` 一致）。
 
 ---
 
