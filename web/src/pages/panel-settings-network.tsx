@@ -808,6 +808,9 @@ function LogPanel({
 // 卡片退化为「说明 + 开关 + 提示升级」，而不是整块报错——404 只说明旧后端不认识这个
 // 接口，不代表功能坏了，把它渲染成红色错误会吓到用户。
 
+/** 与 panel/telemetry.js 的 DEFAULTS.endpoint 保持一致（前端拿不到后端常量，两边一起改） */
+const DEFAULT_TELEMETRY_ENDPOINT = 'https://api-blocknexus.liveling.top/telemetry';
+
 export function TelemetryCard({ className = '' }: { className?: string }) {
   const { success, error } = useToastHelpers();
   const [cfg, setCfg] = useState<TelemetryConfig | null>(null);
@@ -821,6 +824,8 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
   const [busy, setBusy] = useState(false);
   // 开关的乐观值：GET 失败时仍有值可显示、可操作
   const [switchOn, setSwitchOn] = useState(false);
+  // 端点编辑态：默认隐藏（显示「官方接收端」），点「自定义」才展开输入框
+  const [editingEndpoint, setEditingEndpoint] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -919,25 +924,55 @@ export function TelemetryCard({ className = '' }: { className?: string }) {
 
   return wrap(
     <>
-      {/* 开关在卡片标题右侧（status 槽），正文不再重复放一个开关 */}
-      <FormGrid>
-        <Field
-          htmlFor="telemetry-endpoint"
-          label={$('panelSettings.telemetry.endpoint')}
-          hint={$('panelSettings.telemetry.endpointHint')}
-        >
-          <Input
-            id="telemetry-endpoint"
-            value={endpoint}
-            disabled={!cfg.enabled || busy}
-            onChange={(e) => setEndpoint(e.target.value)}
-            onBlur={() => {
-              if (endpointDirty) void patch({ endpoint: endpointTrim });
-            }}
-            placeholder={$('panelSettings.telemetry.endpointPlaceholder')}
-          />
-        </Field>
-      </FormGrid>
+      {/* 数据落点：境内存储是用户最关心的合规信息，常驻显示；端点地址本身默认隐藏 */}
+      <p className="text-[11px] text-muted-foreground">{$('panelSettings.telemetry.region')}</p>
+
+      {/*
+        端点默认隐藏：绝大多数用户不需要知道，一串地址只会带来「数据到底传去哪」的不安。
+        默认态只显示「官方接收端（默认）」；自建的人点「自定义」展开输入框，可随时恢复默认。
+      */}
+      {editingEndpoint || cfg.endpoint !== DEFAULT_TELEMETRY_ENDPOINT ? (
+        <FormGrid>
+          <Field
+            htmlFor="telemetry-endpoint"
+            label={cfg.endpoint === DEFAULT_TELEMETRY_ENDPOINT ? $('panelSettings.telemetry.endpoint') : $('panelSettings.telemetry.endpointCustom')}
+            hint={$('panelSettings.telemetry.endpointEditHint')}
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                id="telemetry-endpoint"
+                value={endpoint}
+                disabled={!cfg.enabled || busy}
+                onChange={(e) => setEndpoint(e.target.value)}
+                onBlur={() => {
+                  if (endpointDirty) void patch({ endpoint: endpointTrim });
+                }}
+                placeholder={$('panelSettings.telemetry.endpointPlaceholder')}
+              />
+              {cfg.endpoint !== DEFAULT_TELEMETRY_ENDPOINT && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setEditingEndpoint(false);
+                    void patch({ endpoint: DEFAULT_TELEMETRY_ENDPOINT });
+                  }}
+                >
+                  {$('panelSettings.telemetry.endpointReset')}
+                </Button>
+              )}
+            </div>
+          </Field>
+        </FormGrid>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] text-muted-foreground">{$('panelSettings.telemetry.endpointDefault')}</span>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditingEndpoint(true)}>
+            {$('panelSettings.telemetry.endpointEdit')}
+          </Button>
+        </div>
+      )}
 
       {/* 状态行：上次发送 / 失败次数。失败可见，否则用户以为在发其实一直失败 */}
       {cfg.enabled && status && (status.lastSentAt || status.fails > 0 || status.error) && (
