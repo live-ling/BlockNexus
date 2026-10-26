@@ -24,6 +24,12 @@ function mergeDeep(base, patch) {
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
+/** 同步退避等待（毫秒）：写配置重试用；不引 async，保持 save() 的同步语义 */
+function sleepSync(ms) {
+  const sab = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(sab), 0, 0, ms);
+}
+
 class Config {
   constructor(file) {
     this.file = file;
@@ -112,14 +118,32 @@ class Config {
     // 唯一临时名：并发保存（如同时改设置与服务器）用同一个 .tmp 会互相抢占，
     // 先 rename 成功的那个把文件移走后，后一个 rename 就会报 ENOENT。
     const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));
-    try {
-      fs.renameSync(tmp, this.file);
-    } catch (e) {
+    const body = JSON.stringify(this.data, null, 2);
+    fs.writeFileSync(tmp, body);
+    // Windows 上 rename 目标文件常被占用（同步盘/杀软/编辑器）而报 EPERM/EBUSY/EACCES，
+    // 这里先退避重试，都不行再退回「直接覆写」——宁可让写入不是原子的，
+    // 也不能因为一次 rename 失败就把配置写丢（曾经因此把 Agent 踢下线）。
+    const delays = [50, 150, 400];
+    let lastErr = null;
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
       try {
-        fs.rmSync(tmp, { force: true });
-      } catch {}
-      throw e;
+        fs.renameSync(tmp, this.file);
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (!['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'].includes(e.code)) break;
+        if (attempt === delays.length) break;
+        sleepSync(delays[attempt]);
+      }
+    }
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {}
+    try {
+      fs.writeFileSync(this.file, body);
+      return;
+    } catch (e2) {
+      throw lastErr || e2;
     }
   }
 
