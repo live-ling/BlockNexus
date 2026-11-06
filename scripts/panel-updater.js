@@ -405,7 +405,9 @@ function launchPanel() {
     return;
   }
   // Linux：systemd 托管时由调用方先等它自己重启，等不到才会走到这里补一个
-  const out = fs.openSync(path.join(ROOT, 'data', 'panel.log'), 'a');
+  const logDir = path.join(ROOT, 'data', 'logs');
+  fs.mkdirSync(logDir, { recursive: true });
+  const out = fs.openSync(path.join(logDir, 'panel.log'), 'a');
   const child = spawn(node, [path.join(ROOT, 'panel', 'server.js'), '--host', HOST, '--port', String(PORT)], {
     detached: true, stdio: ['ignore', out, out], cwd: ROOT,
   });

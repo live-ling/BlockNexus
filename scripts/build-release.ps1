@@ -164,7 +164,9 @@ if ($RebuildExe) {
 }
 
 if (-not $OutDir) {
-  $preferred = 'D:\11493\Desktop\DE Project\BlockNexus Project'
+  # 默认输出到仓库同级的 DE Project\BlockNexus Project（该目录存在时），否则退回 <仓库>/release。
+  # 以仓库位置相对推导，避免把某台开发机的绝对路径写死进公开仓库。
+  $preferred = Join-Path (Split-Path -Parent $root) 'DE Project\BlockNexus Project'
   $OutDir = if (Test-Path (Split-Path -Parent $preferred)) { $preferred } else { Join-Path $root 'release' }
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null

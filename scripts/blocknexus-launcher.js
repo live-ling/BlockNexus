@@ -3,9 +3,9 @@
 //
 // 桌面快捷方式（指向 BlockNexus.exe）→ WebView2 桌面外壳直接渲染前端页面；
 // 浏览器 --app 开窗链路已废弃（普通权限下被日常浏览器实例接管，不稳定）。
-//   1) 面板没在运行 → 后台拉起 node panel/server.js（日志追加到 data/panel.log）；
+//   1) 面板没在运行 → 后台拉起 node panel/server.js（日志追加到 data/logs/panel.log）；
 //   2) 为 config.json 里的「本机服务器」（host 为 127.0.0.1/localhost）拉起本地 Agent
-//      （日志追加到 data/agent.log；端口已有进程监听则跳过，远程服务器不归本机管）；
+//      （日志追加到 data/logs/agent.log；已有实例在运行则跳过，远程服务器不归本机管）；
 //   3) 用 Edge/Chrome 的 --app 模式打开**独立应用窗口**（无地址栏/标签页，任务栏独立图标），
 //      不是普通浏览器标签页；使用独立 user-data-dir，与日常浏览器会话互不干扰。
 //   4) 拉起系统托盘（BlockNexus.exe --tray，原生托盘图标 + 两项菜单：打开应用 / 退出应用）。
@@ -22,11 +22,15 @@ const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const path = require('path');
+const { ensureDataLayout } = require('../panel/data-layout');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONFIG_FILE = path.join(ROOT, 'data', 'config.json');
+// 运行时日志统一收敛到 data/logs/（panel.log / agent.log / launcher.log），
+// 与配置文件（data/config.json 等）分层，便于排障与清理。
+const LOG_DIR = ensureDataLayout(path.join(ROOT, 'data')).logsDir;
 // 首次运行（便携包/全新目录）data/ 还不存在：写日志与 agent runtime.json 前先建好
-fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
+fs.mkdirSync(LOG_DIR, { recursive: true });
 const DRY_RUN = process.argv.includes('--dry-run');
 const STOP = process.argv.includes('--stop');
 const CLOSE_WINDOW = process.argv.includes('--close-window');
@@ -54,7 +58,7 @@ function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
   try {
-    fs.appendFileSync(path.join(ROOT, 'data', 'launcher.log'), line + '\n');
+    fs.appendFileSync(path.join(LOG_DIR, 'launcher.log'), line + '\n');
   } catch {}
 }
 
@@ -88,7 +92,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 后台启动一个隐藏窗口的进程（随面板退出不影响本进程） */
 function spawnDetached(cmd, args, logFile) {
-  const fd = fs.openSync(path.join(ROOT, 'data', logFile), 'a');
+  const fd = fs.openSync(path.join(LOG_DIR, logFile), 'a');
   const child = spawn(cmd, args, {
     cwd: ROOT,
     detached: true,
@@ -272,7 +276,7 @@ async function ensurePanel() {
     }
     await sleep(300);
   }
-  log('面板 20 秒内未就绪，仍继续打开窗口（详情见 data/panel.log）');
+  log('面板 20 秒内未就绪，仍继续打开窗口（详情见 data/logs/panel.log）');
   return false;
 }
 
@@ -286,22 +290,85 @@ const { localInstancesDir } = (() => {
   };
 })();
 
+/** 进程的完整可执行文件路径（Windows；权限不足时返回空字符串） */
+function processImagePath(pid) {
+  try {
+    const out = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `(Get-Process -Id ${Number(pid)} -ErrorAction Stop).Path`,
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 5000 },
+    ).trim();
+    return out || '';
+  } catch {
+    return '';
+  }
+}
+
+/** 只返回**确实仍活着**且路径一致的 Node PID；拒绝复用 PID 或误认其他进程。 */
+function runningNodePid(pid, expectedNode) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0 || n === process.pid) return 0;
+  try {
+    process.kill(n, 0);
+  } catch {
+    return 0;
+  }
+  if (process.platform !== 'win32') return n;
+  const actual = processImagePath(n);
+  return actual && path.resolve(actual) === path.resolve(expectedNode) ? n : 0;
+}
+
+/**
+ * 读取面板托管的 Agent runtime.json，并用 Node 路径 + PID 存活核验。
+ * inbound 模式没有监听端口，不能只靠「面板是否本次启动」判断；否则面板失败重试、
+ * Agent 自己崩溃后的再次双击会重复拉起或永远拉不回来。
+ */
+function liveAgentRuntime(agentDir) {
+  const file = path.join(agentDir, 'runtime.json');
+  try {
+    const runtime = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const expected = runtime.node || process.execPath;
+    const pid = runningNodePid(runtime.pid, expected);
+    if (pid) return { ...runtime, pid };
+  } catch {}
+  return null;
+}
+
 /**
  * 拉起本机 Agent。只处理 config.json 中 host 为本机的服务器（远程服务器由各自机器运行 Agent）。
- * listen 模式（默认）：按 Agent 端口去重 + 端口探测，避免重复拉起；
- * inbound 模式：没有本地端口可探测，只在「面板是本次启动」时拉起（面板早已在跑则假定 Agent 已在跑）。
- * 进程与日志由面板托管的同一套专用目录管理（面板已在跑时跳过，交给面板 / 上面的 hint）。
+ * 先按 runtime.json 的存活 PID 去重（适用于 listen / inbound / 失败重试），
+ * listen 模式再按端口去重 + 端口探测；已崩溃的旧 PID 会被替换。
  */
-async function startLocalAgents(panelWasRunning) {
+async function startLocalAgents(panelWasRunning = false) {
   const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
   const seenPorts = new Set();
   for (const s of servers) {
     const host = String(s.host || '').toLowerCase();
     if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') continue;
     const mode = (s.agent && s.agent.mode) || 'outbound';
+    const instDir = localInstancesDir(s.id);
+    const agentDir = path.dirname(instDir);
+    const running = liveAgentRuntime(agentDir);
+    if (running) {
+      log(`本地 Agent 已在运行（${s.name || s.id}，pid ${running.pid}），跳过`);
+      continue;
+    }
+    if (running) {
+      log(`本地 Agent 已在运行（${s.name || s.id}，pid ${running.pid}），跳过`);
+      continue;
+    }
+    // runtime.json 丢失/无法核验但面板在跑时，inbound 不做盲目补拉：
+    // 它没有本地监听端口，面板可能已托管着活进程；交给面板自己的生命周期管理。
+    if (mode === 'inbound' && panelWasRunning) {
+      log(`本机 inbound Agent 无可核验的运行记录且面板已在运行（${s.name || s.id}），交给面板托管`);
+      continue;
+    }
     const args = ['--token', String(s.token || ''), '--id', String(s.id || '')];
     if (mode === 'inbound') {
-      if (panelWasRunning) continue;
       const panelUrl = (s.agent && s.agent.panelUrl) || `ws://127.0.0.1:${PANEL_PORT}`;
       args.unshift('--panel', panelUrl);
     } else {
@@ -322,7 +389,6 @@ async function startLocalAgents(panelWasRunning) {
       log(`[dry-run] 将启动本地 Agent: ${s.name || s.id} (${mode})`);
       continue;
     }
-    const instDir = localInstancesDir(s.id);
     fs.mkdirSync(instDir, { recursive: true });
     const pid = spawnDetached(
       process.execPath,
@@ -332,7 +398,6 @@ async function startLocalAgents(panelWasRunning) {
     log(`本地 Agent 已启动（${s.name || s.id}，pid ${pid}，实例目录 ${instDir}）`);
     // 记 pid 到与面板托管同一份 runtime.json：面板侧的停止/卸载能直接接管这个进程
     try {
-      const agentDir = path.dirname(instDir);
       const cfgFile = path.join(agentDir, 'agent.json');
       const prev = fs.existsSync(cfgFile)
         ? JSON.parse(fs.readFileSync(cfgFile, 'utf8'))
@@ -354,6 +419,17 @@ async function startLocalAgents(panelWasRunning) {
     } catch (e) {
       log('写入 Agent 运行态失败（不影响启动）: ' + (e && e.message ? e.message : e));
     }
+
+    // Agent 启动后做一次存活确认：进程立刻退出（参数错/端口被占/崩溃）时
+    // 不会静默「已启动」，而是记一条警告并继续下一个服务器。
+    try {
+      await sleep(800);
+      let alive = true;
+      try { process.kill(pid, 0); } catch { alive = false; }
+      if (!alive) {
+        log(`⚠ 本地 Agent（${s.name || s.id}，pid ${pid}）启动后立即退出，请查看 data/logs/agent.log`);
+      }
+    } catch {}
   }
 }
 
@@ -391,8 +467,35 @@ function exitTray() {
   }
   if (!fs.existsSync(TRAY_EXE)) return;
   try {
+    // 第一遍：命名事件优雅退出。普通↔提权跨完整性下事件可能发不出去，
+    // 由 exe 内部兜底强杀；这里再给一个短超时，卡住时直接放弃（不阻塞停止流程）。
     spawnSync(TRAY_EXE, ['--exit-tray'], { stdio: 'ignore', windowsHide: true, timeout: 10000 });
   } catch {}
+  // 给命名事件最多 3 秒完成优雅退出，避免弹球形提示/窗口消息卡住时拖死停止流程。
+  if (process.platform === 'win32') {
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const pid = Number(process.env.BLOCKNEXUS_TRAY_PID) || 0;
+      if (!pid) break;
+      try { process.kill(pid, 0); } catch { return; }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+    }
+  }
+  // 兜底：若当前外壳仍在（事件被吞/未退出），按 PID 定向结束。
+  // 绝不能 taskkill /IM：机器上可能还有另一套 BlockNexus 安装，不能误伤。
+  const currentPid = Number(process.env.BLOCKNEXUS_TRAY_PID) || 0;
+  if (currentPid && currentPid !== process.pid) {
+    try {
+      execFileSync('taskkill', ['/F', '/PID', String(currentPid)], {
+        stdio: 'ignore',
+        windowsHide: true,
+        timeout: 5000,
+      });
+      log(`托盘未响应退出事件，已强制结束当前外壳（pid ${currentPid}）`);
+    } catch (e) {
+      log(`当前外壳强制退出失败（pid ${currentPid}）：${e && e.message ? e.message : e}`);
+    }
+  }
 }
 
 // ---------- 停止 ----------

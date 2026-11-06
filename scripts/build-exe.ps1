@@ -20,6 +20,8 @@ $src = Join-Path $PSScriptRoot 'tray\BlockNexusTray.cs'
 $logo = Join-Path $root 'images\logo.png'
 $ico = Join-Path $root 'images\blocknexus.ico'
 $out = Join-Path $root 'BlockNexus.exe'
+$stage = Join-Path $env:TEMP ("BlockNexus-build-" + [guid]::NewGuid().ToString('N'))
+$builtExe = Join-Path $stage 'BlockNexus.exe'
 $certFile = Join-Path $root 'BlockNexus.cer'
 $subject = 'CN=BlockNexus Local Developer'
 
@@ -31,14 +33,11 @@ Write-Host "icon: regenerating blocknexus.ico from logo.png"
 & (Join-Path $PSScriptRoot 'make-ico.ps1') -Png $logo -Out $ico
 if (-not (Test-Path $ico)) { throw "icon generation failed: $ico" }
 
-# ---------- 2) 正在运行的 exe 会让 csc 写不出来，先结束 ----------
+# ---------- 2) 先在独立目录编译 ----------
+# 不再一边停外壳一边覆盖运行目录：提权残留、其他面板进程加载的托管 DLL 都可能锁住
+# 文件。先让 csc 完整产出，再做替换；旧文件占用导致的问题能明确报告，不会半途中断。
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $exeName = [System.IO.Path]::GetFileNameWithoutExtension($out)
-Get-Process -Name $exeName -ErrorAction SilentlyContinue |
-  Where-Object { $_.Path -eq $out } | ForEach-Object {
-    Write-Host "stopping running instance (pid $($_.Id))"
-    Stop-Process -Id $_.Id -Force
-    Start-Sleep -Milliseconds 500
-  }
 
 # ---------- 3) 编译 ----------
 $csc = Get-ChildItem 'C:\Windows\Microsoft.NET\Framework*\v4.0.30319\csc.exe' -ErrorAction SilentlyContinue |
@@ -72,7 +71,7 @@ Copy-Item $wvForms $root -Force
 
 $cscArgs = @(
   '/nologo', '/target:winexe', '/optimize+', '/platform:anycpu',
-  "/out:$out",
+  "/out:$builtExe",
   "/win32icon:$ico",
   "/resource:$ico,BlockNexus.AppIcon",
   "/win32manifest:$((Join-Path $PSScriptRoot 'tray\app.manifest'))",
@@ -82,10 +81,45 @@ $cscArgs = @(
 )
 & $csc.FullName $cscArgs
 if ($LASTEXITCODE -ne 0) { throw "csc failed with exit code $LASTEXITCODE" }
-if (-not (Test-Path $out)) { throw "build failed: $out was not produced" }
+if (-not (Test-Path $builtExe)) { throw "build failed: $builtExe was not produced" }
 
 # app.config → BlockNexus.exe.config：WinForms 的 PerMonitorV2 高 DPI 支持在此启用
-Copy-Item (Join-Path $PSScriptRoot 'tray\app.config') "$out.config" -Force
+Copy-Item (Join-Path $PSScriptRoot 'tray\app.config') "$builtExe.config" -Force
+$outConfig = "$out.config"
+
+# ---------- 3.1) 替换外壳：普通实例先优雅退出，失败再定向强杀；提权残留明确报错 ----------
+function Stop-ShellAt([string]$exePath) {
+  Get-Process -Name $exeName -ErrorAction SilentlyContinue | ForEach-Object {
+    $proc = $_
+    $samePath = $false
+    $pathReadable = $true
+    try { $samePath = $proc.Path -eq $exePath } catch { $pathReadable = $false }
+    if (-not $pathReadable) {
+      # 读不到路径（通常是提权进程）时，旧版 Local\ 事件无法作为可靠退出通道；
+      # 保留现状并在复制失败时给管理员收尾提示，不能误杀其它安装目录。
+      Write-Host "cannot inspect elevated/other-session shell pid $($proc.Id); leaving it untouched"
+      continue
+    }
+    if (-not $samePath -and -not $proc.HasExited) {
+      continue
+    }
+    if ($samePath) {
+      Write-Host "stopping running instance (pid $($proc.Id))"
+      try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch {
+        try { & $builtExe --exit-tray | Out-Null } catch {}
+      }
+    }
+  }
+  Start-Sleep -Milliseconds 800
+}
+Stop-ShellAt $out
+try {
+  Copy-Item $builtExe $out -Force -ErrorAction Stop
+  Copy-Item "$builtExe.config" $outConfig -Force -ErrorAction Stop
+}
+catch {
+  throw "外壳仍被运行中的进程占用（常见为旧版提权残留）。请用管理员 PowerShell 执行 taskkill /F /IM BlockNexus.exe 后重试。$($_.Exception.Message)"
+}
 
 $size = [math]::Round((Get-Item $out).Length / 1KB, 1)
 Write-Host "built: $out ($size KB)"
@@ -95,11 +129,16 @@ Write-Host "built: $out ($size KB)"
 # 把外壳 exe 放到项目外的兄弟目录即可绕开。exe 通过 root.txt 找回项目根。
 # 每次 build 都刷新该目录；目录不存在则创建，机器上没有异常时用哪个 exe 都一样。
 $shellDir = Join-Path (Split-Path -Parent $root) 'BlockNexus'
+if ([System.IO.Path]::GetFullPath($shellDir).TrimEnd('\') -eq [System.IO.Path]::GetFullPath($root).TrimEnd('\')) {
+  Write-Host 'shell: project root doubles as shell directory; no separate copy needed'
+}
+else {
 try {
   New-Item -ItemType Directory -Force -Path $shellDir | Out-Null
+  Stop-ShellAt (Join-Path $shellDir 'BlockNexus.exe')
   Set-Content -Path (Join-Path $shellDir 'root.txt') -Value $root -Encoding Ascii
   Copy-Item $out (Join-Path $shellDir 'BlockNexus.exe') -Force
-  Copy-Item "$out.config" (Join-Path $shellDir 'BlockNexus.exe.config') -Force
+  Copy-Item $outConfig (Join-Path $shellDir 'BlockNexus.exe.config') -Force
   Copy-Item (Join-Path $root 'WebView2Loader.dll') $shellDir -Force
   Copy-Item $wvCore $shellDir -Force
   Copy-Item $wvForms $shellDir -Force
@@ -110,6 +149,7 @@ try {
 }
 catch {
   Write-Host "shell: skip ($($_.Exception.Message))"
+}
 }
 
 # ---------- 3.5) 清 Windows 图标缓存 ----------

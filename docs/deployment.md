@@ -176,7 +176,7 @@ npm run build:web
 ```bash
 curl -s http://127.0.0.1:3080/api/me          # 期望 JSON：port / authEnabled / version
 ss -ltn | grep 3080                            # 期望监听地址符合预期
-tail -n 40 <安装目录>/data/panel.log           # 启动横幅、迁移、错误
+tail -n 40 <安装目录>/data/logs/panel.log      # 启动横幅、迁移、错误
 ```
 
 ### 4. 常见坑（按优先级）

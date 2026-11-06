@@ -1,6 +1,6 @@
 # BlockNexus 现状能力清单（Current-State Capability Inventory）
 
-> 审计对象：`D:\11493\Desktop\BlockNexus` —— Minecraft 服务器管理面板（本地 Express + WebView2 外壳 → SSH 部署到远程 Linux 的零依赖单文件 Agent）。
+> 审计对象：本仓库（BlockNexus）—— Minecraft 服务器管理面板（本地 Express + WebView2 外壳 → SSH 部署到远程 Linux 的零依赖单文件 Agent）。
 > 审计方式：只读代码走查 + 反向 grep 验证。所有结论附 `file:line`；**未读到的东西一律标注「不存在」并说明验证手段**。
 > 本次审计**未修改任何代码**，只新增本报告。
 >
@@ -651,7 +651,7 @@ test-module-imports → build.js --check → test-bundle-fresh → test-bundle-s
 - **纯外壳 zip**（`BlockNexus-shell-v<版本>.zip`）：只有 exe/dll/runtimes（`build-release.ps1:104-111`）。
 - 最后打印两个 zip 的 **SHA256**（`build-release.ps1:113-115`）。
 - 临时 staging 目录在 `$env:TEMP`，`finally` 里清理（`:51`、`:117-119`）。
-- 输出目录默认硬编码为 `D:\11493\Desktop\DE Project\BlockNexus Project`，不存在才退回 `.\release`（`:45-48`）——**与开发机路径强耦合**。
+- 输出目录默认是「仓库同级的 `DE Project\BlockNexus Project`」，该目录不存在才退回 `<仓库>/release`——早期版本曾把开发机绝对路径写死，现已改为相对仓库位置推导。
 
 ### 9.4 桌面外壳 `scripts/build-exe.ps1`（221 行）
 

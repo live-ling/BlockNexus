@@ -39,10 +39,13 @@ namespace BlockNexus
 {
     internal static class TrayApp
     {
-        private const string MutexName = @"Local\BlockNexusTrayMutex";
-        private const string ExitEventName = @"Local\BlockNexusExitTrayEvent";
-        private const string ShowEventName = @"Local\BlockNexusShowWindowEvent";
-        private const string HideEventName = @"Local\BlockNexusHideWindowEvent";
+        // ⚠ 命名内核对象用 Global\：Local\ 在「同用户不同登录会话」与「普通↔提权完整性
+        //   级别」之间不可见/不可写，表现为双击提权后事件打不开、旧实例收不到退出/显示
+        //   请求 → 提权实例「概率性失效」。Global\ 跨会话跨完整性都可见（同机内核全局）。
+        private const string MutexName = @"Global\BlockNexusTrayMutex";
+        private const string ExitEventName = @"Global\BlockNexusExitTrayEvent";
+        private const string ShowEventName = @"Global\BlockNexusShowWindowEvent";
+        private const string HideEventName = @"Global\BlockNexusHideWindowEvent";
 
         private static EventWaitHandle _exitEvent;
         private static EventWaitHandle _showEvent;
@@ -98,13 +101,20 @@ namespace BlockNexus
             AppDomain.CurrentDomain.UnhandledException += (s, e) => LogCrash("fatal: " + e.ExceptionObject);
             Application.ThreadException += (s, e) => LogCrash("thread: " + e.Exception);
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
+            try
+            {
+                // 命令行（ssh/远程/无交互会话）里双击等价运行时，GDI+ 初始化可能抛
+                // 「一般性错误」直接崩掉。吞掉并让 WinForms 用默认主题，保证进程活着。
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+            }
+            catch (Exception e) { LogStep("EnableVisualStyles failed (non-interactive session?): " + e.Message); }
 
             LogStep("Main entered, args=" + string.Join(" ", args));
-            EnsureDataDir();
 
-            _root = ResolveRoot();
+            _root = ResolveRoot();   // 先解析根，EnsureDataDir 才能把日志写进 <root>/data/logs
+            EnsureDataDir();
+            MigrateDataLayout();
             LogStep("root=" + _root);
             _node = FindNode();
             LogStep("node=" + (_node ?? "(null)"));
@@ -143,29 +153,58 @@ namespace BlockNexus
 
             if (!createdNew)
             {
-                if (args.Length > 0 && args[0] == "--exit-tray")
+                // 用户明确「以管理员身份运行」时，必须真正切换到提权实例，而不是给
+                // 普通旧实例发一个 show 就自己退出。先发退出信号（只退外壳，不动面板），
+                // 再等待旧实例释放互斥锁；接管失败要显式提示，绝不静默吞掉。
+                if (IsElevated())
                 {
-                    // 只收界面外壳与托盘图标；面板/Agent 继续后台运行（npm run exit-tray 语义）
-                    SetNamedEvent(ExitEventName, "exit(shell-only)");
+                    LogStep("elevated launch: requesting existing shell to hand over");
+                    SetNamedEvent(ExitEventName, "exit(elevated handover)");
+                    createdNew = WaitForSingleInstanceMutex(15000);
+                    if (!createdNew)
+                    {
+                        MessageBox.Show(
+                            "已有 BlockNexus 外壳没有退出，暂时无法切换为管理员实例。\r\n\r\n" +
+                            "请先在托盘菜单选择「完全退出」，再右键以管理员身份运行。",
+                            "BlockNexus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return 1;
+                    }
+                }
+                // 互斥量提示「已有实例」但没有活进程时，让位按首实例继续。
+                else if (!ExistingProcessAlive())
+                {
+                    LogStep("mutex held by dead instance, taking over as first instance");
+                    try { _mutex.ReleaseMutex(); } catch { }
+                    createdNew = true;
+                }
+                else
+                {
+                    if (args.Length > 0 && args[0] == "--exit-tray")
+                    {
+                        // 只收界面外壳与托盘图标；面板/Agent 继续后台运行（npm run exit-tray 语义）
+                        if (!SetNamedEvent(ExitEventName, "exit(shell-only)"))
+                            ForceKillExisting();   // 事件发不出去（ACL/异常）→ 兜底强杀，不能让「退出」静默失效
+                        return 0;
+                    }
+                    if (args.Length > 0 && args[0] == "--stop")
+                    {
+                        // 完全退出：先停面板/Agent（本进程直接执行），再请外壳退出
+                        RunLauncher("--stop", true);
+                        if (!SetNamedEvent(ExitEventName, "exit(stop)"))
+                            ForceKillExisting();
+                        return 0;
+                    }
+                    if (args.Length > 0 && args[0] == "--close-window")
+                    {
+                        LogStep("second instance: request hide");
+                        SetNamedEvent(HideEventName, "hide");
+                        return 0;
+                    }
+                    // 第二次双击：通知已有实例显示主窗口
+                    LogStep("second instance: request show");
+                    SetNamedEvent(ShowEventName, "show");
                     return 0;
                 }
-                if (args.Length > 0 && args[0] == "--stop")
-                {
-                    // 完全退出：先停面板/Agent（本进程直接执行），再请外壳退出
-                    RunLauncher("--stop", true);
-                    SetNamedEvent(ExitEventName, "exit(stop)");
-                    return 0;
-                }
-                if (args.Length > 0 && args[0] == "--close-window")
-                {
-                    LogStep("second instance: request hide");
-                    SetNamedEvent(HideEventName, "hide");
-                    return 0;
-                }
-                // 第二次双击：通知已有实例显示主窗口
-                LogStep("second instance: request show");
-                SetNamedEvent(ShowEventName, "show");
-                return 0;
             }
 
             // ---- 首实例：唯一常驻进程 ----
@@ -179,21 +218,15 @@ namespace BlockNexus
             }
 
             // 命名事件：退出 / 显示主窗 / 藏主窗
-            try { _exitEvent = new EventWaitHandle(false, EventResetMode.ManualReset, ExitEventName); }
-            catch { }
-            try { _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName); }
-            catch { }
-            try { _hideEvent = new EventWaitHandle(false, EventResetMode.AutoReset, HideEventName); }
-            catch { }
+            // 必须带显式 ACL：默认 DACL 只允许创建者所在完整性与会话访问，普通权限进程
+            // 对提权实例创建的事件 OpenExisting(Modify) 会得到 AccessDenied → 双击「完全
+            // 退出/显示窗口」概率性被吞。放开 Everyone Modify + 创建者 OwnerWrite。
+            _exitEvent = CreateSharedEvent(ExitEventName, EventResetMode.ManualReset);
+            _showEvent = CreateSharedEvent(ShowEventName, EventResetMode.AutoReset);
+            _hideEvent = CreateSharedEvent(HideEventName, EventResetMode.AutoReset);
 
-            if (_exitEvent != null)
-            {
-                new Thread(() =>
-                {
-                    try { _exitEvent.WaitOne(); _exitRequested = true; Application.Exit(); }
-                    catch { }
-                }) { IsBackground = true }.Start();
-            }
+            // exit 事件用 ManualReset（信号不会丢）；监听线程在 Application.Run 紧邻启动前
+            // 创建，由消息循环正常处理退出。
             if (_showEvent != null)
             {
                 new Thread(() =>
@@ -234,6 +267,17 @@ namespace BlockNexus
             // 后台：拉起面板/Agent；就绪后主窗口载入真实页面并显示
             new Thread(StartupFlow) { IsBackground = true }.Start();
 
+            // ManualReset 事件在监听器建立前置位也不会丢；Application.Exit() 若早于消息
+            // 循环，由 Run() 返回后的正常清理收尾，不能在这里漏掉进程退出。
+            if (_exitEvent != null)
+            {
+                new Thread(() =>
+                {
+                    try { _exitEvent.WaitOne(); _exitRequested = true; Application.Exit(); }
+                    catch { }
+                }) { IsBackground = true }.Start();
+            }
+
             Application.Run();
             LogStep("Application.Run returned (exiting)");
 
@@ -250,17 +294,74 @@ namespace BlockNexus
 
         private static void StartupFlow()
         {
+            // 面板就绪失败时重试一次（覆盖：首次启动 WebView2/Node 较慢、端口短暂被占用
+            // 刚释放等瞬态）。两次都失败就在主窗口显示明确错误，而不是停在空白启动页。
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                try
+                {
+                    SafeText(attempt == 1 ? "BlockNexus · 正在启动…" : "BlockNexus · 正在重试…");
+                    LogStep("startup flow attempt " + attempt);
+                    RunLauncher("--panel-only", true);   // 拉起面板 + 本地 Agent（等待就绪）
+                    if (PanelReachable())
+                    {
+                        var f = _form;
+                        if (f != null && !f.IsDisposed)
+                        {
+                            f.BeginInvoke((Action)(() => f.NavigatePanel(_panelUrl)));
+                        }
+                        ShowMainWindowSafe();
+                        return;
+                    }
+                    LogStep("startup attempt " + attempt + ": panel not reachable yet");
+                }
+                catch (Exception e) { LogStep("startup flow exception (attempt " + attempt + "): " + e.Message); }
+            }
+            LogStep("panel unreachable after retries, showing error page");
+            ShowStartupError();
+            ShowMainWindowSafe();
+        }
+
+        /** 面板 HTTP 是否可达（就绪探测；超时短，由 RunLauncher 的长等负责主等待） */
+        private static bool PanelReachable()
+        {
             try
             {
-                RunLauncher("--panel-only", true);   // 拉起面板 + 本地 Agent（等待就绪，不开浏览器）
-                var f = _form;
-                if (f != null && !f.IsDisposed)
+                var url = _panelUrl.TrimEnd('/') + "/api/me";
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                req.Timeout = 2000;
+                req.Method = "GET";
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
                 {
-                    f.BeginInvoke((Action)(() => f.NavigatePanel(_panelUrl)));
+                    return (int)resp.StatusCode < 500;
                 }
             }
-            catch (Exception e) { LogStep("startup flow exception: " + e.Message); }
-            ShowMainWindowSafe();
+            catch { return false; }
+        }
+
+        private static void ShowStartupError()
+        {
+            try
+            {
+                var f = _form;
+                if (f == null || f.IsDisposed) return;
+                f.BeginInvoke((Action)(() =>
+                {
+                    try
+                    {
+                        f.Web.NavigateToString(
+                            "<!doctype html><meta charset='utf-8'><body style=\"background:#0b0f19;color:#f87171;" +
+                            "font-family:'Microsoft YaHei UI';display:flex;align-items:center;justify-content:center;" +
+                            "height:100vh;margin:0\"><div style='text-align:center;max-width:70%'>" +
+                            "<div style='font-size:20px;margin-bottom:12px'>面板启动失败</div>" +
+                            "<div style='color:#94a3b8;font-size:13px;line-height:1.7'>" +
+                            "后台面板在重试后仍未就绪。<br>请查看日志 data\\logs\\panel.log 与 data\\logs\\launcher.log，" +
+                            "或关闭后重新打开 BlockNexus.exe。</div></div></body>");
+                    }
+                    catch { }
+                }));
+            }
+            catch { }
         }
 
         // ---------- 主窗口 ----------
@@ -476,9 +577,9 @@ namespace BlockNexus
             if (f == null) return;
             try
             {
-                // user-data-folder 放项目 data 下。不用 %LOCALAPPDATA%\BlockNexus\webview2-profile：
+                // user-data-folder 是浏览器可再生缓存，放 data/cache；不放 %LOCALAPPDATA%：
                 // 该路径曾被异常退出留下孤儿锁 → WebView2 报 0x800700AA（资源正在使用）。
-                var userData = Path.Combine(_root, "data", "webview2-profile");
+                var userData = Path.Combine(_root, "data", "cache", "webview2-profile");
                 var env = await CoreWebView2Environment.CreateAsync(null, userData);
                 await f.Web.EnsureCoreWebView2Async(env);
                 LogStep("WebView2 ready");
@@ -628,6 +729,7 @@ namespace BlockNexus
                 // 「这一刻行不行」，而这里要解决的是「图标到底挂上没有」。
                 var retry = new System.Windows.Forms.Timer { Interval = 2000 };
                 int tries = 0;
+                var deadline = DateTime.UtcNow.AddSeconds(90);
                 retry.Tick += (s, e) =>
                 {
                     tries++;
@@ -640,12 +742,17 @@ namespace BlockNexus
                         LogStep("tray icon registered after retry #" + tries);
                         return;
                     }
-                    if (tries >= 30)   // 2s × 30 ≈ 60s
+                    if (DateTime.UtcNow >= deadline)   // 上限 ~90s，覆盖开机自启/外壳慢就绪
                     {
                         retry.Stop();
                         _trayOk = false;
                         LogStep("tray icon registration failed after " + tries + " tries, win32err=" + err2);
                         OnTrayUnavailable();
+                    }
+                    else
+                    {
+                        // 轻退避：越到后面间隔越大，减少无效探测
+                        retry.Interval = Math.Min(6000, 2000 + tries * 500);
                     }
                 };
                 retry.Start();
@@ -956,6 +1063,8 @@ namespace BlockNexus
             psi.UseShellExecute = false;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
+            // launcher 的退出兜底只认当前外壳 PID，不用 taskkill /IM 误杀其他安装目录。
+            psi.EnvironmentVariables["BLOCKNEXUS_TRAY_PID"] = Process.GetCurrentProcess().Id.ToString();
 
             var quoted = "\"" + script + "\"";
             if (string.Equals(Path.GetExtension(_node), ".cmd", StringComparison.OrdinalIgnoreCase))
@@ -1011,19 +1120,157 @@ namespace BlockNexus
 
         // ---------- 路径解析 ----------
 
+        /// <summary>
+        /// 日志目录：统一收敛到 <项目根>/data/logs/。
+        /// 历史上 tray 日志写在「exe 同目录/data」（外壳分离部署时与项目 data/ 分离），
+        /// 诊断要翻两个地方。现在以解析出的项目根为准（_root 在 Main 早期就已就绪，
+        /// 晚于 EnsureDataDir 首次调用时回退到 base/data 仍可用）。
+        /// </summary>
         private static string EnsureDataDir()
         {
             try
             {
-                var d = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+                var root = _root ?? AppDomain.CurrentDomain.BaseDirectory;
+                var d = Path.Combine(root, "data", "logs");
                 if (!Directory.Exists(d)) Directory.CreateDirectory(d);
                 return d;
             }
-            catch { return AppDomain.CurrentDomain.BaseDirectory; }
+            catch
+            {
+                try
+                {
+                    var d = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "logs");
+                    if (!Directory.Exists(d)) Directory.CreateDirectory(d);
+                    return d;
+                }
+                catch { return AppDomain.CurrentDomain.BaseDirectory; }
+            }
         }
 
-        /** 打开已存在的命名事件并置位（跨进程通知；需要 Modify 权限） */
-        private static void SetNamedEvent(string name, string tag)
+        private static bool IsElevated()
+        {
+            try
+            {
+                using (var id = System.Security.Principal.WindowsIdentity.GetCurrent())
+                    return new System.Security.Principal.WindowsPrincipal(id).IsInRole(
+                        System.Security.Principal.WindowsBuiltInRole.Administrator);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>释放尚未被本线程真正持有的 Mutex，再限时等待旧实例退出。</summary>
+        private static bool WaitForSingleInstanceMutex(int timeoutMs)
+        {
+            try { _mutex.ReleaseMutex(); } catch { }
+            try { _mutex.Dispose(); } catch { }
+            _mutex = null;
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(150);
+                bool createdNew = false;
+                Mutex next = null;
+                try { next = new Mutex(true, MutexName, out createdNew); }
+                catch { continue; }
+                if (createdNew)
+                {
+                    _mutex = next;
+                    LogStep("elevated handover: mutex acquired");
+                    return true;
+                }
+                try { next.Dispose(); } catch { }
+            }
+            LogStep("elevated handover: timed out waiting for old instance");
+            return false;
+        }
+
+        /// <summary>
+        /// 互斥量提示「已有实例」时，确认是否真有一个活着的同 exe 进程。
+        /// 旧实例可能僵死或卡在启动早期；确认没有活进程时接管，避免「双击没反应」。
+        /// 无法判定时保守返回 true（维持转发语义）。
+        /// </summary>
+        private static bool ExistingProcessAlive()
+        {
+            try
+            {
+                var self = Process.GetCurrentProcess();
+                string myPath = null;
+                try { myPath = self.MainModule.FileName; } catch { }
+                var exeName = System.IO.Path.GetFileNameWithoutExtension(self.ProcessName);
+                foreach (var p in Process.GetProcessesByName(exeName))
+                {
+                    try
+                    {
+                        if (p.Id == self.Id) continue;
+                        // 提权下访问其他会话/完整性的 MainModule 可能抛错；只要进程在就算活。
+                        if (!string.IsNullOrEmpty(myPath))
+                        {
+                            string other = null;
+                            try { other = p.MainModule.FileName; } catch { }
+                            if (other != null &&
+                                !string.Equals(other, myPath, StringComparison.OrdinalIgnoreCase))
+                                continue;
+                        }
+                        return true;   // 找到一个活着的同 exe 进程
+                    }
+                    finally { p.Dispose(); }
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                LogStep("ExistingProcessAlive probe fail: " + ex.Message);
+                return true;   // 判不准就按「有实例」处理，避免双开
+            }
+        }
+
+        /// <summary>事件发不出去时兜底强杀同 exe 的其他实例（--exit-tray/--stop 语义必须达成）。</summary>
+        private static void ForceKillExisting()
+        {
+            try
+            {
+                var self = Process.GetCurrentProcess();
+                var exeName = System.IO.Path.GetFileNameWithoutExtension(self.ProcessName);
+                foreach (var p in Process.GetProcessesByName(exeName))
+                {
+                    try
+                    {
+                        if (p.Id == self.Id) continue;
+                        LogStep("ForceKillExisting: killing pid=" + p.Id);
+                        p.Kill();
+                    }
+                    catch (Exception e) { LogStep("ForceKillExisting pid=" + p.Id + " fail: " + e.Message); }
+                    finally { p.Dispose(); }
+                }
+            }
+            catch (Exception e) { LogStep("ForceKillExisting fail: " + e.Message); }
+        }
+
+        private static EventWaitHandle CreateSharedEvent(string name, EventResetMode mode)
+        {
+            try
+            {
+                var sec = new System.Security.AccessControl.EventWaitHandleSecurity();
+                sec.AddAccessRule(new System.Security.AccessControl.EventWaitHandleAccessRule(
+                    new System.Security.Principal.SecurityIdentifier(
+                        System.Security.Principal.WellKnownSidType.WorldSid, null),
+                    System.Security.AccessControl.EventWaitHandleRights.Modify |
+                    System.Security.AccessControl.EventWaitHandleRights.Synchronize,
+                    System.Security.AccessControl.AccessControlType.Allow));
+                bool createdNew;
+                var ev = new EventWaitHandle(false, mode, name, out createdNew, sec);
+                LogStep("event created: " + name + " new=" + createdNew);
+                return ev;
+            }
+            catch (Exception ex)
+            {
+                LogStep("CreateSharedEvent " + name + " ACL fail, fallback default: " + ex.Message);
+                try { return new EventWaitHandle(false, mode, name); } catch { return null; }
+            }
+        }
+
+        /** 打开已存在的命名事件并置位（跨进程通知；需要 Modify 权限）。返回是否成功。 */
+        private static bool SetNamedEvent(string name, string tag)
         {
             try
             {
@@ -1032,9 +1279,10 @@ namespace BlockNexus
                 {
                     ev.Set();
                     LogStep("named event set: " + tag);
+                    return true;
                 }
             }
-            catch (Exception e) { LogStep("named event " + tag + " failed: " + e.Message); }
+            catch (Exception e) { LogStep("named event " + tag + " failed: " + e.Message); return false; }
         }
 
         private static void LogCrash(string what)
@@ -1044,6 +1292,39 @@ namespace BlockNexus
                 File.AppendAllText(
                     Path.Combine(EnsureDataDir(), "tray-crash.log"),
                     "[" + DateTime.Now.ToString("s") + "] " + what + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        /// <summary>把旧版分散日志与缓存归位；被占用时跳过，不阻止启动。</summary>
+        private static void MigrateDataLayout()
+        {
+            try
+            {
+                var data = Path.Combine(_root, "data");
+                var logs = Path.Combine(data, "logs");
+                var cache = Path.Combine(data, "cache");
+                Directory.CreateDirectory(logs);
+                Directory.CreateDirectory(cache);
+                string[] names = { "panel.log", "agent.log", "launcher.log", "tray-trace.log", "tray-crash.log" };
+                foreach (var name in names) MigrateDataFile(Path.Combine(data, name), Path.Combine(logs, name));
+                string[] caches = { "mc-versions-cache.json", "mc-cores-cache.json" };
+                foreach (var name in caches) MigrateDataFile(Path.Combine(data, name), Path.Combine(cache, name));
+                var oldProfile = Path.Combine(data, "webview2-profile");
+                var newProfile = Path.Combine(cache, "webview2-profile");
+                if (Directory.Exists(oldProfile) && !Directory.Exists(newProfile)) Directory.Move(oldProfile, newProfile);
+            }
+            catch (Exception ex) { LogStep("data layout migration skipped: " + ex.Message); }
+        }
+
+        private static void MigrateDataFile(string source, string target)
+        {
+            try
+            {
+                if (!File.Exists(source) || File.Exists(target)) return;
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                try { File.Move(source, target); }
+                catch { File.Copy(source, target); }   // 旧进程仍占用时保留源文件
             }
             catch { }
         }
