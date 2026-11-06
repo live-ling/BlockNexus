@@ -17,6 +17,8 @@ export interface ServerInfo {
   node: string;
   /** Agent 脚本版本（旧版 Agent 未上报时缺省） */
   agentVersion?: string;
+  /** CPU 型号（Agent ≥0.5.6 上报；旧 Agent 缺省） */
+  cpuModel?: string;
   memTotalMB: number;
   dir: string;
   instancesDir: string;
@@ -26,7 +28,7 @@ export interface ServerInfo {
 export interface ServerSummary {
   id: string;
   name: string;
-  /** 服务器所在地区（手动设置；空/缺省 = 未设置） */
+  /** 服务器所在地区（面板按 host 经 ipwho.is 自动推断；空/缺省 = 未推断出） */
   region?: string;
   host: string;
   token?: string;

@@ -214,8 +214,7 @@ export const en = {
 
   // ---------- Server connection fields (reused by the edit-server dialog) ----------
   'serverField.name': 'Name',
-  'serverField.region': 'Region',
-  'serverField.region.none': 'Not set',
+  // Region is auto-detected from the server host (ipwho.is); the manual selector was removed
   'serverRegion.cn': 'China',
   'serverRegion.hk': 'Hong Kong, China',
   'serverRegion.tw': 'Taiwan, China',
@@ -1115,6 +1114,7 @@ export const en = {
   'serverSettings.sys.title': 'System Info',
   'serverSettings.field.hostname': 'Hostname',
   'serverSettings.field.os': 'OS',
+  'serverSettings.field.cpu': 'CPU',
   // These three are rendered inside the Agent card (the System Info card no longer shows the Agent version)
   'serverSettings.sys.agentRemote': 'Remote',
   'serverSettings.sys.agentLegacyVersion': 'legacy (version not reported)',

@@ -201,8 +201,8 @@ class Config {
     const server = {
       id: 'srv_' + crypto.randomBytes(6).toString('hex'),
       name: String(fields.name || '未命名').slice(0, 60),
-      // 服务器所在地区（手动选择：cn/hk/tw/jp/sg/us/de/gb/other；空 = 未设置）
-      // 不做 IP 地理库自动推断：那需要外部数据源，且猜错会让卡片显示错误国旗。
+      // 服务器所在地区（两位 ISO 国家码小写，如 cn/jp/us；空 = 未推断出）。
+      // 由面板按 host 经 ipwho.is 自动推断（panel/geo.js），不再让用户手动选择。
       region: String(fields.region || '').trim().slice(0, 20),
       host: String(fields.host || '').trim(),
       token: randomToken(),

@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import { Globe, Terminal } from 'lucide-react';
 import { cn } from 'cn';
 import type { ServerInfo } from '@/lib/api';
-import { REGIONS } from '@/lib/regions';
+import { KNOWN_REGIONS, isValidRegion } from '@/lib/regions';
 
 /** 资源版本：改动 /public 下的 svg 时递增，避免浏览器沿用旧缓存（文件名无 hash） */
 const ASSET_V = '20261026';
@@ -80,7 +80,11 @@ export function OsMark({
   );
 }
 
-/** 地区旗帜：3:2 小旗，圆角裁切；未设置返回 null，other 用地球占位 */
+/**
+ * 地区旗帜：3:2 小旗，圆角裁切。
+ * 地区由 ipwho.is 自动推断（任意两位 ISO 码都合法）；没有内置旗帜图的国家
+ * 与 'other' 一样回退地球图标，未设置返回 null。
+ */
 export function RegionFlag({
   region,
   title,
@@ -94,7 +98,8 @@ export function RegionFlag({
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [code]);
 
-  if (!code || !(REGIONS as readonly string[]).includes(code)) return null;
+  if (!isValidRegion(code)) return null;
+  const hasFlag = (KNOWN_REGIONS as readonly string[]).includes(code) && code !== 'other';
 
   // self-center：作为 flex 子项时直接以自身盒子居中，不再被父级行盒/基线往下推
   const box = cn(
@@ -103,7 +108,7 @@ export function RegionFlag({
   );
   const a11y = title ? { title, role: 'img' as const, 'aria-label': title } : { 'aria-hidden': true };
 
-  if (code === 'other' || broken) {
+  if (!hasFlag || broken) {
     return (
       <span className={box} {...a11y}>
         <Globe className="size-2.5 text-muted-foreground" />

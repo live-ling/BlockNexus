@@ -14,5 +14,5 @@
 
 - 来源：Flagpedia 的 CDN（<https://flagcdn.com/>，对应 <https://flagpedia.asia/download>）。
 - 国旗属于公共领域；文件已本地化，运行时不请求外网。
-- `other` 没有旗帜，前端用地球占位。
+- `other` 与没有内置旗帜的国家码（地区由 ipwho.is 自动推断，可能超出上表）一样，前端用地球占位。
 - 卡片上按 3:2 容器 + `object-cover` 显示，避免不同比例源图被拉伸。

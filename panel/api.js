@@ -14,6 +14,8 @@ const quick = require('./quick');
 // 网络助手：DDNS（纯逻辑 + 注入 fetch）与 frp 客户端托管
 const ddns = require('./ddns');
 const frp = require('./frp');
+// 服务器地区自动推断（ipwho.is；不再让用户手动选地区）
+const geo = require('./geo');
 // 合规遥测：默认关闭，只上报枚举与计数（见 panel/telemetry.js 的三条硬约定）
 const telemetry = require('./telemetry');
 const mailTpl = require('./mail');
@@ -25,6 +27,7 @@ const upd = require('./update');
 const release = require('./release');
 const signature = require('./signature');
 const migrate = require('./migrate');
+const dataLayout = require('./data-layout');
 
 const COOKIE = 'blocknexussid';const SESSION_TTL = 7 * 24 * 3600 * 1000;
 // 勾选「记住我」：Cookie 与会话有效期都放宽到 30 天（滑动续期），关浏览器仍保持登录
@@ -499,6 +502,28 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     for (const s of config.listServers()) refreshStats(s.id);
   }, 30000).unref();
 
+  // ---------- 服务器地区自动推断（ipwho.is） ----------
+  // 地区不再由用户手动选择：服务器上线后按 host 查一次，写回 server.region。
+  // 只写「还没推断出地区」的服务器；推断失败也照常缓存（geo 内 1 小时 TTL），
+  // 同一台每次上线至多触发一次真正外网查询。本机/内网地址直接跳过。
+  const regionPending = new Set(); // serverId：正在查，避免并发重复请求
+  function detectRegion(serverId) {
+    const s = config.getServer(serverId);
+    if (!s || s.region || regionPending.has(serverId)) return;
+    regionPending.add(serverId);
+    geo
+      .lookupRegion(s.host)
+      .then((region) => {
+        if (!region) return;
+        const cur = config.getServer(serverId);
+        if (!cur || cur.region) return; // 查询期间已被推断/移除
+        config.updateServer(serverId, { region });
+        bus.emit('broadcast', { type: 'server-region', serverId, region });
+      })
+      .catch(() => {})
+      .finally(() => regionPending.delete(serverId));
+  }
+
   // ---------- 邮件（SMTP）与离线/恢复通知 ----------
   function smtpConfigured() {
     const s = config.data.settings.smtp;
@@ -728,8 +753,15 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
 
   hub.on('status', (serverId, status) => {
     maybeNotifyStatus(serverId, status);
-    if (status === 'online') setTimeout(() => refreshStats(serverId), 1500);
+    if (status === 'online') {
+      setTimeout(() => refreshStats(serverId), 1500);
+      detectRegion(serverId);
+    }
   });
+  // 启动时补一次：已经在库的服务器重启面板后 region 还是空的，上线事件可能不再来
+  for (const s of config.listServers()) {
+    if (!s.region && hub.isOnline(s.id)) detectRegion(s.id);
+  }
 
   // ---------- 鉴权 ----------
   function getSid(req) {
@@ -2242,6 +2274,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     if (!isValidHost(b.host)) return fail(res, 'server.host-invalid');
     const server = config.addServer(b);
     hub.syncOutbound();
+    detectRegion(server.id); // 裸入口建的记录也立刻尝试推断地区（不等 Agent 上线）
     res.json(sanitize(server, { revealToken: true }));
   });
 
@@ -2287,9 +2320,16 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     // TLS 开关与证书指纹变化同样要重建连接（重装后指纹会更新）
     const sig = (a) => `${a.mode}|${a.host}|${a.port}|${a.tls ? 1 : 0}|${a.tlsFingerprint || ''}`;
     const beforeSig = sig(before);
+    const beforeHost = config.getServer(server.id).host;
     config.updateServer(server.id, patch);
     if (sig(config.getServer(server.id).agent) !== beforeSig) {
       hub.stopOutbound(server.id);
+    }
+    // 地址换了 → 原来推断的地区已经不成立：清掉重查（显式传 region 的脚本入口除外）
+    const afterHost = config.getServer(server.id).host;
+    if (afterHost !== beforeHost && afterHost) {
+      if (b.region === undefined) config.updateServer(server.id, { region: '' });
+      detectRegion(server.id);
     }
     hub.syncOutbound();
     res.json(sanitize(config.getServer(server.id)));
@@ -2713,6 +2753,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
       panelUrl: b.panelUrl,
     });
     hub.syncOutbound();
+    detectRegion(server.id); // 不等 Agent 装好：拿到 host 就能查，卡片更早出现旗帜
 
     installing.add(server.id);
     config.updateServer(server.id, { installing: true });
@@ -2787,7 +2828,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
   }
 
   // ---------- 版本清单：Agent 获取失败时由面板兜底（官方源 → 镜像源 → 磁盘缓存） ----------
-  const VERSIONS_CACHE_FILE = path.join(__dirname, '..', 'data', 'mc-versions-cache.json');
+  const VERSIONS_CACHE_FILE = dataLayout.cacheFile(path.join(__dirname, '..', 'data'), 'mc-versions-cache.json');
   const VERSIONS_TTL = 3600e3;
   const VERSIONS_STALE_TTL = 7 * 24 * 3600e3;
   const MANIFEST_URLS = [
@@ -2879,7 +2920,7 @@ function createApi(config, hub, bus, limiterOpts = {}, opts = {}) {
     { id: 'url', label: '自定义 URL', api: false },
     { id: 'upload', label: '上传本地核心', api: false },
   ];
-  const CORES_CACHE_FILE = path.join(__dirname, '..', 'data', 'mc-cores-cache.json');
+  const CORES_CACHE_FILE = dataLayout.cacheFile(path.join(__dirname, '..', 'data'), 'mc-cores-cache.json');
   const PAPER_API = 'https://fill.papermc.io/v3/projects';
   const PURPUR_API = 'https://api.purpurmc.org/v2/purpur';
   const FABRIC_GAME_API = 'https://meta.fabricmc.net/v2/versions/game';

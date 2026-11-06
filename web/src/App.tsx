@@ -238,6 +238,12 @@ export function App() {
           cur.map((s) => (s.id === e.serverId ? { ...s, stats: e.stats } : s)),
         );
       }
+      // 地区自动推断完成（面板按 host 查 ipwho.is）→ 卡片旗帜即时出现，无需刷新
+      if (e.type === 'server-region') {
+        setServers((cur) =>
+          cur.map((s) => (s.id === e.serverId ? { ...s, region: e.region } : s)),
+        );
+      }
       // hi = Agent 接入后的系统信息快照；java.updated = Java 状态变化 → 拉取最新服务器数据
       if (e.type === 'agent-event' && (e.event === 'hi' || e.event === 'java.updated')) {
         refreshServer(e.serverId);

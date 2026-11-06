@@ -4,6 +4,8 @@ export type SseEvent =
   | { type: 'hello' }
   | { type: 'status'; serverId: string; status: string }
   | { type: 'latency'; serverId: string; latency: number }
+  // 地区自动推断完成（面板按 host 查 ipwho.is 后写回 server.region）
+  | { type: 'server-region'; serverId: string; region: string }
   | {
       type: 'stats';
       serverId: string;

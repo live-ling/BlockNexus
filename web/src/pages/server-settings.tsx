@@ -664,6 +664,8 @@ export function ServerSettingsPage({
             rows={[
               [$('serverSettings.field.hostname'), server.info.hostname],
               [$('serverSettings.field.os'), `${osLabel(server.info.os)} · ${server.info.arch}`],
+              // CPU 型号：Agent ≥0.5.6 上报；旧 Agent 没这字段时显示「—」，不拿空串冒充
+              [$('serverSettings.field.cpu'), server.info.cpuModel || '—'],
               ['Node', server.info.node],
               [
                 // Agent 版本那行已移进「Agent 守护进程」卡（那里才是它该待的地方）

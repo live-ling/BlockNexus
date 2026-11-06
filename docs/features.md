@@ -142,7 +142,7 @@ Agent 会在上线信息（`hi`）中带上自身脚本版本；面板每次收�
 **服务器卡片的三个新标记**：
 - **CPU**：Agent ≥0.5.5 上报系统 CPU 占用（0–100）；旧 Agent 没有该字段时显示「—」，不冒充 0%；
 - **系统图标**：Agent 读 `/etc/os-release` 上报发行版（Ubuntu / Debian / CentOS / Fedora / Rocky / Alpine / Arch / openSUSE / Windows），卡片显示 1:1 方形品牌图标；资源已内置在 `web/public/os/`；
-- **地区旗帜**：在「快速添加」或「编辑服务器」里手动选择（中国 / 中国香港 / 中国台湾 / 日本 / 韩国 / 新加坡 / 美国 / 德国 / 英国 / 其他），卡片显示对应旗帜；**不做 IP 地理推断**（需要外部数据库，且猜错会显示错误国旗）。旗帜资源内置在 `web/public/flags/`。
+- **地区旗帜**：由面板按服务器 host 调用 [ipwho.is](https://ipwho.is) 自动推断（新建与上线时各尝试一次，结果缓存 1 小时；本机与内网地址直接跳过），卡片显示对应旗帜，无需手动选择。推断只取两位国家码；没有内置旗帜图的国家与「其他」一样显示地球图标。旗帜资源内置在 `web/public/flags/`。
 
 ## 实例管理能力
 
@@ -456,6 +456,8 @@ GET  /agent.js                       (Agent 单文件下载，匿名)
 ## 服务器卡片资源占用
 
 首页服务器卡片与服务器设置页「系统信息」都会显示**内存当前占用**（`已用 / 总量`）与**磁盘用量**（实例目录所在分区的 `已用 / 总量`）：面板后台每 30 秒向在线 Agent 拉取一次快照并经 SSE 推送；Linux 上内存占用按 `/proc/meminfo` 的 MemAvailable 计算（页缓存不算"已用"），磁盘用 `fs.statfs`（老版本 Node 回退 `df`）。Agent 离线时保留最近一次数值。
+
+「系统信息」卡还包含 **CPU 型号**（Agent ≥0.5.6 上报：Linux 读 `/proc/cpuinfo` 的 `model name`，Windows 走 WMI `Win32_Processor.Name`，均回退到 `os.cpus()` 的型号；旧 Agent 没这字段时显示「—」）。
 
 ## 地址脱敏
 

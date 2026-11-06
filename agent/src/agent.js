@@ -34,6 +34,38 @@ function readDistro() {
   return { id: 'linux', name: `Linux ${os.release()}` };
 }
 
+/**
+ * CPU 型号（面板「系统信息」展示用）。
+ *
+ * os.cpus()[0].model 在 Linux 上往往只是「Intel(R) Xeon(R) CPU」这类泛称，
+ * /proc/cpuinfo 的 model name 才完整（含具体型号）；Windows 下读
+ * win32_processor.Name 的 WMI 输出（wmic 已弃用，powershell 是现成入口）。
+ * 每一步失败都静默回退，最终拿不到就是空串（前端显示「—」），绝不影响上报。
+ */
+function readCpuModel() {
+  const fallback = (os.cpus()[0] && os.cpus()[0].model) || '';
+  if (process.platform === 'win32') {
+    try {
+      const out = require('child_process').execFileSync(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'],
+        { encoding: 'utf8', timeout: 5000, windowsHide: true },
+      );
+      const name = String(out || '').trim();
+      if (name) return name;
+    } catch {}
+    return fallback;
+  }
+  if (process.platform === 'linux') {
+    try {
+      const text = fs.readFileSync('/proc/cpuinfo', 'utf8');
+      const m = /^model name\s*:\s*(.+)$/m.exec(text);
+      if (m && m[1].trim()) return m[1].trim();
+    } catch {}
+  }
+  return fallback;
+}
+
 class Agent {
   constructor(conf, manager) {
     this.conf = conf;
@@ -211,6 +243,8 @@ class Agent {
       arch: os.arch(),
       // 发行版（Linux 读 /etc/os-release）：面板用它选系统图标
       distro: readDistro(),
+      // CPU 型号（Linux 读 /proc/cpuinfo，Windows 走 WMI；面板系统信息展示用）
+      cpuModel: readCpuModel(),
       node: process.version,
       agentVersion: AGENT_VERSION,
       memTotalMB: Math.round(os.totalmem() / 1048576),

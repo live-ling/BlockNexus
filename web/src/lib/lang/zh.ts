@@ -224,8 +224,7 @@ export const zh = {
 
   // ---------- 服务器连接字段（编辑服务器弹窗复用；快速添加弹窗用自己的 quickAdd.*） ----------
   'serverField.name': '名称',
-  'serverField.region': '地区',
-  'serverField.region.none': '未设置',
+  // 地区不再由用户选择（面板按 host 经 ipwho.is 自动推断），serverField.region* 键已删除
   'serverRegion.cn': '中国',
   'serverRegion.hk': '中国香港',
   'serverRegion.tw': '中国台湾',
@@ -1121,6 +1120,7 @@ export const zh = {
   'serverSettings.sys.title': '系统信息',
   'serverSettings.field.hostname': '主机名',
   'serverSettings.field.os': '系统',
+  'serverSettings.field.cpu': 'CPU',
   // 「远端/本地」这三条渲染在「Agent 守护进程」卡里（系统信息卡已不再显示 Agent 版本）
   'serverSettings.sys.agentRemote': '远端',
   'serverSettings.sys.agentLegacyVersion': '旧版（未上报版本）',
